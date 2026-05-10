@@ -1,0 +1,9 @@
+(specifications->manifest
+ '("make"
+   "pkg-config"
+   "rlwrap"
+   "sbcl"
+   "sbcl-sdl2"
+   "sbcl-sdl2-ttf"
+   "sdl2"
+   "sqlite"))

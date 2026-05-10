@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT_DIR=$(
+  CDPATH= cd -- "$(dirname -- "$0")/.." && pwd
+)
+
+cd "$ROOT_DIR"
+
+exec sbcl \
+  --eval '(require :asdf)' \
+  --eval "(asdf:load-asd #P\"$ROOT_DIR/orra.asd\")" \
+  --eval '(asdf:load-system :orra)' \
+  --eval '(orra:start-demo)'

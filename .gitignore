@@ -1,0 +1,17 @@
+*.fasl
+*.dx64fsl
+*.lx64fsl
+*.lib
+*.dll
+*.so
+*.dylib
+*.app
+*.image
+*.sqlite
+*.db
+*.log
+.cache/
+.qlot/
+.sbclrc
+dist/
+build/
