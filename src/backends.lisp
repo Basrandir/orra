@@ -168,12 +168,6 @@
       (env-font-path)
       (fontconfig-font-path)))
 
-(defmacro with-sdl-rect ((name x y width height) &body body)
-  `(let ((,name (sdl2:make-rect ,x ,y ,width ,height)))
-     (unwind-protect
-          (progn ,@body)
-       (sdl2:free-rect ,name))))
-
 (defun logical-x->pixel (backend x)
   (+ (backend-padding-x backend)
      (* x (backend-cell-width backend))))
@@ -296,7 +290,7 @@
         (pixel-y (logical-y->pixel backend y))
         (pixel-width (logical-width->pixel backend width))
         (pixel-height (logical-height->pixel backend height)))
-    (with-sdl-rect (rect pixel-x pixel-y pixel-width pixel-height)
+    (sdl2:with-rects ((rect pixel-x pixel-y pixel-width pixel-height))
       (if focusedp
           (sdl2:set-render-draw-color (backend-renderer backend) 72 120 202 255)
           (sdl2:set-render-draw-color (backend-renderer backend) 48 53 63 255))
@@ -305,6 +299,14 @@
           (sdl2:set-render-draw-color (backend-renderer backend) 222 231 255 255)
           (sdl2:set-render-draw-color (backend-renderer backend) 103 111 124 255))
       (sdl2:render-draw-rect (backend-renderer backend) rect))))
+
+(defun release-ttf-surface (surface)
+  ;; sdl2-ttf returns autocollected surfaces; cancel the finalizer before
+  ;; freeing explicitly so repeated redraws do not leave a stale free hook
+  ;; behind for the GC to trigger later.
+  (when surface
+    (tg:cancel-finalization surface)
+    (sdl2:free-surface surface)))
 
 (defmethod backend-draw-text ((backend sdl2-backend) x y text)
   (when (backend-font backend)
@@ -319,10 +321,10 @@
            (width (sdl2:surface-width surface))
            (height (sdl2:surface-height surface)))
       (unwind-protect
-           (with-sdl-rect (rect pixel-x pixel-y width height)
+           (sdl2:with-rects ((rect pixel-x pixel-y width height))
              (sdl2:render-copy renderer texture :dest-rect rect))
         (sdl2:destroy-texture texture)
-        (sdl2:free-surface surface)))))
+        (release-ttf-surface surface)))))
 
 (defmethod backend-present ((backend sdl2-backend))
   (sdl2:render-present (backend-renderer backend)))

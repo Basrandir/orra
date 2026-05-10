@@ -13,6 +13,29 @@
   (unless condition
     (error "~A" message)))
 
+(defun collect-text-cells (cell)
+  (let (texts)
+    (labels ((visit (node)
+               (when (typep node 'text-cell)
+                 (push (orra::cell-text node) texts))
+               (dolist (child (children-of node))
+                 (visit child))))
+      (visit cell))
+    (nreverse texts)))
+
+(defun find-text-cell-for-model (cell model-id)
+  (labels ((visit (node)
+             (or (when (and (typep node 'text-cell)
+                            (cell-model node)
+                            (string= (object-id (cell-model node))
+                                     model-id))
+                   node)
+                 (dolist (child (children-of node) nil)
+                   (let ((found (visit child)))
+                     (when found
+                       (return found)))))))
+    (visit cell)))
+
 (deftest text-buffer-editing ()
   (let ((buffer (make-text-buffer :content "abc" :cursor 1)))
     (insert-buffer-text buffer "Z")
@@ -62,9 +85,25 @@
     (append-child section paragraph)
     (setf tree (build-workspace-cell-tree workspace registry))
     (is (= 2 (length (children-of tree)))
-        "Workspace shell should render header and notebook.")
+        "Workspace view should render header and notebook.")
     (is (typep (second (children-of tree)) 'container-cell)
         "Notebook cell should be a container.")))
+
+(deftest application-shell-includes-inspector ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (render-application application)
+    (is (= 3 (length (children-of (application-root-cell application))))
+        "Application shell should render workspace, inspector, and status.")
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Inspector" texts :test #'string=)
+          "Inspector header should be present.")
+      (is (find (format nil "focused: ~A"
+                        (format nil "~A ~A"
+                                (object-kind (focused-model application))
+                                (object-id (focused-model application))))
+                texts
+                :test #'string=)
+          "Inspector should describe the focused model."))))
 
 (deftest focus-navigation ()
   (let ((application (make-application :backend (make-null-backend))))
@@ -84,7 +123,13 @@
 (deftest click-focused-editable-model-starts-editing ()
   (let ((application (make-application :backend (make-null-backend))))
     (render-application application)
-    (orra::focus-model-at-pixel application 7 5)
+    (let* ((focused (focused-model application))
+           (cell (find-text-cell-for-model (application-root-cell application)
+                                          (object-id focused)))
+           (bounds (cell-bounds cell)))
+      (orra::focus-model-at-pixel application
+                                  (orra::bounds-x bounds)
+                                  (orra::bounds-y bounds)))
     (is (editing-active-p application)
         "Clicking the already-focused paragraph should begin editing.")))
 

@@ -44,10 +44,110 @@
     (when (typep object 'code-block)
       (register-tree registry (code-block-result object)))))
 
+(defun preview-string (string &key (limit 48))
+  (let ((string (string string)))
+    (if (<= (length string) limit)
+        string
+        (format nil "~A..." (subseq string 0 (max 0 (- limit 3)))))))
+
+(defun object-summary-string (object)
+  (if object
+      (format nil "~A ~A"
+              (object-kind object)
+              (object-id object))
+      "-"))
+
+(defun object-parent-summary-string (object)
+  (if (and object (parent-of object))
+      (object-summary-string (parent-of object))
+      "-"))
+
+(defun object-prototype-summary-string (object)
+  (if (and object (object-prototype object))
+      (object-summary-string (object-prototype object))
+      "-"))
+
+(defun inspector-lines-for-model (application model)
+  (let ((lines (list "Inspector"
+                     (format nil "focused: ~A" (object-summary-string model))
+                     (format nil "parent: ~A"
+                             (object-parent-summary-string model))
+                     (format nil "prototype: ~A"
+                             (object-prototype-summary-string model))
+                     (format nil "children: ~D"
+                             (length (if model
+                                         (children-of model)
+                                         nil))))))
+    (when model
+      (setf lines
+            (append
+             lines
+             (typecase model
+               (workspace
+                (list (format nil "title: ~A" (workspace-title model))
+                      (format nil "notebooks: ~D"
+                              (length (workspace-notebooks model)))))
+               (notebook
+                (list (format nil "title: ~A" (notebook-title model))))
+               (section
+                (list (format nil "title: ~A" (section-title model))))
+               (paragraph
+                (list (format nil "text-len: ~D"
+                              (length (paragraph-text model)))
+                      (format nil "text: ~A"
+                              (preview-string (paragraph-text model)))))
+               (code-block
+                (list (format nil "language: ~A"
+                              (code-block-language model))
+                      (format nil "source-len: ~D"
+                              (length (code-block-source model)))
+                      (format nil "source: ~A"
+                              (preview-string (code-block-source model)))
+                      (format nil "result: ~A"
+                              (if (code-block-result model)
+                                  (object-summary-string
+                                   (code-block-result model))
+                                  "-"))))
+               (result-block
+                (list (format nil "presentation: ~A"
+                              (preview-string
+                               (result-block-presentation model)))))
+               (t nil)))))
+    (when (and model
+               (editing-active-p application)
+               (string= (application-active-editor-model-id application)
+                        (object-id model)))
+      (let ((buffer (application-active-text-buffer application)))
+        (setf lines
+              (append lines
+                      (list (format nil "edit-cursor: ~D"
+                                    (text-buffer-cursor buffer))
+                            (format nil "edit-length: ~D"
+                                    (length
+                                     (text-buffer-content buffer))))))))
+    lines))
+
+(defun build-inspector-cell (application)
+  (let ((inspector (make-container-cell :label "Inspector"))
+        (model (focused-model application)))
+    (dolist (line (inspector-lines-for-model application model) inspector)
+      (append-child inspector
+                    (make-text-cell :text line)))))
+
+(defun build-application-shell-cell (application)
+  (let ((root (make-container-cell :label "Orra")))
+    (append-child root
+                  (build-workspace-cell-tree
+                   (application-workspace application)))
+    (append-child root (build-inspector-cell application))
+    (append-child root
+                  (make-text-cell
+                   :text (application-status-line application)))
+    root))
+
 (defun rebuild-root-cell (application)
   (setf (application-root-cell application)
-        (build-workspace-cell-tree
-         (application-workspace application))))
+        (build-application-shell-cell application)))
 
 (defun application-status-line (application)
   (let ((model (focused-model application)))
@@ -239,21 +339,13 @@
 (defun render-application (application)
   (backend-begin-frame (application-backend application))
   (rebuild-root-cell application)
+  (ensure-valid-focus application)
+  (rebuild-root-cell application)
   (perform-layout (application-root-cell application)
                   :width (backend-layout-width
                           (application-backend application)))
-  (ensure-valid-focus application)
   (draw-cell-tree (application-backend application)
                   (application-root-cell application))
-  (backend-draw-text (application-backend application)
-                     1
-                     (+ 1
-                        (bounds-height
-                         (cell-bounds (application-root-cell application))))
-                     (trim-text-for-cell
-                      (application-status-line application)
-                      (backend-layout-width
-                       (application-backend application))))
   (backend-present (application-backend application))
   application)
 
@@ -290,6 +382,7 @@
     (install-defined-commands application)
     (rebuild-root-cell application)
     (ensure-valid-focus application)
+    (rebuild-root-cell application)
     application))
 
 (defun start-application (application)
@@ -305,6 +398,8 @@
           (load-workspace-from-file path :registry registry))
     (install-defined-commands application)
     (setf (application-save-path application) path)
+    (rebuild-root-cell application)
+    (ensure-valid-focus application)
     (rebuild-root-cell application)
     application))
 
