@@ -1,5 +1,6 @@
 (specifications->manifest
  '("make"
+   "fontconfig"
    "pkg-config"
    "rlwrap"
    "sbcl"

@@ -23,6 +23,14 @@
     :initarg :focused-model-id
     :accessor application-focused-model-id
     :initform nil)
+   (active-editor-model-id
+    :initarg :active-editor-model-id
+    :accessor application-active-editor-model-id
+    :initform nil)
+   (active-text-buffer
+    :initarg :active-text-buffer
+    :accessor application-active-text-buffer
+    :initform nil)
    (save-path
     :initarg :save-path
     :accessor application-save-path
@@ -40,6 +48,18 @@
   (setf (application-root-cell application)
         (build-workspace-cell-tree
          (application-workspace application))))
+
+(defun application-status-line (application)
+  (let ((model (focused-model application)))
+    (if (editing-active-p application)
+        (format nil
+                "EDIT ~A ~A  |  type to edit  |  Left/Right move  |  Backspace/Delete remove  |  Enter newline  |  Esc stop"
+                (if model (object-kind model) :none)
+                (or (application-active-editor-model-id application) "-"))
+        (format nil
+                "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move  |  Enter or e to eval code  |  q quit"
+                (if model (object-kind model) :none)
+                (if model (object-id model) "-")))))
 
 (defun focusable-model-object-p (object)
   (typep object '(or notebook section paragraph code-block result-block)))
@@ -73,7 +93,8 @@
        (application-focused-model-id application))
       (t
        (setf (application-focused-model-id application)
-             (object-id (first models)))))))
+             (object-id (or (find-if #'editable-model-p models)
+                            (first models))))))))
 
 (defun focused-model (application)
   (let ((focused-id (application-focused-model-id application)))
@@ -84,6 +105,7 @@
   (let* ((models (visible-focusable-models application))
          (current-id (application-focused-model-id application)))
     (when models
+      (stop-editing application)
       (let* ((position (or (position current-id
                                      models
                                      :key #'object-id
@@ -126,8 +148,92 @@
                       grid-x
                       grid-y))))
       (when cell
-        (setf (application-focused-model-id application)
-              (object-id (cell-model cell))))))
+        (when (and (editing-active-p application)
+                   (not (string=
+                         (application-active-editor-model-id application)
+                         (object-id (cell-model cell)))))
+          (stop-editing application))
+        (if (and (editable-model-p (cell-model cell))
+                 (application-focused-model-id application)
+                 (string= (application-focused-model-id application)
+                          (object-id (cell-model cell)))
+                 (not (editing-active-p application)))
+            (begin-editing-model application (cell-model cell))
+            (setf (application-focused-model-id application)
+                  (object-id (cell-model cell)))))))
+  application)
+
+(defun editable-model-p (model)
+  (typep model '(or paragraph code-block)))
+
+(defun editable-model-string (model)
+  (typecase model
+    (paragraph (paragraph-text model))
+    (code-block (code-block-source model))
+    (t (error "Model ~A is not editable." model))))
+
+(defun (setf editable-model-string) (value model)
+  (typecase model
+    (paragraph (setf (paragraph-text model) value))
+    (code-block (setf (code-block-source model) value))
+    (t (error "Model ~A is not editable." model))))
+
+(defun editing-active-p (application)
+  (not (null (application-active-text-buffer application))))
+
+(defun sync-active-buffer-to-model (application)
+  (when (editing-active-p application)
+    (let ((model (find-object (application-registry application)
+                              (application-active-editor-model-id application))))
+      (when (editable-model-p model)
+        (setf (editable-model-string model)
+              (text-buffer-content (application-active-text-buffer application))))))
+  application)
+
+(defun begin-editing-model (application model)
+  (unless (editable-model-p model)
+    (return-from begin-editing-model nil))
+  (setf (application-focused-model-id application) (object-id model))
+  (setf (application-active-editor-model-id application) (object-id model))
+  (setf (application-active-text-buffer application)
+        (make-text-buffer :content (editable-model-string model)))
+  application)
+
+(defun begin-editing-focused-model (application)
+  (begin-editing-model application (focused-model application)))
+
+(defun stop-editing (application)
+  (sync-active-buffer-to-model application)
+  (setf (application-active-editor-model-id application) nil)
+  (setf (application-active-text-buffer application) nil)
+  application)
+
+(defun insert-into-active-buffer (application text)
+  (when (editing-active-p application)
+    (insert-buffer-text (application-active-text-buffer application) text)
+    (sync-active-buffer-to-model application))
+  application)
+
+(defun delete-active-buffer-backward (application)
+  (when (editing-active-p application)
+    (delete-buffer-backward (application-active-text-buffer application))
+    (sync-active-buffer-to-model application))
+  application)
+
+(defun delete-active-buffer-forward (application)
+  (when (editing-active-p application)
+    (delete-buffer-forward (application-active-text-buffer application))
+    (sync-active-buffer-to-model application))
+  application)
+
+(defun move-active-buffer-cursor-left (application)
+  (when (editing-active-p application)
+    (move-buffer-cursor-left (application-active-text-buffer application)))
+  application)
+
+(defun move-active-buffer-cursor-right (application)
+  (when (editing-active-p application)
+    (move-buffer-cursor-right (application-active-text-buffer application)))
   application)
 
 (defun render-application (application)
@@ -139,6 +245,15 @@
   (ensure-valid-focus application)
   (draw-cell-tree (application-backend application)
                   (application-root-cell application))
+  (backend-draw-text (application-backend application)
+                     1
+                     (+ 1
+                        (bounds-height
+                         (cell-bounds (application-root-cell application))))
+                     (trim-text-for-cell
+                      (application-status-line application)
+                      (backend-layout-width
+                       (application-backend application))))
   (backend-present (application-backend application))
   application)
 
@@ -206,6 +321,8 @@
 (defun evaluate-focused-code-block (application)
   (let ((model (focused-model application)))
     (when (typep model 'code-block)
+      (when (editing-active-p application)
+        (stop-editing application))
       (evaluate-code-block application model)
       (rebuild-root-cell application)
       model)))

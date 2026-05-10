@@ -61,6 +61,9 @@
    (renderer
     :accessor backend-renderer
     :initform nil)
+   (text-input-active-p
+    :accessor backend-text-input-active-p
+    :initform nil)
    (single-frame-p
     :initarg :single-frame-p
     :accessor backend-single-frame-p
@@ -137,17 +140,33 @@
                  x y text)))))
   (finish-output (backend-stream backend)))
 
-(defun find-default-font-path ()
-  (or (find-if #'probe-file
-               '("/run/current-system/profile/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-                 "/run/current-system/profile/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
-                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-                 "/usr/share/fonts/TTF/DejaVuSans.ttf"
-                 "/Library/Fonts/Menlo.ttc"
-                 "/Library/Fonts/Arial Unicode.ttf"
-                 "C:/Windows/Fonts/consola.ttf"
-                 "C:/Windows/Fonts/segoeui.ttf"))
-      nil))
+(defun normalize-font-path (path)
+  (typecase path
+    (pathname (namestring path))
+    (string path)
+    (t nil)))
+
+(defun env-font-path ()
+  (let ((configured-font (uiop:getenv "ORRA_FONT")))
+    (when (and configured-font (plusp (length configured-font)))
+      configured-font)))
+
+(defun fontconfig-font-path ()
+  (ignore-errors
+    (let* ((output (uiop:run-program
+                    '("fc-match" "-f" "%{file}\\n" "monospace")
+                    :output :string
+                    :ignore-error-status t))
+           (path (string-trim '(#\Space #\Tab #\Newline #\Return)
+                              output)))
+      (when (plusp (length path))
+        path))))
+
+(defun resolve-font-path (backend)
+  (or (and (backend-font-path backend)
+           (normalize-font-path (backend-font-path backend)))
+      (env-font-path)
+      (fontconfig-font-path)))
 
 (defmacro with-sdl-rect ((name x y width height) &body body)
   `(let ((,name (sdl2:make-rect ,x ,y ,width ,height)))
@@ -178,6 +197,62 @@
         string
         (format nil "~A..." (subseq string 0 (max 0 (- safe-width 3)))))))
 
+(defun cursor-display-string (text cursor)
+  (let ((cursor (max 0 (min cursor (length text)))))
+    (concatenate 'string
+                 (subseq text 0 cursor)
+                 "|"
+                 (subseq text cursor))))
+
+(defun shifted-printable-char (character)
+  (case character
+    (#\1 #\!)
+    (#\2 #\@)
+    (#\3 #\#)
+    (#\4 #\$)
+    (#\5 #\%)
+    (#\6 #\^)
+    (#\7 #\&)
+    (#\8 #\*)
+    (#\9 #\()
+    (#\0 #\))
+    (#\- #\_)
+    (#\= #\+)
+    (#\[ #\{)
+    (#\] #\})
+    (#\\ #\|)
+    (#\; #\:)
+    (#\' #\")
+    (#\, #\<)
+    (#\. #\>)
+    (#\/ #\?)
+    (#\` #\~)
+    (t character)))
+
+(defun printable-key-text-from-sym (sym-value shiftp capslockp)
+  (when (<= 32 sym-value 126)
+    (let ((character (code-char sym-value)))
+      (cond
+        ((alpha-char-p character)
+         (string (if (if capslockp
+                         (not shiftp)
+                         shiftp)
+                     (char-upcase character)
+                     (char-downcase character))))
+        (shiftp
+         (string (shifted-printable-char character)))
+        (t
+         (string character))))))
+
+(defun printable-key-text (keysym)
+  (let ((modifiers (sdl2:mod-value keysym)))
+    (unless (or (sdl2:mod-value-p modifiers :lctrl :rctrl :lalt :ralt :lgui :rgui)
+                (sdl2:scancode= keysym :scancode-tab))
+      (printable-key-text-from-sym
+       (sdl2:sym-value keysym)
+       (sdl2:mod-value-p modifiers :lshift :rshift)
+       (sdl2:mod-value-p modifiers :caps)))))
+
 (defmethod backend-layout-width ((backend sdl2-backend))
   (max 20
        (floor (- (backend-pixel-width backend)
@@ -193,11 +268,23 @@
                       (backend-row-height backend)))))
 
 (defun open-sdl2-font (backend)
-  (let ((font-path (or (backend-font-path backend)
-                       (find-default-font-path))))
-    (when font-path
-      (setf (backend-font-path backend) font-path)
-      (sdl2-ttf:open-font font-path (backend-font-size backend)))))
+  (let ((font-path (resolve-font-path backend)))
+    (cond
+      ((null font-path)
+       (format *error-output*
+               "~&Orra: no font available. Set ORRA_FONT or ensure fc-match is installed and configured.~%")
+       nil)
+      (t
+       (handler-case
+           (let ((font (sdl2-ttf:open-font font-path (backend-font-size backend))))
+             (setf (backend-font-path backend) font-path)
+             font)
+         (error (condition)
+           (format *error-output*
+                   "~&Orra: failed to open font ~A: ~A~%"
+                   font-path
+                   condition)
+           nil))))))
 
 (defmethod backend-begin-frame ((backend sdl2-backend))
   (sdl2:set-render-draw-color (backend-renderer backend) 28 30 36 255)
@@ -240,6 +327,20 @@
 (defmethod backend-present ((backend sdl2-backend))
   (sdl2:render-present (backend-renderer backend)))
 
+(defun displayed-cell-text (cell)
+  (let ((text (cell-text cell)))
+    (if (and *application*
+             (editing-active-p *application*)
+             (cell-model cell)
+             (application-active-editor-model-id *application*)
+             (string=
+              (object-id (cell-model cell))
+              (application-active-editor-model-id *application*)))
+        (cursor-display-string
+         (text-buffer-content (application-active-text-buffer *application*))
+         (text-buffer-cursor (application-active-text-buffer *application*)))
+        text)))
+
 (defun draw-cell-tree (backend cell)
   (let* ((bounds (cell-bounds cell))
          (x (bounds-x bounds))
@@ -258,7 +359,8 @@
       (backend-draw-text backend
                          (+ x 1)
                          (+ y 1)
-                         (trim-text-for-cell (cell-text cell) (max 1 (- width 2)))))
+                         (trim-text-for-cell (displayed-cell-text cell)
+                                             (max 1 (- width 2)))))
     (dolist (child (children-of cell))
       (draw-cell-tree backend child))))
 
@@ -267,24 +369,60 @@
   backend)
 
 (defun handle-sdl2-keydown (application keysym)
-  (let ((scancode (sdl2:scancode-value keysym)))
+  (let ((scancode (sdl2:scancode-value keysym))
+        (printable-text (printable-key-text keysym)))
+    (if (editing-active-p application)
+        (cond
+          ((sdl2:scancode= scancode :scancode-escape)
+           (stop-editing application))
+          ((sdl2:scancode= scancode :scancode-backspace)
+           (delete-active-buffer-backward application))
+          ((sdl2:scancode= scancode :scancode-delete)
+           (delete-active-buffer-forward application))
+          ((sdl2:scancode= scancode :scancode-left)
+           (move-active-buffer-cursor-left application))
+          ((sdl2:scancode= scancode :scancode-right)
+           (move-active-buffer-cursor-right application))
+          ((sdl2:scancode= scancode :scancode-return)
+           (insert-into-active-buffer application (string #\Newline)))
+          (printable-text
+           (insert-into-active-buffer application printable-text)))
+        (cond
+          ((and printable-text
+                (editable-model-p (focused-model application)))
+           (begin-editing-focused-model application)
+           (insert-into-active-buffer application printable-text))
+          ((or (sdl2:scancode= scancode :scancode-q)
+               (sdl2:scancode= scancode :scancode-escape))
+           (quit-application application))
+          ((or (sdl2:scancode= scancode :scancode-j)
+               (sdl2:scancode= scancode :scancode-down))
+           (focus-next-model application))
+          ((or (sdl2:scancode= scancode :scancode-k)
+               (sdl2:scancode= scancode :scancode-up))
+           (focus-previous-model application))
+          ((sdl2:scancode= scancode :scancode-i)
+           (begin-editing-focused-model application))
+          ((and (sdl2:scancode= scancode :scancode-return)
+                (typep (focused-model application) 'paragraph))
+           (begin-editing-focused-model application))
+          ((or (sdl2:scancode= scancode :scancode-return)
+               (sdl2:scancode= scancode :scancode-e))
+           (evaluate-focused-code-block application))
+          ((sdl2:scancode= scancode :scancode-s)
+           (invoke-command application 'save-workspace))
+          ((sdl2:scancode= scancode :scancode-r)
+           (render-application application))))))
+
+(defun sync-sdl2-text-input-state (backend application)
+  (let ((editingp (editing-active-p application)))
     (cond
-      ((or (sdl2:scancode= scancode :scancode-q)
-           (sdl2:scancode= scancode :scancode-escape))
-       (quit-application application))
-      ((or (sdl2:scancode= scancode :scancode-j)
-           (sdl2:scancode= scancode :scancode-down))
-       (focus-next-model application))
-      ((or (sdl2:scancode= scancode :scancode-k)
-           (sdl2:scancode= scancode :scancode-up))
-       (focus-previous-model application))
-      ((or (sdl2:scancode= scancode :scancode-return)
-           (sdl2:scancode= scancode :scancode-e))
-       (evaluate-focused-code-block application))
-      ((sdl2:scancode= scancode :scancode-s)
-       (invoke-command application 'save-workspace))
-      ((sdl2:scancode= scancode :scancode-r)
-       (render-application application)))))
+      ((and editingp (not (backend-text-input-active-p backend)))
+       (sdl2:start-text-input)
+       (setf (backend-text-input-active-p backend) t))
+      ((and (not editingp) (backend-text-input-active-p backend))
+       (sdl2:stop-text-input)
+       (setf (backend-text-input-active-p backend) nil)))))
 
 (defmethod run-backend ((backend sdl2-backend) application)
   (sdl2:with-init (:video)
@@ -310,6 +448,7 @@
                     (sdl2:get-window-size window)
                   (setf (backend-pixel-width backend) width)
                   (setf (backend-pixel-height backend) height))
+                (sync-sdl2-text-input-state backend application)
                 (render-application application)
                 (when (backend-single-frame-p backend)
                   (sdl2:push-event :quit))
@@ -319,5 +458,8 @@
       (when (backend-font backend)
         (sdl2-ttf:close-font (backend-font backend))
         (setf (backend-font backend) nil))
+      (when (backend-text-input-active-p backend)
+        (sdl2:stop-text-input)
+        (setf (backend-text-input-active-p backend) nil))
       (sdl2-ttf:quit)))
   backend)

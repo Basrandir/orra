@@ -32,11 +32,16 @@
    #:define-command
    #:evaluate-code-block
    #:find-object
+   #:begin-editing-focused-model
+   #:delete-active-buffer-backward
+   #:delete-active-buffer-forward
+   #:editing-active-p
    #:focus-next-model
    #:focus-previous-model
    #:focused-model
    #:fresh-id
    #:invoke-command
+   #:insert-into-active-buffer
    #:list-commands
    #:load-workspace
    #:load-workspace-into-application
@@ -52,8 +57,11 @@
    #:make-section
    #:make-sdl2-backend
    #:make-text-cell
+   #:make-text-buffer
    #:make-workspace
    #:model-object
+   #:move-active-buffer-cursor-left
+   #:move-active-buffer-cursor-right
    #:notebook
    #:notebook-title
    #:null-backend
@@ -88,7 +96,16 @@
    #:sdl2-backend
    #:start-application
    #:start-demo
+   #:stop-editing
    #:text-cell
+   #:text-buffer
+   #:text-buffer-content
+   #:text-buffer-cursor
+   #:delete-buffer-backward
+   #:delete-buffer-forward
+   #:insert-buffer-text
+   #:move-buffer-cursor-left
+   #:move-buffer-cursor-right
    #:workspace
    #:workspace-notebooks
    #:workspace-title))

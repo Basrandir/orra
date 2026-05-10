@@ -8,6 +8,12 @@ Run:
 guix shell -m manifest.scm -- ./bin/orra
 ```
 
+Optional font override:
+
+```bash
+ORRA_FONT=/path/to/font.ttf guix shell -m manifest.scm -- ./bin/orra
+```
+
 Test:
 
 ```bash

@@ -13,6 +13,34 @@
   (unless condition
     (error "~A" message)))
 
+(deftest text-buffer-editing ()
+  (let ((buffer (make-text-buffer :content "abc" :cursor 1)))
+    (insert-buffer-text buffer "Z")
+    (is (string= "aZbc" (text-buffer-content buffer))
+        "Insert should splice text at cursor.")
+    (move-buffer-cursor-left buffer)
+    (delete-buffer-forward buffer)
+    (is (string= "abc" (text-buffer-content buffer))
+        "Delete forward should remove the character at cursor.")
+    (move-buffer-cursor-right buffer)
+    (delete-buffer-backward buffer)
+    (is (string= "ac" (text-buffer-content buffer))
+        "Delete backward should remove the preceding character.")
+    (is (= 1 (text-buffer-cursor buffer))
+        "Cursor should stay within bounds.")))
+
+(deftest printable-key-text-from-sym ()
+  (is (string= "a" (orra::printable-key-text-from-sym 97 nil nil))
+      "Lowercase letters should round-trip.")
+  (is (string= "A" (orra::printable-key-text-from-sym 97 t nil))
+      "Shift should uppercase letters.")
+  (is (string= "A" (orra::printable-key-text-from-sym 97 nil t))
+      "Caps lock should uppercase letters.")
+  (is (string= "!" (orra::printable-key-text-from-sym 49 t nil))
+      "Shifted digits should map to punctuation.")
+  (is (string= "/" (orra::printable-key-text-from-sym 47 nil nil))
+      "Printable punctuation should round-trip."))
+
 (deftest property-inheritance ()
   (let* ((registry (make-object-registry))
          (prototype (make-paragraph :text "proto" :registry registry))
@@ -41,6 +69,8 @@
 (deftest focus-navigation ()
   (let ((application (make-application :backend (make-null-backend))))
     (render-application application)
+    (is (typep (focused-model application) 'paragraph)
+        "Initial focus should prefer the first editable model.")
     (let ((first-focus (object-id (focused-model application))))
       (focus-next-model application)
       (is (not (string= first-focus
@@ -51,10 +81,40 @@
                    (object-id (focused-model application)))
           "Focus should move back to the original object."))))
 
+(deftest click-focused-editable-model-starts-editing ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (render-application application)
+    (orra::focus-model-at-pixel application 7 5)
+    (is (editing-active-p application)
+        "Clicking the already-focused paragraph should begin editing.")))
+
+(deftest editing-focused-model ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (render-application application)
+    (is (typep (focused-model application) 'paragraph)
+        "Expected to focus the initial paragraph.")
+    (begin-editing-focused-model application)
+    (insert-into-active-buffer application " More")
+    (is (string= "This image is live. Commands and objects are data. More"
+                 (paragraph-text (focused-model application)))
+        "Paragraph text should update during editing.")
+    (stop-editing application)
+    (is (not (editing-active-p application))
+        "Editing state should clear when stopped.")))
+
 (deftest persistence-round-trip ()
   (let* ((application (make-application))
          (block nil))
     (setf block (invoke-command application 'append-code-block "(+ 20 22)"))
+    (render-application application)
+    (loop repeat 8
+          until (string= (object-id (focused-model application))
+                         (object-id block))
+          do (focus-next-model application))
+    (begin-editing-focused-model application)
+    (move-active-buffer-cursor-left application)
+    (insert-into-active-buffer application "0")
+    (stop-editing application)
     (invoke-command application 'evaluate-code-block (object-id block))
     (uiop:with-temporary-file (:pathname path :keep t)
       (unwind-protect
@@ -68,13 +128,13 @@
                     (loaded-section (first (children-of loaded-notebook)))
                     (loaded-block (find-if (lambda (object)
                                              (and (typep object 'code-block)
-                                                  (string= "(+ 20 22)"
+                                                  (string= "(+ 20 220)"
                                                            (code-block-source
                                                             object))))
                                            (children-of loaded-section))))
                (is (typep loaded-block 'code-block)
                    "Expected to load a code block.")
-               (is (string= "42"
+               (is (string= "240"
                             (result-block-presentation
                              (code-block-result loaded-block)))
                    "Expected persisted evaluation result.")))
