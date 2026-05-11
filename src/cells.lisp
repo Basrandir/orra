@@ -42,7 +42,11 @@
   ((text
     :initarg :text
     :accessor cell-text
-    :initform "")))
+    :initform "")
+   (role
+    :initarg :role
+    :accessor cell-role
+    :initform :content)))
 
 (defun make-container-cell (&key registry model (label "") (orientation :vertical))
   (%register-if-present
@@ -54,7 +58,7 @@
                   :label label
                   :orientation orientation)))
 
-(defun make-text-cell (&key registry model (text ""))
+(defun make-text-cell (&key registry model (text "") (role :content))
   (%register-if-present
    registry
    (make-instance 'text-cell
@@ -62,7 +66,8 @@
                   :kind :text-cell
                   :model model
                   :label text
-                  :text text)))
+                  :text text
+                  :role role)))
 
 (defmethod append-child ((parent cell) (child cell))
   (setf (slot-value parent 'children)
@@ -76,7 +81,8 @@
 (defgeneric preferred-height (cell))
 
 (defmethod preferred-height ((cell text-cell))
-  1)
+  (max 1
+       (length (split-lines (cell-text cell)))))
 
 (defmethod preferred-height ((cell container-cell))
   (max 1
@@ -90,7 +96,8 @@
                 (make-text-cell
                  :registry registry
                  :model model
-                 :text text)))
+                 :text text
+                 :role :heading)))
 
 (defun perform-layout (cell &key (x 0) (y 0) (width 80))
   (setf (cell-bounds cell)
@@ -128,7 +135,11 @@
        (dolist (child (children-of node) cell)
          (append-child cell (build-node-cell child registry)))))
     (paragraph
-     (make-text-cell :registry registry :model node :text (paragraph-text node)))
+     (make-text-cell
+      :registry registry
+      :model node
+      :text (paragraph-text node)
+      :role :editable-content))
     (code-block
      (let ((cell (make-container-cell
                   :registry registry
@@ -142,7 +153,8 @@
                      (make-text-cell
                       :registry registry
                       :model node
-                      :text (code-block-source node)))
+                      :text (code-block-source node)
+                      :role :editable-content))
        (when (code-block-result node)
          (append-child cell
                        (build-node-cell (code-block-result node) registry)))
@@ -151,7 +163,8 @@
      (make-text-cell
       :registry registry
       :model node
-      :text (format nil "=> ~A" (result-block-presentation node))))
+      :text (format nil "=> ~A" (result-block-presentation node))
+      :role :result))
     (t
      (make-text-cell
       :registry registry
@@ -167,7 +180,8 @@
                    :registry registry
                    :model workspace
                    :text (format nil "Workspace: ~A  |  Live image workspace"
-                                 (workspace-title workspace))))
+                                 (workspace-title workspace))
+                   :role :heading))
     (when (root-notebook workspace)
       (append-child root
                     (build-node-cell (root-notebook workspace) registry)))

@@ -42,3 +42,15 @@
       value
       (list value)))
 
+(defun split-lines (string)
+  (let ((string (string string))
+        (start 0)
+        lines)
+    (loop for newline = (position #\Newline string :start start)
+          do (if newline
+                 (progn
+                   (push (subseq string start newline) lines)
+                   (setf start (1+ newline)))
+                 (return)))
+    (push (subseq string start) lines)
+    (nreverse lines)))

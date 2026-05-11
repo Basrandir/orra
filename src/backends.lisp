@@ -329,19 +329,53 @@
 (defmethod backend-present ((backend sdl2-backend))
   (sdl2:render-present (backend-renderer backend)))
 
+(defun active-editor-cell-p (cell)
+  (and *application*
+       (editing-active-p *application*)
+       (eq (cell-role cell) :editable-content)
+       (cell-model cell)
+       (application-active-editor-model-id *application*)
+       (string=
+        (object-id (cell-model cell))
+        (application-active-editor-model-id *application*))))
+
 (defun displayed-cell-text (cell)
   (let ((text (cell-text cell)))
-    (if (and *application*
-             (editing-active-p *application*)
-             (cell-model cell)
-             (application-active-editor-model-id *application*)
-             (string=
-              (object-id (cell-model cell))
-              (application-active-editor-model-id *application*)))
+    (if (active-editor-cell-p cell)
         (cursor-display-string
          (text-buffer-content (application-active-text-buffer *application*))
          (text-buffer-cursor (application-active-text-buffer *application*)))
         text)))
+
+(defun cell-visible-text-width (cell)
+  (max 1 (- (bounds-width (cell-bounds cell)) 2)))
+
+(defun cell-visible-column-offset (cell line-index)
+  (if (active-editor-cell-p cell)
+      (multiple-value-bind (cursor-line cursor-column)
+          (buffer-cursor-line-column
+           (application-active-text-buffer *application*))
+        (if (= line-index cursor-line)
+            (max 0
+                 (- cursor-column
+                    (1- (cell-visible-text-width cell))))
+            0))
+      0))
+
+(defun visible-line-text-for-cell (cell line line-index)
+  (let ((start (min (length line)
+                    (cell-visible-column-offset cell line-index)))
+        (width (cell-visible-text-width cell)))
+    (if (zerop start)
+        (trim-text-for-cell line width)
+        (subseq line start
+                (min (length line)
+                     (+ start width))))))
+
+(defun visible-lines-for-cell (cell)
+  (loop for line in (split-lines (displayed-cell-text cell))
+        for line-index from 0
+        collect (visible-line-text-for-cell cell line line-index)))
 
 (defun draw-cell-tree (backend cell)
   (let* ((bounds (cell-bounds cell))
@@ -358,11 +392,13 @@
                          (application-focused-model-id *application*)))))
     (backend-draw-box backend x y width height label focusedp)
     (when (typep cell 'text-cell)
-      (backend-draw-text backend
-                         (+ x 1)
-                         (+ y 1)
-                         (trim-text-for-cell (displayed-cell-text cell)
-                                             (max 1 (- width 2)))))
+      (loop for line in (visible-lines-for-cell cell)
+            for row from 0
+            do (when (plusp (length line))
+                 (backend-draw-text backend
+                                    (+ x 1)
+                                    (+ y 1 row)
+                                    line))))
     (dolist (child (children-of cell))
       (draw-cell-tree backend child))))
 
@@ -371,20 +407,41 @@
   backend)
 
 (defun handle-sdl2-keydown (application keysym)
-  (let ((scancode (sdl2:scancode-value keysym))
-        (printable-text (printable-key-text keysym)))
+  (let* ((scancode (sdl2:scancode-value keysym))
+         (modifiers (sdl2:mod-value keysym))
+         (controlp (sdl2:mod-value-p modifiers :lctrl :rctrl))
+         (shiftp (sdl2:mod-value-p modifiers :lshift :rshift))
+         (printable-text (printable-key-text keysym)))
     (if (editing-active-p application)
         (cond
+          ((and controlp
+                (sdl2:scancode= scancode :scancode-z)
+                shiftp)
+           (redo-active-buffer-edit application))
+          ((and controlp
+                (sdl2:scancode= scancode :scancode-z))
+           (undo-active-buffer-edit application))
+          ((and controlp
+                (sdl2:scancode= scancode :scancode-y))
+           (redo-active-buffer-edit application))
           ((sdl2:scancode= scancode :scancode-escape)
            (stop-editing application))
           ((sdl2:scancode= scancode :scancode-backspace)
            (delete-active-buffer-backward application))
           ((sdl2:scancode= scancode :scancode-delete)
            (delete-active-buffer-forward application))
+          ((sdl2:scancode= scancode :scancode-home)
+           (move-active-buffer-cursor-home application))
+          ((sdl2:scancode= scancode :scancode-end)
+           (move-active-buffer-cursor-end application))
           ((sdl2:scancode= scancode :scancode-left)
            (move-active-buffer-cursor-left application))
           ((sdl2:scancode= scancode :scancode-right)
            (move-active-buffer-cursor-right application))
+          ((sdl2:scancode= scancode :scancode-up)
+           (move-active-buffer-cursor-up application))
+          ((sdl2:scancode= scancode :scancode-down)
+           (move-active-buffer-cursor-down application))
           ((sdl2:scancode= scancode :scancode-return)
            (insert-into-active-buffer application (string #\Newline)))
           (printable-text

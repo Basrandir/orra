@@ -60,8 +60,15 @@
    #:make-text-buffer
    #:make-workspace
    #:model-object
+   #:move-active-buffer-cursor-down
+   #:move-active-buffer-cursor-end
+   #:move-active-buffer-cursor-home
    #:move-active-buffer-cursor-left
    #:move-active-buffer-cursor-right
+   #:move-active-buffer-cursor-up
+   #:move-buffer-cursor-down
+   #:move-buffer-cursor-end
+   #:move-buffer-cursor-home
    #:notebook
    #:notebook-title
    #:null-backend
@@ -99,13 +106,22 @@
    #:stop-editing
    #:text-cell
    #:text-buffer
+   #:text-buffer-line-count
    #:text-buffer-content
    #:text-buffer-cursor
+   #:buffer-cursor-line-column
+   #:buffer-index-for-line-column
    #:delete-buffer-backward
    #:delete-buffer-forward
    #:insert-buffer-text
    #:move-buffer-cursor-left
    #:move-buffer-cursor-right
+   #:move-buffer-cursor-to
+   #:move-buffer-cursor-up
+   #:redo-active-buffer-edit
+   #:redo-buffer-edit
+   #:undo-active-buffer-edit
+   #:undo-buffer-edit
    #:workspace
    #:workspace-notebooks
    #:workspace-title))

@@ -31,6 +31,10 @@
     :initarg :active-text-buffer
     :accessor application-active-text-buffer
     :initform nil)
+   (editor-state-table
+    :initarg :editor-state-table
+    :accessor application-editor-state-table
+    :initform (make-hash-table :test #'equal))
    (save-path
     :initarg :save-path
     :accessor application-save-path
@@ -118,13 +122,19 @@
                (string= (application-active-editor-model-id application)
                         (object-id model)))
       (let ((buffer (application-active-text-buffer application)))
-        (setf lines
-              (append lines
-                      (list (format nil "edit-cursor: ~D"
-                                    (text-buffer-cursor buffer))
-                            (format nil "edit-length: ~D"
-                                    (length
-                                     (text-buffer-content buffer))))))))
+        (multiple-value-bind (line column)
+            (buffer-cursor-line-column buffer)
+          (setf lines
+                (append lines
+                        (list (format nil "edit-cursor: ~D"
+                                      (text-buffer-cursor buffer))
+                              (format nil "edit-line: ~D" (1+ line))
+                              (format nil "edit-column: ~D" (1+ column))
+                              (format nil "edit-lines: ~D"
+                                      (text-buffer-line-count buffer))
+                              (format nil "edit-length: ~D"
+                                      (length
+                                       (text-buffer-content buffer)))))))))
     lines))
 
 (defun build-inspector-cell (application)
@@ -153,7 +163,7 @@
   (let ((model (focused-model application)))
     (if (editing-active-p application)
         (format nil
-                "EDIT ~A ~A  |  type to edit  |  Left/Right move  |  Backspace/Delete remove  |  Enter newline  |  Esc stop"
+                "EDIT ~A ~A  |  type to edit  |  Left/Right/Up/Down move  |  Home/End line bounds  |  Ctrl+Z undo  |  Ctrl+Y redo  |  Esc stop"
                 (if model (object-kind model) :none)
                 (or (application-active-editor-model-id application) "-"))
         (format nil
@@ -229,38 +239,64 @@
          (<= (bounds-y bounds) y)
          (< y (+ (bounds-y bounds) (bounds-height bounds))))))
 
-(defun find-focusable-cell-at-point (cell x y)
+(defun find-cell-at-point (cell x y)
   (when (cell-contains-point-p cell x y)
     (or (dolist (child (reverse (children-of cell)) nil)
-          (let ((found (find-focusable-cell-at-point child x y)))
+          (let ((found (find-cell-at-point child x y)))
             (when found
               (return found))))
-        (when (and (cell-model cell)
-                   (focusable-model-object-p (cell-model cell)))
-          cell))))
+        cell)))
+
+(defun editable-text-cell-p (cell)
+  (and (typep cell 'text-cell)
+       (eq (cell-role cell) :editable-content)
+       (cell-model cell)
+       (editable-model-p (cell-model cell))))
+
+(defun place-active-buffer-cursor-from-cell-point (application cell grid-x grid-y)
+  (when (and (editing-active-p application)
+             (editable-text-cell-p cell))
+    (let* ((bounds (cell-bounds cell))
+           (line (max 0 (- grid-y (bounds-y bounds))))
+           (column (+ (cell-visible-column-offset cell line)
+                      (max 0 (- grid-x (1+ (bounds-x bounds)))))))
+      (move-buffer-cursor-to (application-active-text-buffer application)
+                             (buffer-index-for-line-column
+                              (application-active-text-buffer application)
+                              line
+                              column))))
+  application)
 
 (defun focus-model-at-pixel (application pixel-x pixel-y)
   (multiple-value-bind (grid-x grid-y)
       (backend-grid-point (application-backend application) pixel-x pixel-y)
-    (let ((cell (and (application-root-cell application)
-                     (find-focusable-cell-at-point
-                      (application-root-cell application)
-                      grid-x
-                      grid-y))))
-      (when cell
+    (let* ((cell (and (application-root-cell application)
+                      (find-cell-at-point
+                       (application-root-cell application)
+                       grid-x
+                       grid-y)))
+           (model (and cell (cell-model cell))))
+      (when model
         (when (and (editing-active-p application)
                    (not (string=
                          (application-active-editor-model-id application)
-                         (object-id (cell-model cell)))))
+                         (object-id model))))
           (stop-editing application))
-        (if (and (editable-model-p (cell-model cell))
-                 (application-focused-model-id application)
-                 (string= (application-focused-model-id application)
-                          (object-id (cell-model cell)))
-                 (not (editing-active-p application)))
-            (begin-editing-model application (cell-model cell))
-            (setf (application-focused-model-id application)
-                  (object-id (cell-model cell)))))))
+        (cond
+          ((and (editable-text-cell-p cell)
+                (application-focused-model-id application)
+                (string= (application-focused-model-id application)
+                         (object-id model)))
+           (unless (editing-active-p application)
+             (begin-editing-model application model))
+           (place-active-buffer-cursor-from-cell-point
+            application
+            cell
+            grid-x
+            grid-y))
+          ((focusable-model-object-p model)
+           (setf (application-focused-model-id application)
+                 (object-id model)))))))
   application)
 
 (defun editable-model-p (model)
@@ -293,17 +329,34 @@
 (defun begin-editing-model (application model)
   (unless (editable-model-p model)
     (return-from begin-editing-model nil))
-  (setf (application-focused-model-id application) (object-id model))
-  (setf (application-active-editor-model-id application) (object-id model))
-  (setf (application-active-text-buffer application)
-        (make-text-buffer :content (editable-model-string model)))
+  (let* ((model-id (object-id model))
+         (content (editable-model-string model))
+         (saved-state (gethash model-id
+                               (application-editor-state-table application))))
+    (setf (application-focused-model-id application) model-id)
+    (setf (application-active-editor-model-id application) model-id)
+    (setf (application-active-text-buffer application)
+          (if (and saved-state
+                   (string= (getf saved-state :content) content))
+              (make-text-buffer-from-state saved-state)
+              (progn
+                (remhash model-id (application-editor-state-table application))
+                (make-text-buffer :content content)))))
   application)
 
 (defun begin-editing-focused-model (application)
   (begin-editing-model application (focused-model application)))
 
+(defun remember-active-editor-state (application)
+  (when (editing-active-p application)
+    (setf (gethash (application-active-editor-model-id application)
+                   (application-editor-state-table application))
+          (text-buffer-state (application-active-text-buffer application))))
+  application)
+
 (defun stop-editing (application)
   (sync-active-buffer-to-model application)
+  (remember-active-editor-state application)
   (setf (application-active-editor-model-id application) nil)
   (setf (application-active-text-buffer application) nil)
   application)
@@ -334,6 +387,38 @@
 (defun move-active-buffer-cursor-right (application)
   (when (editing-active-p application)
     (move-buffer-cursor-right (application-active-text-buffer application)))
+  application)
+
+(defun move-active-buffer-cursor-up (application)
+  (when (editing-active-p application)
+    (move-buffer-cursor-up (application-active-text-buffer application)))
+  application)
+
+(defun move-active-buffer-cursor-down (application)
+  (when (editing-active-p application)
+    (move-buffer-cursor-down (application-active-text-buffer application)))
+  application)
+
+(defun move-active-buffer-cursor-home (application)
+  (when (editing-active-p application)
+    (move-buffer-cursor-home (application-active-text-buffer application)))
+  application)
+
+(defun move-active-buffer-cursor-end (application)
+  (when (editing-active-p application)
+    (move-buffer-cursor-end (application-active-text-buffer application)))
+  application)
+
+(defun undo-active-buffer-edit (application)
+  (when (editing-active-p application)
+    (undo-buffer-edit (application-active-text-buffer application))
+    (sync-active-buffer-to-model application))
+  application)
+
+(defun redo-active-buffer-edit (application)
+  (when (editing-active-p application)
+    (redo-buffer-edit (application-active-text-buffer application))
+    (sync-active-buffer-to-model application))
   application)
 
 (defun render-application (application)
@@ -375,6 +460,8 @@
          (application (make-instance 'application
                                      :registry registry
                                      :commands (make-hash-table :test #'equal)
+                                     :editor-state-table
+                                     (make-hash-table :test #'equal)
                                      :workspace workspace
                                      :backend (or backend (make-null-backend))
                                      :save-path save-path)))
@@ -394,6 +481,8 @@
 (defun load-workspace-into-application (application path)
   (let ((registry (make-object-registry)))
     (setf (application-registry application) registry)
+    (setf (application-editor-state-table application)
+          (make-hash-table :test #'equal))
     (setf (application-workspace application)
           (load-workspace-from-file path :registry registry))
     (install-defined-commands application)
