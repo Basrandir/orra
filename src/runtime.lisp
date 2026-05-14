@@ -48,12 +48,6 @@
     (when (typep object 'code-block)
       (register-tree registry (code-block-result object)))))
 
-(defun preview-string (string &key (limit 48))
-  (let ((string (string string)))
-    (if (<= (length string) limit)
-        string
-        (format nil "~A..." (subseq string 0 (max 0 (- limit 3)))))))
-
 (defun object-summary-string (object)
   (if object
       (format nil "~A ~A"
@@ -70,6 +64,11 @@
   (if (and object (object-prototype object))
       (object-summary-string (object-prototype object))
       "-"))
+
+(defun code-block-status-controls (model)
+  (if (typep model 'code-block)
+      "  |  Enter/e eval  |  v toggle structure"
+      ""))
 
 (defun inspector-lines-for-model (application model)
   (let ((lines (list "Inspector"
@@ -107,13 +106,24 @@
                               (length (code-block-source model)))
                       (format nil "source: ~A"
                               (preview-string (code-block-source model)))
+                      (format nil "parse: ~A"
+                              (code-block-parse-status-line model))
+                      (format nil "structure: ~:[hidden~;visible~]"
+                              (code-block-structure-visible-p model))
                       (format nil "result: ~A"
                               (if (code-block-result model)
                                   (object-summary-string
                                    (code-block-result model))
+                                  "-"))
+                      (format nil "result-status: ~A"
+                              (if (code-block-result model)
+                                  (result-block-status
+                                   (code-block-result model))
                                   "-"))))
                (result-block
-                (list (format nil "presentation: ~A"
+                (list (format nil "status: ~A"
+                              (result-block-status model))
+                      (format nil "presentation: ~A"
                               (preview-string
                                (result-block-presentation model)))))
                (t nil)))))
@@ -167,9 +177,10 @@
                 (if model (object-kind model) :none)
                 (or (application-active-editor-model-id application) "-"))
         (format nil
-                "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move  |  Enter or e to eval code  |  q quit"
+                "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move~A  |  q quit"
                 (if model (object-kind model) :none)
-                (if model (object-id model) "-")))))
+                (if model (object-id model) "-")
+                (code-block-status-controls model)))))
 
 (defun focusable-model-object-p (object)
   (typep object '(or notebook section paragraph code-block result-block)))
@@ -434,25 +445,57 @@
   (backend-present (application-backend application))
   application)
 
-(defun evaluate-forms (source)
-  (let (values)
-    (with-input-from-string (stream source)
-      (loop for form = (read stream nil :eof)
-            until (eq form :eof)
-            do (push (eval form) values)))
-    (nreverse values)))
+(defun ensure-code-block-result (application block)
+  (or (code-block-result block)
+      (setf (code-block-result block)
+            (make-result-block
+             :registry (application-registry application)))))
 
-(defun evaluate-code-block (application block)
-  (let* ((values (evaluate-forms (code-block-source block)))
-         (value (if values (car (last values)) nil))
-         (presentation (printable-string value))
-         (result (or (code-block-result block)
-                     (make-result-block
-                      :registry (application-registry application)))))
+(defun store-code-block-result (application block status presentation
+                                 &key value)
+  (let ((result (ensure-code-block-result application block)))
     (setf (result-block-value result) value)
     (setf (result-block-presentation result) presentation)
-    (setf (code-block-result block) result)
+    (set-result-block-status result status)
     result))
+
+(defun evaluate-forms (forms)
+  (loop for form in forms
+        collect (eval form)))
+
+(defun evaluate-code-block (application block)
+  (let ((parse-info (code-block-parse-info block)))
+    (cond
+      ((getf parse-info :unsupported-language)
+       (store-code-block-result
+        application
+        block
+        :error
+        (format nil "No evaluator for ~A."
+                (getf parse-info :unsupported-language))))
+      ((getf parse-info :error)
+       (store-code-block-result
+        application
+        block
+        :error
+        (code-block-parse-status-line block parse-info)))
+      (t
+       (handler-case
+           (let* ((values (evaluate-forms (getf parse-info :forms)))
+                  (value (if values (car (last values)) nil))
+                  (presentation (printable-string value)))
+             (store-code-block-result
+              application
+              block
+              :ok
+              presentation
+              :value value))
+         (error (condition)
+           (store-code-block-result
+            application
+            block
+            :error
+            (format nil "Evaluation error: ~A" condition))))))))
 
 (defun make-application (&key backend workspace save-path)
   (let* ((registry (make-object-registry))
@@ -511,6 +554,15 @@
       (rebuild-root-cell application)
       model)))
 
+(defun toggle-focused-code-structure (application)
+  (let ((model (focused-model application)))
+    (when (typep model 'code-block)
+      (when (editing-active-p application)
+        (stop-editing application))
+      (toggle-code-block-structure model)
+      (rebuild-root-cell application)
+      model)))
+
 (define-command render (application)
   "Rebuild and render the current cell tree."
   (render-application application))
@@ -550,6 +602,14 @@
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
     (prog1 (evaluate-code-block application block)
+      (rebuild-root-cell application))))
+
+(define-command toggle-code-structure (application block-id)
+  "Toggle the structural code preview for a code block."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (prog1 (toggle-code-block-structure block)
       (rebuild-root-cell application))))
 
 (define-command save-workspace (application &optional path)

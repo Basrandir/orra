@@ -10,6 +10,7 @@
                  (:file "src/model")
                  (:file "src/text-buffer")
                  (:file "src/notebook")
+                 (:file "src/code-lens")
                  (:file "src/commands")
                  (:file "src/cells")
                  (:file "src/backends")

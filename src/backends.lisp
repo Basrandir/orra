@@ -447,6 +447,12 @@
           (printable-text
            (insert-into-active-buffer application printable-text)))
         (cond
+          ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-v))
+           (toggle-focused-code-structure application))
+          ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-e))
+           (evaluate-focused-code-block application))
           ((and printable-text
                 (editable-model-p (focused-model application)))
            (begin-editing-focused-model application)

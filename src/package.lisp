@@ -22,8 +22,12 @@
    #:children-of
    #:code-block
    #:code-block-language
+   #:code-block-parse-info
+   #:code-block-parse-status-line
    #:code-block-result
    #:code-block-source
+   #:code-block-structure-lines
+   #:code-block-structure-visible-p
    #:command
    #:command-documentation
    #:command-function
@@ -80,6 +84,7 @@
    #:object-prototype
    #:paragraph
    #:paragraph-text
+   #:parse-common-lisp-source
    #:parent-of
    #:perform-layout
    #:quit-application
@@ -90,6 +95,7 @@
    #:render-application
    #:result-block
    #:result-block-presentation
+   #:result-block-status
    #:result-block-value
    #:root-notebook
    #:run-backend
@@ -104,11 +110,13 @@
    #:start-application
    #:start-demo
    #:stop-editing
+   #:toggle-code-block-structure
    #:text-cell
    #:text-buffer
    #:text-buffer-line-count
    #:text-buffer-content
    #:text-buffer-cursor
+   #:toggle-code-structure
    #:buffer-cursor-line-column
    #:buffer-index-for-line-column
    #:delete-buffer-backward

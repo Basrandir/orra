@@ -37,6 +37,12 @@
   (with-standard-io-syntax
     (prin1-to-string object)))
 
+(defun preview-string (string &key (limit 48))
+  (let ((string (string string)))
+    (if (<= (length string) limit)
+        string
+        (format nil "~A..." (subseq string 0 (max 0 (- limit 3)))))))
+
 (defun ensure-list (value)
   (if (listp value)
       value

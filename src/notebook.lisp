@@ -57,6 +57,13 @@
     :accessor result-block-presentation
     :initform "")))
 
+(defun result-block-status (result-block)
+  (object-property result-block :status :default :ok :inherit nil))
+
+(defun set-result-block-status (result-block status)
+  (set-object-property result-block :status status)
+  result-block)
+
 (defclass code-block (node)
   ((language
     :initarg :language
@@ -162,6 +169,7 @@
          (code (make-code-block
                 :source "(list :hello :orra)"
                 :registry registry)))
+    (set-object-property code :show-structure t)
     (append-child workspace notebook)
     (append-child notebook section)
     (append-child section paragraph)

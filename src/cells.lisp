@@ -141,10 +141,11 @@
       :text (paragraph-text node)
       :role :editable-content))
     (code-block
-     (let ((cell (make-container-cell
-                  :registry registry
-                  :model node
-                  :label (format nil "Code [~A]" (code-block-language node)))))
+     (let* ((cell (make-container-cell
+                   :registry registry
+                   :model node
+                   :label (format nil "Code [~A]" (code-block-language node))))
+            (info (code-block-parse-info node)))
        (append-heading-cell cell
                             registry
                             node
@@ -155,6 +156,29 @@
                       :model node
                       :text (code-block-source node)
                       :role :editable-content))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (code-block-parse-status-line node info)
+                      :role :metadata))
+       (when (code-block-structure-visible-p node)
+         (let ((structure-cell (make-container-cell
+                                :registry registry
+                                :model node
+                                :label "Structure")))
+           (append-heading-cell structure-cell
+                                registry
+                                node
+                                "Structure")
+           (dolist (line (code-block-structure-lines node :info info))
+             (append-child structure-cell
+                           (make-text-cell
+                            :registry registry
+                            :model node
+                            :text line
+                            :role :metadata)))
+           (append-child cell structure-cell)))
        (when (code-block-result node)
          (append-child cell
                        (build-node-cell (code-block-result node) registry)))
@@ -163,7 +187,9 @@
      (make-text-cell
       :registry registry
       :model node
-      :text (format nil "=> ~A" (result-block-presentation node))
+      :text (if (eq (result-block-status node) :error)
+                (format nil "!! ~A" (result-block-presentation node))
+                (format nil "=> ~A" (result-block-presentation node)))
       :role :result))
     (t
      (make-text-cell

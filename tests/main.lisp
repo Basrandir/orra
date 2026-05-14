@@ -37,6 +37,20 @@
                        (return found)))))))
     (visit cell)))
 
+(defun find-first-node-of-type (root type)
+  (labels ((visit (node)
+             (or (when (typep node type)
+                   node)
+                 (dolist (child (typecase node
+                                  (workspace (children-of node))
+                                  (orra::composite-node (children-of node))
+                                  (t nil))
+                                nil)
+                   (let ((found (visit child)))
+                     (when found
+                       (return found)))))))
+    (visit root)))
+
 (deftest text-buffer-editing ()
   (let ((buffer (make-text-buffer :content "abc" :cursor 1)))
     (insert-buffer-text buffer "Z")
@@ -108,6 +122,21 @@
   (is (string= "/" (orra::printable-key-text-from-sym 47 nil nil))
       "Printable punctuation should round-trip."))
 
+(deftest common-lisp-source-parse-info ()
+  (let ((info (parse-common-lisp-source
+               (format nil "(list :hello :orra)~%(+ 20 22)"))))
+    (is (null (getf info :error))
+        "Valid Common Lisp source should parse without an error.")
+    (is (= 2 (length (getf info :forms)))
+        "Expected two top-level forms in the parse result.")))
+
+(deftest common-lisp-source-parse-error-info ()
+  (let ((info (parse-common-lisp-source "(list :hello :orra")))
+    (is (getf info :error)
+        "Malformed Common Lisp source should report a parse error.")
+    (is (integerp (or (getf info :offset) 0))
+        "Parse errors should report an offset when available.")))
+
 (deftest property-inheritance ()
   (let* ((registry (make-object-registry))
          (prototype (make-paragraph :text "proto" :registry registry))
@@ -148,6 +177,32 @@
                 texts
                 :test #'string=)
           "Inspector should describe the focused model."))))
+
+(deftest code-block-structure-preview-renders ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Parse OK  |  1 top-level form" texts :test #'string=)
+          "Code blocks should render a parse status line.")
+      (is (find "Structure" texts :test #'string=)
+          "Code blocks with structure enabled should render a structure heading.")
+      (is (find "form 1: list (3 items)" texts :test #'string=)
+          "Code blocks should render a structural summary for parsed forms."))))
+
+(deftest inspector-describes-code-block-parse-state ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (render-application application)
+    (setf (orra::application-focused-model-id application)
+          (object-id
+           (find-first-node-of-type
+            (application-workspace application)
+            'code-block)))
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "parse: Parse OK  |  1 top-level form" texts :test #'string=)
+          "Inspector should describe code-block parse status.")
+      (is (find "structure: visible" texts :test #'string=)
+          "Inspector should report whether structure preview is visible."))))
 
 (deftest focus-navigation ()
   (let ((application (make-application :backend (make-null-backend))))
@@ -235,6 +290,52 @@
                  (paragraph-text (focused-model application)))
         "Redo history should survive leaving and re-entering the same editable model.")))
 
+(deftest toggle-code-structure-command ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (find-first-node-of-type
+                 (application-workspace application)
+                 'code-block)))
+    (render-application application)
+    (is (code-block-structure-visible-p block)
+        "Scratch code blocks should start with structure preview enabled.")
+    (invoke-command application 'toggle-code-structure (object-id block))
+    (is (not (code-block-structure-visible-p block))
+        "Toggle command should hide the structural preview.")
+    (is (not (find "Structure"
+                   (collect-text-cells (application-root-cell application))
+                   :test #'string=))
+        "Hidden structural previews should disappear from the rendered cell tree.")
+    (invoke-command application 'toggle-code-structure (object-id block))
+    (is (code-block-structure-visible-p block)
+        "Toggle command should restore the structural preview.")))
+
+(deftest invalid-code-evaluation-produces-error-result ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application 'append-code-block "de"))
+         (result (invoke-command application 'evaluate-code-block
+                                 (object-id block))))
+    (is (typep result 'result-block)
+        "Evaluating invalid code should still produce a result block.")
+    (is (eq :error (result-block-status result))
+        "Invalid code should mark the result block as an error.")
+    (is (search "Evaluation error:" (result-block-presentation result))
+        "Runtime failures should be rendered as evaluation errors.")
+    (render-application application)
+    (is (find-if (lambda (text)
+                   (search "!! Evaluation error:" text))
+                 (collect-text-cells (application-root-cell application)))
+        "Error results should render in the workspace instead of entering the debugger.")))
+
+(deftest malformed-code-evaluation-produces-error-result ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application 'append-code-block "(list :hello"))
+         (result (invoke-command application 'evaluate-code-block
+                                 (object-id block))))
+    (is (eq :error (result-block-status result))
+        "Reader failures should mark the result block as an error.")
+    (is (search "Parse error@" (result-block-presentation result))
+        "Malformed source should reuse the parse error message as the result.")))
+
 (deftest editing-focused-model ()
   (let ((application (make-application :backend (make-null-backend))))
     (render-application application)
@@ -284,7 +385,11 @@
                (is (string= "240"
                             (result-block-presentation
                              (code-block-result loaded-block)))
-                   "Expected persisted evaluation result.")))
+                   "Expected persisted evaluation result.")
+               (is (eq :ok
+                       (result-block-status
+                        (code-block-result loaded-block)))
+                   "Expected persisted evaluation status.")))
         (when (probe-file path)
           (delete-file path))))))
 
