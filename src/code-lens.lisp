@@ -50,6 +50,55 @@
                        (not (code-block-structure-visible-p block)))
   block)
 
+(defun code-block-top-level-forms (block &optional info)
+  (getf (or info (code-block-parse-info block)) :forms))
+
+(defun clamp-code-block-selected-form-index (index form-count)
+  (and (plusp form-count)
+       (max 0
+            (min (1- form-count)
+                 (if (integerp index) index 0)))))
+
+(defun code-block-selected-form-index (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (forms (code-block-top-level-forms block info))
+         (form-count (length forms)))
+    (unless (or (getf info :error)
+                (getf info :unsupported-language))
+      (clamp-code-block-selected-form-index
+       (object-property block :selected-form-index :default 0 :inherit nil)
+       form-count))))
+
+(defun set-code-block-selected-form-index (block index &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (forms (code-block-top-level-forms block info))
+         (selected-index (clamp-code-block-selected-form-index
+                          index
+                          (length forms))))
+    (if selected-index
+        (set-object-property block :selected-form-index selected-index)
+        (remhash :selected-form-index (object-properties block)))
+    selected-index))
+
+(defun code-block-selected-form (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (selected-index (code-block-selected-form-index block info))
+         (forms (code-block-top-level-forms block info)))
+    (and selected-index
+         (nth selected-index forms))))
+
+(defun select-next-code-block-form (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (current-index (code-block-selected-form-index block info)))
+    (when current-index
+      (set-code-block-selected-form-index block (1+ current-index) info))))
+
+(defun select-previous-code-block-form (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (current-index (code-block-selected-form-index block info)))
+    (when current-index
+      (set-code-block-selected-form-index block (1- current-index) info))))
+
 (defun code-block-parse-status-line (block &optional info)
   (let* ((info (or info (code-block-parse-info block)))
          (unsupported-language (getf info :unsupported-language))
@@ -66,6 +115,26 @@
       (t
        (format nil "Parse OK  |  ~D top-level form~:P"
                (length forms))))))
+
+(defun code-block-selection-status-line (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (unsupported-language (getf info :unsupported-language))
+         (error-string (getf info :error))
+         (forms (code-block-top-level-forms block info))
+         (selected-index (code-block-selected-form-index block info))
+         (selected-form (code-block-selected-form block info)))
+    (cond
+      (unsupported-language
+       (format nil "Selection unavailable for ~A" unsupported-language))
+      (error-string
+       "Selection unavailable until parse succeeds")
+      ((null forms)
+       "No forms to select")
+      (t
+       (format nil "Selected form ~D/~D  |  ~A"
+               (1+ selected-index)
+               (length forms)
+               (simple-form-summary selected-form))))))
 
 (defun simple-form-summary (form)
   (cond
@@ -149,7 +218,8 @@
   (let* ((info (or info (code-block-parse-info block)))
          (error-string (getf info :error))
          (forms (getf info :forms))
-         (offset (getf info :offset)))
+         (offset (getf info :offset))
+         (selected-index (code-block-selected-form-index block info)))
     (cond
       ((getf info :unsupported-language)
        (list (format nil "No structural lens for ~A"
@@ -162,9 +232,13 @@
       (t
        (loop for form in forms
              for index from 1
+             for zero-index from 0
              append (form-structure-lines
                      form
-                     :label (format nil "form ~D" index)
+                     :label (format nil "~:[ ~;>~] form ~D"
+                                    (and selected-index
+                                         (= zero-index selected-index))
+                                    index)
                      :depth 0
                      :max-depth max-depth
                      :max-items max-items))))))

@@ -24,6 +24,8 @@
    #:code-block-language
    #:code-block-parse-info
    #:code-block-parse-status-line
+   #:code-block-selected-form-index
+   #:code-block-selection-status-line
    #:code-block-result
    #:code-block-source
    #:code-block-structure-lines
@@ -102,6 +104,8 @@
    #:save-runtime-image
    #:save-workspace
    #:save-workspace-to-file
+   #:select-next-code-form
+   #:select-previous-code-form
    #:section
    #:section-title
    #:set-object-metadata
@@ -110,13 +114,15 @@
    #:start-application
    #:start-demo
    #:stop-editing
+   #:select-next-code-block-form
+   #:select-previous-code-block-form
    #:toggle-code-block-structure
+   #:toggle-code-structure
    #:text-cell
    #:text-buffer
    #:text-buffer-line-count
    #:text-buffer-content
    #:text-buffer-cursor
-   #:toggle-code-structure
    #:buffer-cursor-line-column
    #:buffer-index-for-line-column
    #:delete-buffer-backward

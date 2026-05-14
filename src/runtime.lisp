@@ -67,7 +67,11 @@
 
 (defun code-block-status-controls (model)
   (if (typep model 'code-block)
-      "  |  Enter/e eval  |  v toggle structure"
+      (format nil
+              "  |  Enter/e eval  |  [/] form  |  v toggle structure~@[  |  ~A~]"
+              (let ((info (code-block-parse-info model)))
+                (when (code-block-selected-form-index model info)
+                  (code-block-selection-status-line model info))))
       ""))
 
 (defun inspector-lines-for-model (application model)
@@ -108,6 +112,11 @@
                               (preview-string (code-block-source model)))
                       (format nil "parse: ~A"
                               (code-block-parse-status-line model))
+                      (format nil "selection: ~A"
+                              (code-block-selection-status-line model))
+                      (format nil "selected-form-index: ~A"
+                              (or (code-block-selected-form-index model)
+                                  "-"))
                       (format nil "structure: ~:[hidden~;visible~]"
                               (code-block-structure-visible-p model))
                       (format nil "result: ~A"
@@ -563,6 +572,18 @@
       (rebuild-root-cell application)
       model)))
 
+(defun step-focused-code-form-selection (application direction)
+  (let ((model (focused-model application)))
+    (when (typep model 'code-block)
+      (when (editing-active-p application)
+        (stop-editing application))
+      (let ((info (code-block-parse-info model)))
+        (if (minusp direction)
+            (select-previous-code-block-form model info)
+            (select-next-code-block-form model info)))
+      (rebuild-root-cell application)
+      model)))
+
 (define-command render (application)
   "Rebuild and render the current cell tree."
   (render-application application))
@@ -610,6 +631,22 @@
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
     (prog1 (toggle-code-block-structure block)
+      (rebuild-root-cell application))))
+
+(define-command select-previous-code-form (application block-id)
+  "Move the structural selection to the previous top-level form."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (prog1 (select-previous-code-block-form block)
+      (rebuild-root-cell application))))
+
+(define-command select-next-code-form (application block-id)
+  "Move the structural selection to the next top-level form."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (prog1 (select-next-code-block-form block)
       (rebuild-root-cell application))))
 
 (define-command save-workspace (application &optional path)

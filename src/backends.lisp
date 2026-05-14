@@ -448,6 +448,12 @@
            (insert-into-active-buffer application printable-text)))
         (cond
           ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-leftbracket))
+           (step-focused-code-form-selection application -1))
+          ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-rightbracket))
+           (step-focused-code-form-selection application 1))
+          ((and (typep (focused-model application) 'code-block)
                 (sdl2:scancode= scancode :scancode-v))
            (toggle-focused-code-structure application))
           ((and (typep (focused-model application) 'code-block)

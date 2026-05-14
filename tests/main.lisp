@@ -45,7 +45,7 @@
                                   (workspace (children-of node))
                                   (orra::composite-node (children-of node))
                                   (t nil))
-                                nil)
+                          nil)
                    (let ((found (visit child)))
                      (when found
                        (return found)))))))
@@ -184,9 +184,11 @@
     (let ((texts (collect-text-cells (application-root-cell application))))
       (is (find "Parse OK  |  1 top-level form" texts :test #'string=)
           "Code blocks should render a parse status line.")
+      (is (find "Selected form 1/1  |  list (3 items)" texts :test #'string=)
+          "Code blocks should render the current selected top-level form.")
       (is (find "Structure" texts :test #'string=)
           "Code blocks with structure enabled should render a structure heading.")
-      (is (find "form 1: list (3 items)" texts :test #'string=)
+      (is (find "> form 1: list (3 items)" texts :test #'string=)
           "Code blocks should render a structural summary for parsed forms."))))
 
 (deftest inspector-describes-code-block-parse-state ()
@@ -224,7 +226,7 @@
     (render-application application)
     (let* ((focused (focused-model application))
            (cell (find-text-cell-for-model (application-root-cell application)
-                                          (object-id focused)))
+                                           (object-id focused)))
            (bounds (cell-bounds cell)))
       (orra::focus-model-at-pixel application
                                   (orra::bounds-x bounds)
@@ -308,6 +310,49 @@
     (invoke-command application 'toggle-code-structure (object-id block))
     (is (code-block-structure-visible-p block)
         "Toggle command should restore the structural preview.")))
+
+(deftest code-form-selection-navigation ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                (format nil "(list :alpha)~%(+ 20 22)"))))
+    (render-application application)
+    (is (= 0 (code-block-selected-form-index block))
+        "Multi-form code blocks should default to the first top-level form.")
+    (invoke-command application 'select-next-code-form (object-id block))
+    (is (= 1 (code-block-selected-form-index block))
+        "Next-form navigation should advance the structural selection.")
+    (invoke-command application 'select-next-code-form (object-id block))
+    (is (= 1 (code-block-selected-form-index block))
+        "Next-form navigation should clamp at the last top-level form.")
+    (invoke-command application 'select-previous-code-form (object-id block))
+    (is (= 0 (code-block-selected-form-index block))
+        "Previous-form navigation should move back to the earlier form.")
+    (invoke-command application 'select-previous-code-form (object-id block))
+    (is (= 0 (code-block-selected-form-index block))
+        "Previous-form navigation should clamp at the first top-level form.")))
+
+(deftest code-form-selection-renders-and-reaches-inspector ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                (format nil "(list :alpha)~%(+ 20 22)"))))
+    (set-object-property block :show-structure t)
+    (invoke-command application 'select-next-code-form (object-id block))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Selected form 2/2  |  list (3 items)" texts :test #'string=)
+          "Code blocks should render the current top-level structural selection.")
+      (is (find "> form 2: list (3 items)" texts :test #'string=)
+          "The structure preview should visibly mark the selected top-level form.")
+      (is (find "selection: Selected form 2/2  |  list (3 items)"
+                texts
+                :test #'string=)
+          "The inspector should describe the selected top-level form.")
+      (is (find "selected-form-index: 1" texts :test #'string=)
+          "The inspector should show the selected form index."))))
 
 (deftest invalid-code-evaluation-produces-error-result ()
   (let* ((application (make-application :backend (make-null-backend)))

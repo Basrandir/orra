@@ -162,6 +162,12 @@
                       :model node
                       :text (code-block-parse-status-line node info)
                       :role :metadata))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (code-block-selection-status-line node info)
+                      :role :metadata))
        (when (code-block-structure-visible-p node)
          (let ((structure-cell (make-container-cell
                                 :registry registry
