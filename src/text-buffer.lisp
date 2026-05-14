@@ -59,10 +59,10 @@
         (line (max 0 requested-line)))
     (loop repeat line
           do
-      (let ((newline (position #\Newline content :start start)))
-        (unless newline
-          (return-from %line-start-index-for-line (length content)))
-        (setf start (1+ newline))))
+	  (let ((newline (position #\Newline content :start start)))
+            (unless newline
+              (return-from %line-start-index-for-line (length content)))
+            (setf start (1+ newline))))
     start))
 
 (defun %line-end-index-for-start (content start)
@@ -82,9 +82,9 @@
   (let* ((content (text-buffer-content buffer))
          (cursor (text-buffer-cursor buffer))
          (line-start (let ((newline (position #\Newline
-                                             content
-                                             :end cursor
-                                             :from-end t)))
+                                              content
+                                              :end cursor
+                                              :from-end t)))
                        (if newline
                            (1+ newline)
                            0))))

@@ -452,7 +452,7 @@
              :registry (application-registry application)))))
 
 (defun store-code-block-result (application block status presentation
-                                 &key value)
+                                &key value)
   (let ((result (ensure-code-block-result application block)))
     (setf (result-block-value result) value)
     (setf (result-block-presentation result) presentation)

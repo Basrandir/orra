@@ -23,8 +23,8 @@
                                    (or (ignore-errors (file-position stream))
                                        offset))
                              (read stream nil :eof))
-            until (eq form :eof)
-            do (push form forms))
+		until (eq form :eof)
+		do (push form forms))
           (list :forms (nreverse forms)
                 :error nil
                 :offset nil))
@@ -99,9 +99,9 @@
         (tail list))
     (loop while (consp tail)
           do (incf count)
-             (when (< (length items) preview-limit)
-               (push (car tail) items))
-             (setf tail (cdr tail)))
+          (when (< (length items) preview-limit)
+            (push (car tail) items))
+          (setf tail (cdr tail)))
     (values (nreverse items)
             count
             (null tail)
