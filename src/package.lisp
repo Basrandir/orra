@@ -25,6 +25,7 @@
    #:code-block-parse-info
    #:code-block-parse-status-line
    #:code-block-selected-form-index
+   #:code-block-selected-form-path
    #:code-block-selection-status-line
    #:code-block-result
    #:code-block-source
@@ -41,6 +42,7 @@
    #:begin-editing-focused-model
    #:delete-active-buffer-backward
    #:delete-active-buffer-forward
+   #:select-child-code-form
    #:delete-code-form
    #:editing-active-p
    #:focus-next-model
@@ -107,6 +109,7 @@
    #:save-workspace
    #:save-workspace-to-file
    #:select-next-code-form
+   #:select-parent-code-form
    #:select-previous-code-form
    #:section
    #:section-title
@@ -117,7 +120,9 @@
    #:start-demo
    #:stop-editing
    #:splice-code-form
+   #:select-child-code-block-form
    #:select-next-code-block-form
+   #:select-parent-code-block-form
    #:select-previous-code-block-form
    #:toggle-code-block-structure
    #:toggle-code-structure

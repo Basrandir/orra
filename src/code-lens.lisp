@@ -67,15 +67,82 @@
             (min (1- form-count)
                  (if (integerp index) index 0)))))
 
-(defun code-block-selected-form-index (block &optional info)
+(defun form-child-items-and-tail (form)
+  (let ((items nil)
+        (tail form))
+    (loop while (consp tail)
+          do (push (car tail) items)
+          (setf tail (cdr tail)))
+    (values (nreverse items) tail)))
+
+(defun rebuild-cons-form (items tail)
+  (reduce (lambda (rest item)
+            (cons item rest))
+          (reverse items)
+          :initial-value tail))
+
+(defun normalize-code-form-path (forms path)
+  (labels ((normalize-sequence-path (sequence indices)
+             (when (and indices
+                        (every #'integerp indices))
+               (let ((index (first indices)))
+                 (when (and (<= 0 index)
+                            (< index (length sequence)))
+                   (if (null (rest indices))
+                       (list index)
+                       (let ((child-path
+                              (normalize-form-path
+                               (nth index sequence)
+                               (rest indices))))
+                         (and child-path
+                              (cons index child-path))))))))
+           (normalize-form-path (form indices)
+             (multiple-value-bind (items tail)
+                 (form-child-items-and-tail form)
+               (declare (ignore tail))
+               (and items
+                    (normalize-sequence-path items indices)))))
+    (normalize-sequence-path forms path)))
+
+(defun code-block-selected-form-path (block &optional info)
   (let* ((info (or info (code-block-parse-info block)))
          (forms (code-block-top-level-forms block info))
-         (form-count (length forms)))
+         (form-count (length forms))
+         (stored-path (object-property block
+                                       :selected-form-path
+                                       :default nil
+                                       :inherit nil))
+         (stored-index (object-property block
+                                        :selected-form-index
+                                        :default 0
+                                        :inherit nil)))
     (unless (or (getf info :error)
                 (getf info :unsupported-language))
-      (clamp-code-block-selected-form-index
-       (object-property block :selected-form-index :default 0 :inherit nil)
-       form-count))))
+      (or (normalize-code-form-path forms stored-path)
+          (let ((selected-index
+                 (clamp-code-block-selected-form-index
+                  stored-index
+                  form-count)))
+            (and selected-index
+                 (list selected-index)))))))
+
+(defun set-code-block-selected-form-path (block path &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (forms (code-block-top-level-forms block info))
+         (selected-path (normalize-code-form-path forms path)))
+    (if selected-path
+        (progn
+          (set-object-property block :selected-form-path selected-path)
+          (set-object-property block
+                               :selected-form-index
+                               (first selected-path)))
+        (progn
+          (remhash :selected-form-path (object-properties block))
+          (remhash :selected-form-index (object-properties block))))
+    selected-path))
+
+(defun code-block-selected-form-index (block &optional info)
+  (first (code-block-selected-form-path block info)))
 
 (defun set-code-block-selected-form-index (block index &optional info)
   (let* ((info (or info (code-block-parse-info block)))
@@ -83,64 +150,175 @@
          (selected-index (clamp-code-block-selected-form-index
                           index
                           (length forms))))
-    (if selected-index
-        (set-object-property block :selected-form-index selected-index)
-        (remhash :selected-form-index (object-properties block)))
+    (set-code-block-selected-form-path
+     block
+     (and selected-index (list selected-index))
+     info)
     selected-index))
+
+(defun code-form-at-path (forms path)
+  (labels ((walk-sequence (sequence indices)
+             (let ((selected (nth (first indices) sequence)))
+               (if (null (rest indices))
+                   selected
+                   (walk-form selected (rest indices)))))
+           (walk-form (form indices)
+             (multiple-value-bind (items tail)
+                 (form-child-items-and-tail form)
+               (declare (ignore tail))
+               (and items
+                    (walk-sequence items indices)))))
+    (and path
+         (walk-sequence forms path))))
 
 (defun code-block-selected-form (block &optional info)
   (let* ((info (or info (code-block-parse-info block)))
-         (selected-index (code-block-selected-form-index block info))
+         (selected-path (code-block-selected-form-path block info))
          (forms (code-block-top-level-forms block info)))
-    (and selected-index
-         (nth selected-index forms))))
+    (code-form-at-path forms selected-path)))
+
+(defun code-form-child-items (form)
+  (multiple-value-bind (items tail)
+      (form-child-items-and-tail form)
+    (declare (ignore tail))
+    items))
+
+(defun selected-code-form-path-display-string (path)
+  (format nil "~{~D~^.~}" (mapcar #'1+ path)))
+
+(defun code-form-sibling-sequence (forms path)
+  (if (null (rest path))
+      forms
+      (code-form-child-items
+       (code-form-at-path forms (butlast path)))))
 
 (defun select-next-code-block-form (block &optional info)
   (let* ((info (or info (code-block-parse-info block)))
-         (current-index (code-block-selected-form-index block info)))
-    (when current-index
-      (set-code-block-selected-form-index block (1+ current-index) info))))
+         (forms (code-block-top-level-forms block info))
+         (current-path (code-block-selected-form-path block info))
+         (siblings (and current-path
+                        (code-form-sibling-sequence forms current-path))))
+    (when (and current-path siblings)
+      (set-code-block-selected-form-path
+       block
+       (append (butlast current-path)
+               (list (clamp-code-block-selected-form-index
+                      (1+ (car (last current-path)))
+                      (length siblings))))
+       info))))
 
 (defun select-previous-code-block-form (block &optional info)
   (let* ((info (or info (code-block-parse-info block)))
-         (current-index (code-block-selected-form-index block info)))
-    (when current-index
-      (set-code-block-selected-form-index block (1- current-index) info))))
+         (forms (code-block-top-level-forms block info))
+         (current-path (code-block-selected-form-path block info))
+         (siblings (and current-path
+                        (code-form-sibling-sequence forms current-path))))
+    (when (and current-path siblings)
+      (set-code-block-selected-form-path
+       block
+       (append (butlast current-path)
+               (list (clamp-code-block-selected-form-index
+                      (1- (car (last current-path)))
+                      (length siblings))))
+       info))))
 
-(defun replace-code-block-top-level-forms (block forms &key selected-index)
+(defun select-child-code-block-form (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (current-path (code-block-selected-form-path block info))
+         (selected-form (code-block-selected-form block info))
+         (children (and selected-form
+                        (code-form-child-items selected-form))))
+    (when (and current-path children)
+      (set-code-block-selected-form-path
+       block
+       (append current-path '(0))
+       info))))
+
+(defun select-parent-code-block-form (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (current-path (code-block-selected-form-path block info)))
+    (when (> (length current-path) 1)
+      (set-code-block-selected-form-path
+       block
+       (butlast current-path)
+       info))))
+
+(defun replace-code-block-top-level-forms (block forms &key selected-index selected-path)
   (replace-code-block-source block (serialize-common-lisp-forms forms))
-  (set-code-block-selected-form-index
+  (set-code-block-selected-form-path
    block
-   (or selected-index 0)
+   (or selected-path
+       (and selected-index
+            (list selected-index))
+       '(0))
    (code-block-parse-info block))
   block)
 
-(defun wrap-selected-code-block-form (block &optional info)
-  (let* ((info (or info (code-block-parse-info block)))
-         (forms (copy-list (code-block-top-level-forms block info)))
-         (selected-index (code-block-selected-form-index block info)))
-    (when selected-index
-      (setf (nth selected-index forms)
-            (list 'progn (nth selected-index forms)))
-      (replace-code-block-top-level-forms
-       block
-       forms
-       :selected-index selected-index))))
+(defun replace-sequence-item (sequence index value)
+  (loop for item in sequence
+        for current-index from 0
+        collect (if (= current-index index)
+                    value
+                    item)))
 
-(defun delete-selected-code-block-form (block &optional info)
+(defun rewrite-form-at-path (form path rewriter)
+  (multiple-value-bind (items tail)
+      (form-child-items-and-tail form)
+    (multiple-value-bind (new-items new-path)
+        (rewrite-sequence-at-path items path rewriter)
+      (values (rebuild-cons-form new-items tail)
+              new-path))))
+
+(defun rewrite-sequence-at-path (sequence path rewriter)
+  (let ((selected-index (first path)))
+    (if (null (rest path))
+        (funcall rewriter sequence selected-index)
+        (multiple-value-bind (new-child child-path)
+            (rewrite-form-at-path (nth selected-index sequence)
+                                  (rest path)
+                                  rewriter)
+          (values (replace-sequence-item sequence
+                                         selected-index
+                                         new-child)
+                  (cons selected-index child-path))))))
+
+(defun rewrite-code-block-selected-form (block rewriter &optional info)
   (let* ((info (or info (code-block-parse-info block)))
-         (selected-index (code-block-selected-form-index block info))
-         (forms (code-block-top-level-forms block info)))
-    (when selected-index
-      (let ((remaining-forms
-             (loop for form in forms
-                   for index from 0
-                   unless (= index selected-index)
-                   collect form)))
+         (forms (code-block-top-level-forms block info))
+         (selected-path (code-block-selected-form-path block info)))
+    (when selected-path
+      (multiple-value-bind (new-forms new-path)
+          (rewrite-sequence-at-path forms selected-path rewriter)
         (replace-code-block-top-level-forms
          block
-         remaining-forms
-         :selected-index selected-index)))))
+         new-forms
+         :selected-path new-path)))))
+
+(defun wrap-selected-code-block-form (block &optional info)
+  (rewrite-code-block-selected-form
+   block
+   (lambda (sequence selected-index)
+     (values (replace-sequence-item
+              sequence
+              selected-index
+              (list 'progn (nth selected-index sequence)))
+             (list selected-index)))
+   info))
+
+(defun delete-selected-code-block-form (block &optional info)
+  (rewrite-code-block-selected-form
+   block
+   (lambda (sequence selected-index)
+     (let ((remaining-forms
+            (loop for form in sequence
+                  for index from 0
+                  unless (= index selected-index)
+                  collect form)))
+       (values remaining-forms
+               (and remaining-forms
+                    (list (min selected-index
+                               (1- (length remaining-forms))))))))
+   info))
 
 (defun splicable-wrapper-form-p (form)
   (and (consp form)
@@ -148,20 +326,22 @@
        (member (first form) '(progn locally) :test #'eq)))
 
 (defun splice-selected-code-block-form (block &optional info)
-  (let* ((info (or info (code-block-parse-info block)))
-         (selected-index (code-block-selected-form-index block info))
-         (forms (copy-list (code-block-top-level-forms block info)))
-         (selected-form (and selected-index
-                             (nth selected-index forms))))
-    (when (and selected-index
-               (splicable-wrapper-form-p selected-form))
-      (let ((replacement-forms (rest selected-form)))
-        (replace-code-block-top-level-forms
-         block
-         (append (subseq forms 0 selected-index)
-                 replacement-forms
-                 (nthcdr (1+ selected-index) forms))
-         :selected-index selected-index)))))
+  (rewrite-code-block-selected-form
+   block
+   (lambda (sequence selected-index)
+     (let ((selected-form (nth selected-index sequence)))
+       (if (splicable-wrapper-form-p selected-form)
+           (let* ((replacement-forms (rest selected-form))
+                  (rewritten-forms
+                   (append (subseq sequence 0 selected-index)
+                           replacement-forms
+                           (nthcdr (1+ selected-index) sequence))))
+             (values rewritten-forms
+                     (and rewritten-forms
+                          (list (min selected-index
+                                     (1- (length rewritten-forms)))))))
+           (values sequence (list selected-index)))))
+   info))
 
 (defun code-block-parse-status-line (block &optional info)
   (let* ((info (or info (code-block-parse-info block)))
@@ -185,7 +365,8 @@
          (unsupported-language (getf info :unsupported-language))
          (error-string (getf info :error))
          (forms (code-block-top-level-forms block info))
-         (selected-index (code-block-selected-form-index block info))
+         (selected-path (code-block-selected-form-path block info))
+         (selected-index (and selected-path (first selected-path)))
          (selected-form (code-block-selected-form block info)))
     (cond
       (unsupported-language
@@ -194,6 +375,10 @@
        "Selection unavailable until parse succeeds")
       ((null forms)
        "No forms to select")
+      ((> (length selected-path) 1)
+       (format nil "Selected path ~A  |  ~A"
+               (selected-code-form-path-display-string selected-path)
+               (simple-form-summary selected-form)))
       (t
        (format nil "Selected form ~D/~D  |  ~A"
                (1+ selected-index)
@@ -240,11 +425,23 @@
             (null tail)
             tail)))
 
-(defun form-structure-lines (form &key label (depth 0) (max-depth 3) (max-items 6))
+(defun form-child-selected-path (selected-path index)
+  (cond
+    ((eq selected-path :not-selected)
+     :not-selected)
+    ((and (consp selected-path)
+          (= (first selected-path) index))
+     (rest selected-path))
+    (t
+     :not-selected)))
+
+(defun form-structure-lines (form &key label (depth 0) (max-depth 3) (max-items 6)
+                                    (selected-path :not-selected))
   (let* ((indent (make-string (* depth 2) :initial-element #\Space))
          (summary (simple-form-summary form))
-         (lines (list (format nil "~A~@[~A: ~]~A"
+         (lines (list (format nil "~A~:[ ~;>~] ~@[~A: ~]~A"
                               indent
+                              (null selected-path)
                               label
                               summary))))
     (when (and (consp form)
@@ -260,7 +457,11 @@
                                 :label (format nil "[~D]" index)
                                 :depth (1+ depth)
                                 :max-depth max-depth
-                                :max-items max-items))))
+                                :max-items max-items
+                                :selected-path
+                                (form-child-selected-path
+                                 selected-path
+                                 index)))))
         (when (> count max-items)
           (setf lines
                 (append lines
@@ -283,7 +484,7 @@
          (error-string (getf info :error))
          (forms (getf info :forms))
          (offset (getf info :offset))
-         (selected-index (code-block-selected-form-index block info)))
+         (selected-path (code-block-selected-form-path block info)))
     (cond
       ((getf info :unsupported-language)
        (list (format nil "No structural lens for ~A"
@@ -299,10 +500,11 @@
              for zero-index from 0
              append (form-structure-lines
                      form
-                     :label (format nil "~:[ ~;>~] form ~D"
-                                    (and selected-index
-                                         (= zero-index selected-index))
-                                    index)
+                     :label (format nil "form ~D" index)
                      :depth 0
                      :max-depth max-depth
-                     :max-items max-items))))))
+                     :max-items max-items
+                     :selected-path
+                     (form-child-selected-path
+                      selected-path
+                      zero-index)))))))

@@ -354,6 +354,54 @@
       (is (find "selected-form-index: 1" texts :test #'string=)
           "The inspector should show the selected form index."))))
 
+(deftest nested-code-form-selection-navigation ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list (+ 1 2) (* 3 4))")))
+    (is (equal '(0) (code-block-selected-form-path block))
+        "Code blocks should default to selecting the first top-level form path.")
+    (invoke-command application 'select-child-code-form (object-id block))
+    (is (equal '(0 0) (code-block-selected-form-path block))
+        "Descending should select the first child of the current form.")
+    (invoke-command application 'select-next-code-form (object-id block))
+    (is (equal '(0 1) (code-block-selected-form-path block))
+        "Sibling navigation should operate at the current selection depth.")
+    (invoke-command application 'select-child-code-form (object-id block))
+    (is (equal '(0 1 0) (code-block-selected-form-path block))
+        "Nested descent should continue selecting the first child.")
+    (invoke-command application 'select-parent-code-form (object-id block))
+    (is (equal '(0 1) (code-block-selected-form-path block))
+        "Ascending should return to the parent selection.")
+    (is (string= "Selected path 1.2  |  list (3 items)"
+                 (code-block-selection-status-line block))
+        "Nested selections should report their structural path.")))
+
+(deftest nested-code-form-selection-renders-and-reaches-inspector ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list (+ 1 2) (* 3 4))")))
+    (set-object-property block :show-structure t)
+    (invoke-command application 'select-child-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Selected path 1.2  |  list (3 items)" texts :test #'string=)
+          "Nested selections should render their structural path.")
+      (is (find-if (lambda (text)
+                     (search "> [1]: list (3 items)" text))
+                   texts)
+          "The structure preview should visibly mark the selected nested form.")
+      (is (find "selection: Selected path 1.2  |  list (3 items)"
+                texts
+                :test #'string=)
+          "The inspector should describe the selected nested form.")
+      (is (find "selected-form-path: (0 1)" texts :test #'string=)
+          "The inspector should show the selected structural path."))))
+
 (deftest deleting-selected-code-form-rewrites-source ()
   (let* ((application (make-application :backend (make-null-backend)))
          (block (invoke-command application
@@ -369,6 +417,20 @@
                  (code-block-selection-status-line block))
         "Selection status should update after structural deletion.")))
 
+(deftest deleting-nested-code-form-rewrites-source ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list :alpha :beta :gamma)")))
+    (invoke-command application 'select-child-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (invoke-command application 'delete-code-form (object-id block))
+    (is (string= "(LIST :ALPHA :GAMMA)" (code-block-source block))
+        "Deleting a nested selected form should rewrite the block source.")
+    (is (equal '(0 2) (code-block-selected-form-path block))
+        "Nested deletion should keep selection on the surviving sibling at the same depth.")))
+
 (deftest wrap-and-splice-code-form-rewrite-source ()
   (let* ((application (make-application :backend (make-null-backend)))
          (block (invoke-command application 'append-code-block "(+ 20 22)")))
@@ -380,6 +442,22 @@
         "Splicing should remove the PROGN wrapper and restore the body form.")
     (is (= 0 (code-block-selected-form-index block))
         "Selection should stay on the first form after wrap/splice.")))
+
+(deftest wrap-and-splice-nested-code-form-rewrite-source ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list (+ 20 22) :done)")))
+    (invoke-command application 'select-child-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (invoke-command application 'wrap-code-form (object-id block))
+    (is (string= "(LIST (PROGN (+ 20 22)) :DONE)" (code-block-source block))
+        "Wrapping a nested selection should rewrite only the selected nested form.")
+    (invoke-command application 'splice-code-form (object-id block))
+    (is (string= "(LIST (+ 20 22) :DONE)" (code-block-source block))
+        "Splicing a nested selection should remove only the selected nested wrapper.")
+    (is (equal '(0 1) (code-block-selected-form-path block))
+        "Selection should stay on the nested form after wrap/splice.")))
 
 (deftest structural-code-edit-invalidates-existing-result ()
   (let* ((application (make-application :backend (make-null-backend)))

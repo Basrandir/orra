@@ -68,9 +68,9 @@
 (defun code-block-status-controls (model)
   (if (typep model 'code-block)
       (format nil
-              "  |  Enter/e eval  |  [/] form  |  x delete  |  w wrap  |  u splice  |  v toggle structure~@[  |  ~A~]"
+              "  |  Enter/e eval  |  [/] sibling  |  Left/Right depth  |  x delete  |  w wrap  |  u splice  |  v toggle structure~@[  |  ~A~]"
               (let ((info (code-block-parse-info model)))
-                (when (code-block-selected-form-index model info)
+                (when (code-block-selected-form-path model info)
                   (code-block-selection-status-line model info))))
       ""))
 
@@ -116,6 +116,9 @@
                               (code-block-selection-status-line model))
                       (format nil "selected-form-index: ~A"
                               (or (code-block-selected-form-index model)
+                                  "-"))
+                      (format nil "selected-form-path: ~A"
+                              (or (code-block-selected-form-path model)
                                   "-"))
                       (format nil "selected-form: ~A"
                               (if (code-block-selected-form model)
@@ -589,6 +592,18 @@
       (rebuild-root-cell application)
       model)))
 
+(defun shift-focused-code-form-depth (application direction)
+  (let ((model (focused-model application)))
+    (when (typep model 'code-block)
+      (when (editing-active-p application)
+        (stop-editing application))
+      (let ((info (code-block-parse-info model)))
+        (if (minusp direction)
+            (select-parent-code-block-form model info)
+            (select-child-code-block-form model info)))
+      (rebuild-root-cell application)
+      model)))
+
 (defun edit-focused-code-form-structurally (application operator)
   (let ((model (focused-model application)))
     (when (typep model 'code-block)
@@ -648,7 +663,7 @@
       (rebuild-root-cell application))))
 
 (define-command select-previous-code-form (application block-id)
-  "Move the structural selection to the previous top-level form."
+  "Move the structural selection to the previous sibling form."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
@@ -656,15 +671,31 @@
       (rebuild-root-cell application))))
 
 (define-command select-next-code-form (application block-id)
-  "Move the structural selection to the next top-level form."
+  "Move the structural selection to the next sibling form."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
     (prog1 (select-next-code-block-form block)
       (rebuild-root-cell application))))
 
+(define-command select-child-code-form (application block-id)
+  "Move the structural selection to the first child of the current form."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (prog1 (select-child-code-block-form block)
+      (rebuild-root-cell application))))
+
+(define-command select-parent-code-form (application block-id)
+  "Move the structural selection to the parent of the current form."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (prog1 (select-parent-code-block-form block)
+      (rebuild-root-cell application))))
+
 (define-command delete-code-form (application block-id)
-  "Delete the selected top-level form from a code block."
+  "Delete the selected structural form from a code block."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
@@ -672,7 +703,7 @@
       (rebuild-root-cell application))))
 
 (define-command wrap-code-form (application block-id)
-  "Wrap the selected top-level form in PROGN."
+  "Wrap the selected structural form in PROGN."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
@@ -680,7 +711,7 @@
       (rebuild-root-cell application))))
 
 (define-command splice-code-form (application block-id)
-  "Splice the selected PROGN/LOCALLY body into top-level forms."
+  "Splice the selected PROGN/LOCALLY body into its surrounding sibling sequence."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))

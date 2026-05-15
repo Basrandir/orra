@@ -454,6 +454,12 @@
                 (sdl2:scancode= scancode :scancode-rightbracket))
            (step-focused-code-form-selection application 1))
           ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-left))
+           (shift-focused-code-form-depth application -1))
+          ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-right))
+           (shift-focused-code-form-depth application 1))
+          ((and (typep (focused-model application) 'code-block)
                 (sdl2:scancode= scancode :scancode-x))
            (edit-focused-code-form-structurally
             application
