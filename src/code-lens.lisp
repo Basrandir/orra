@@ -53,6 +53,14 @@
 (defun code-block-top-level-forms (block &optional info)
   (getf (or info (code-block-parse-info block)) :forms))
 
+(defun serialize-common-lisp-forms (forms)
+  (with-output-to-string (stream)
+    (loop for form in forms
+          for firstp = t then nil
+          do (unless firstp
+               (write-char #\Newline stream))
+          (write-string (printable-string form) stream))))
+
 (defun clamp-code-block-selected-form-index (index form-count)
   (and (plusp form-count)
        (max 0
@@ -98,6 +106,62 @@
          (current-index (code-block-selected-form-index block info)))
     (when current-index
       (set-code-block-selected-form-index block (1- current-index) info))))
+
+(defun replace-code-block-top-level-forms (block forms &key selected-index)
+  (replace-code-block-source block (serialize-common-lisp-forms forms))
+  (set-code-block-selected-form-index
+   block
+   (or selected-index 0)
+   (code-block-parse-info block))
+  block)
+
+(defun wrap-selected-code-block-form (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (forms (copy-list (code-block-top-level-forms block info)))
+         (selected-index (code-block-selected-form-index block info)))
+    (when selected-index
+      (setf (nth selected-index forms)
+            (list 'progn (nth selected-index forms)))
+      (replace-code-block-top-level-forms
+       block
+       forms
+       :selected-index selected-index))))
+
+(defun delete-selected-code-block-form (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (selected-index (code-block-selected-form-index block info))
+         (forms (code-block-top-level-forms block info)))
+    (when selected-index
+      (let ((remaining-forms
+             (loop for form in forms
+                   for index from 0
+                   unless (= index selected-index)
+                   collect form)))
+        (replace-code-block-top-level-forms
+         block
+         remaining-forms
+         :selected-index selected-index)))))
+
+(defun splicable-wrapper-form-p (form)
+  (and (consp form)
+       (symbolp (first form))
+       (member (first form) '(progn locally) :test #'eq)))
+
+(defun splice-selected-code-block-form (block &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (selected-index (code-block-selected-form-index block info))
+         (forms (copy-list (code-block-top-level-forms block info)))
+         (selected-form (and selected-index
+                             (nth selected-index forms))))
+    (when (and selected-index
+               (splicable-wrapper-form-p selected-form))
+      (let ((replacement-forms (rest selected-form)))
+        (replace-code-block-top-level-forms
+         block
+         (append (subseq forms 0 selected-index)
+                 replacement-forms
+                 (nthcdr (1+ selected-index) forms))
+         :selected-index selected-index)))))
 
 (defun code-block-parse-status-line (block &optional info)
   (let* ((info (or info (code-block-parse-info block)))

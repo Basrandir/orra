@@ -454,15 +454,26 @@
                 (sdl2:scancode= scancode :scancode-rightbracket))
            (step-focused-code-form-selection application 1))
           ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-x))
+           (edit-focused-code-form-structurally
+            application
+            #'delete-selected-code-block-form))
+          ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-w))
+           (edit-focused-code-form-structurally
+            application
+            #'wrap-selected-code-block-form))
+          ((and (typep (focused-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-u))
+           (edit-focused-code-form-structurally
+            application
+            #'splice-selected-code-block-form))
+          ((and (typep (focused-model application) 'code-block)
                 (sdl2:scancode= scancode :scancode-v))
            (toggle-focused-code-structure application))
           ((and (typep (focused-model application) 'code-block)
                 (sdl2:scancode= scancode :scancode-e))
            (evaluate-focused-code-block application))
-          ((and printable-text
-                (editable-model-p (focused-model application)))
-           (begin-editing-focused-model application)
-           (insert-into-active-buffer application printable-text))
           ((or (sdl2:scancode= scancode :scancode-q)
                (sdl2:scancode= scancode :scancode-escape))
            (quit-application application))
@@ -483,7 +494,11 @@
           ((sdl2:scancode= scancode :scancode-s)
            (invoke-command application 'save-workspace))
           ((sdl2:scancode= scancode :scancode-r)
-           (render-application application))))))
+           (render-application application))
+          ((and printable-text
+                (editable-model-p (focused-model application)))
+           (begin-editing-focused-model application)
+           (insert-into-active-buffer application printable-text))))))
 
 (defun sync-sdl2-text-input-state (backend application)
   (let ((editingp (editing-active-p application)))

@@ -41,6 +41,7 @@
    #:begin-editing-focused-model
    #:delete-active-buffer-backward
    #:delete-active-buffer-forward
+   #:delete-code-form
    #:editing-active-p
    #:focus-next-model
    #:focus-previous-model
@@ -92,6 +93,7 @@
    #:quit-application
    #:rebuild-root-cell
    #:register-object
+   #:replace-code-block-source
    #:registry-objects-list
    #:render
    #:render-application
@@ -114,6 +116,7 @@
    #:start-application
    #:start-demo
    #:stop-editing
+   #:splice-code-form
    #:select-next-code-block-form
    #:select-previous-code-block-form
    #:toggle-code-block-structure
@@ -136,6 +139,7 @@
    #:redo-buffer-edit
    #:undo-active-buffer-edit
    #:undo-buffer-edit
+   #:wrap-code-form
    #:workspace
    #:workspace-notebooks
    #:workspace-title))

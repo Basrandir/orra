@@ -64,6 +64,20 @@
   (set-object-property result-block :status status)
   result-block)
 
+(defun invalidate-code-block-result (block)
+  (let ((result (code-block-result block)))
+    (when result
+      (setf (result-block-value result) nil)
+      (setf (result-block-presentation result)
+            "Result invalidated by source changes.")
+      (set-result-block-status result :stale)))
+  block)
+
+(defun replace-code-block-source (block source)
+  (setf (code-block-source block) source)
+  (invalidate-code-block-result block)
+  block)
+
 (defclass code-block (node)
   ((language
     :initarg :language

@@ -354,6 +354,52 @@
       (is (find "selected-form-index: 1" texts :test #'string=)
           "The inspector should show the selected form index."))))
 
+(deftest deleting-selected-code-form-rewrites-source ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                (format nil "(list :alpha)~%(+ 20 22)"))))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (invoke-command application 'delete-code-form (object-id block))
+    (is (string= "(LIST :ALPHA)" (code-block-source block))
+        "Deleting the selected top-level form should rewrite the block source.")
+    (is (= 0 (code-block-selected-form-index block))
+        "Deleting the last top-level form should clamp selection to the remaining form.")
+    (is (string= "Selected form 1/1  |  list (2 items)"
+                 (code-block-selection-status-line block))
+        "Selection status should update after structural deletion.")))
+
+(deftest wrap-and-splice-code-form-rewrite-source ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application 'append-code-block "(+ 20 22)")))
+    (invoke-command application 'wrap-code-form (object-id block))
+    (is (string= "(PROGN (+ 20 22))" (code-block-source block))
+        "Wrapping should rewrite the selected form as a PROGN wrapper.")
+    (invoke-command application 'splice-code-form (object-id block))
+    (is (string= "(+ 20 22)" (code-block-source block))
+        "Splicing should remove the PROGN wrapper and restore the body form.")
+    (is (= 0 (code-block-selected-form-index block))
+        "Selection should stay on the first form after wrap/splice.")))
+
+(deftest structural-code-edit-invalidates-existing-result ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application 'append-code-block "(+ 20 22)"))
+         (result (invoke-command application 'evaluate-code-block
+                                 (object-id block))))
+    (is (eq :ok (result-block-status result))
+        "Expected a successful result before structural edits.")
+    (invoke-command application 'wrap-code-form (object-id block))
+    (is (eq :stale (result-block-status result))
+        "Structural source edits should invalidate previous evaluation results.")
+    (is (string= "Result invalidated by source changes."
+                 (result-block-presentation result))
+        "Stale results should explain why they are no longer current.")
+    (render-application application)
+    (is (find ".. Result invalidated by source changes."
+              (collect-text-cells (application-root-cell application))
+              :test #'string=)
+        "Invalidated results should render explicitly in the workspace.")))
+
 (deftest invalid-code-evaluation-produces-error-result ()
   (let* ((application (make-application :backend (make-null-backend)))
          (block (invoke-command application 'append-code-block "de"))

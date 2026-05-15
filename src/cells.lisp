@@ -193,9 +193,13 @@
      (make-text-cell
       :registry registry
       :model node
-      :text (if (eq (result-block-status node) :error)
-                (format nil "!! ~A" (result-block-presentation node))
-                (format nil "=> ~A" (result-block-presentation node)))
+      :text (cond
+              ((eq (result-block-status node) :error)
+               (format nil "!! ~A" (result-block-presentation node)))
+              ((eq (result-block-status node) :stale)
+               (format nil ".. ~A" (result-block-presentation node)))
+              (t
+               (format nil "=> ~A" (result-block-presentation node))))
       :role :result))
     (t
      (make-text-cell

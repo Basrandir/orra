@@ -68,7 +68,7 @@
 (defun code-block-status-controls (model)
   (if (typep model 'code-block)
       (format nil
-              "  |  Enter/e eval  |  [/] form  |  v toggle structure~@[  |  ~A~]"
+              "  |  Enter/e eval  |  [/] form  |  x delete  |  w wrap  |  u splice  |  v toggle structure~@[  |  ~A~]"
               (let ((info (code-block-parse-info model)))
                 (when (code-block-selected-form-index model info)
                   (code-block-selection-status-line model info))))
@@ -116,6 +116,11 @@
                               (code-block-selection-status-line model))
                       (format nil "selected-form-index: ~A"
                               (or (code-block-selected-form-index model)
+                                  "-"))
+                      (format nil "selected-form: ~A"
+                              (if (code-block-selected-form model)
+                                  (simple-form-summary
+                                   (code-block-selected-form model))
                                   "-"))
                       (format nil "structure: ~:[hidden~;visible~]"
                               (code-block-structure-visible-p model))
@@ -331,7 +336,7 @@
 (defun (setf editable-model-string) (value model)
   (typecase model
     (paragraph (setf (paragraph-text model) value))
-    (code-block (setf (code-block-source model) value))
+    (code-block (replace-code-block-source model value))
     (t (error "Model ~A is not editable." model))))
 
 (defun editing-active-p (application)
@@ -584,6 +589,15 @@
       (rebuild-root-cell application)
       model)))
 
+(defun edit-focused-code-form-structurally (application operator)
+  (let ((model (focused-model application)))
+    (when (typep model 'code-block)
+      (when (editing-active-p application)
+        (stop-editing application))
+      (funcall operator model)
+      (rebuild-root-cell application)
+      model)))
+
 (define-command render (application)
   "Rebuild and render the current cell tree."
   (render-application application))
@@ -647,6 +661,30 @@
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
     (prog1 (select-next-code-block-form block)
+      (rebuild-root-cell application))))
+
+(define-command delete-code-form (application block-id)
+  "Delete the selected top-level form from a code block."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (prog1 (delete-selected-code-block-form block)
+      (rebuild-root-cell application))))
+
+(define-command wrap-code-form (application block-id)
+  "Wrap the selected top-level form in PROGN."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (prog1 (wrap-selected-code-block-form block)
+      (rebuild-root-cell application))))
+
+(define-command splice-code-form (application block-id)
+  "Splice the selected PROGN/LOCALLY body into top-level forms."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (prog1 (splice-selected-code-block-form block)
       (rebuild-root-cell application))))
 
 (define-command save-workspace (application &optional path)
