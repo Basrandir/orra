@@ -402,6 +402,42 @@
       (is (find "selected-form-path: (0 1)" texts :test #'string=)
           "The inspector should show the selected structural path."))))
 
+(deftest code-block-editing-starts-at-selected-structural-form ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list (+ 1 2) (* 3 4))")))
+    (invoke-command application 'select-child-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (begin-editing-focused-model application)
+    (is (editing-active-p application)
+        "Focused code blocks should enter text edit mode.")
+    (is (= 6 (text-buffer-cursor
+              (orra::application-active-text-buffer application)))
+        "Code-block text editing should start at the selected structural form.")
+    (stop-editing application)))
+
+(deftest code-block-edit-cursor-updates-structural-selection ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list (+ 1 2) (* 3 4))")))
+    (invoke-command application 'select-child-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (begin-editing-focused-model application)
+    (move-active-buffer-cursor-right application)
+    (is (equal '(0 1 0) (code-block-selected-form-path block))
+        "Moving inside the selected subform should tighten selection to the deepest enclosing child.")
+    (move-active-buffer-cursor-right application)
+    (move-active-buffer-cursor-right application)
+    (is (equal '(0 1 1) (code-block-selected-form-path block))
+        "Moving onto another nested atom should retarget the structural selection.")
+    (stop-editing application)))
+
 (deftest deleting-selected-code-form-rewrites-source ()
   (let* ((application (make-application :backend (make-null-backend)))
          (block (invoke-command application
@@ -529,6 +565,7 @@
                          (object-id block))
           do (focus-next-model application))
     (begin-editing-focused-model application)
+    (move-active-buffer-cursor-end application)
     (move-active-buffer-cursor-left application)
     (insert-into-active-buffer application "0")
     (stop-editing application)

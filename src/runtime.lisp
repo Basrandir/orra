@@ -292,7 +292,8 @@
                              (buffer-index-for-line-column
                               (application-active-text-buffer application)
                               line
-                              column))))
+                              column))
+      (sync-active-buffer-structure-selection application)))
   application)
 
 (defun focus-model-at-pixel (application pixel-x pixel-y)
@@ -345,13 +346,28 @@
 (defun editing-active-p (application)
   (not (null (application-active-text-buffer application))))
 
+(defun active-editor-model (application)
+  (and (application-active-editor-model-id application)
+       (find-object (application-registry application)
+                    (application-active-editor-model-id application))))
+
+(defun sync-active-buffer-structure-selection (application)
+  (when (editing-active-p application)
+    (let ((model (active-editor-model application)))
+      (when (typep model 'code-block)
+        (select-code-block-form-at-source-offset
+         model
+         (text-buffer-cursor (application-active-text-buffer application))))))
+  application)
+
 (defun sync-active-buffer-to-model (application)
   (when (editing-active-p application)
-    (let ((model (find-object (application-registry application)
-                              (application-active-editor-model-id application))))
+    (let ((model (active-editor-model application)))
       (when (editable-model-p model)
         (setf (editable-model-string model)
-              (text-buffer-content (application-active-text-buffer application))))))
+              (text-buffer-content (application-active-text-buffer application)))
+        (when (typep model 'code-block)
+          (sync-active-buffer-structure-selection application)))))
   application)
 
 (defun begin-editing-model (application model)
@@ -363,13 +379,21 @@
                                (application-editor-state-table application))))
     (setf (application-focused-model-id application) model-id)
     (setf (application-active-editor-model-id application) model-id)
-    (setf (application-active-text-buffer application)
-          (if (and saved-state
-                   (string= (getf saved-state :content) content))
-              (make-text-buffer-from-state saved-state)
-              (progn
-                (remhash model-id (application-editor-state-table application))
-                (make-text-buffer :content content)))))
+    (let ((buffer
+           (if (and saved-state
+                    (string= (getf saved-state :content) content))
+               (make-text-buffer-from-state saved-state)
+               (progn
+                 (remhash model-id (application-editor-state-table application))
+                 (make-text-buffer :content content)))))
+      (when (and (typep model 'code-block)
+                 (not saved-state))
+        (let ((offset (code-block-selected-form-start-offset model)))
+          (when offset
+            (move-buffer-cursor-to buffer offset))))
+      (setf (application-active-text-buffer application) buffer)
+      (when (typep model 'code-block)
+        (sync-active-buffer-structure-selection application))))
   application)
 
 (defun begin-editing-focused-model (application)
@@ -409,32 +433,38 @@
 
 (defun move-active-buffer-cursor-left (application)
   (when (editing-active-p application)
-    (move-buffer-cursor-left (application-active-text-buffer application)))
+    (move-buffer-cursor-left (application-active-text-buffer application))
+    (sync-active-buffer-structure-selection application))
   application)
 
 (defun move-active-buffer-cursor-right (application)
   (when (editing-active-p application)
-    (move-buffer-cursor-right (application-active-text-buffer application)))
+    (move-buffer-cursor-right (application-active-text-buffer application))
+    (sync-active-buffer-structure-selection application))
   application)
 
 (defun move-active-buffer-cursor-up (application)
   (when (editing-active-p application)
-    (move-buffer-cursor-up (application-active-text-buffer application)))
+    (move-buffer-cursor-up (application-active-text-buffer application))
+    (sync-active-buffer-structure-selection application))
   application)
 
 (defun move-active-buffer-cursor-down (application)
   (when (editing-active-p application)
-    (move-buffer-cursor-down (application-active-text-buffer application)))
+    (move-buffer-cursor-down (application-active-text-buffer application))
+    (sync-active-buffer-structure-selection application))
   application)
 
 (defun move-active-buffer-cursor-home (application)
   (when (editing-active-p application)
-    (move-buffer-cursor-home (application-active-text-buffer application)))
+    (move-buffer-cursor-home (application-active-text-buffer application))
+    (sync-active-buffer-structure-selection application))
   application)
 
 (defun move-active-buffer-cursor-end (application)
   (when (editing-active-p application)
-    (move-buffer-cursor-end (application-active-text-buffer application)))
+    (move-buffer-cursor-end (application-active-text-buffer application))
+    (sync-active-buffer-structure-selection application))
   application)
 
 (defun undo-active-buffer-edit (application)

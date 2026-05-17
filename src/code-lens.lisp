@@ -53,6 +53,206 @@
 (defun code-block-top-level-forms (block &optional info)
   (getf (or info (code-block-parse-info block)) :forms))
 
+(defun whitespace-character-p (character)
+  (find character '(#\Space #\Tab #\Newline #\Return #\Page)))
+
+(defun source-comment-end (source start end)
+  (or (position #\Newline source :start start :end end)
+      end))
+
+(defun source-block-comment-end (source start end)
+  (let ((depth 1)
+        (position (+ start 2)))
+    (loop while (< position end)
+          do (cond
+               ((and (< (1+ position) end)
+                     (char= (char source position) #\#)
+                     (char= (char source (1+ position)) #\|))
+                (incf depth)
+                (incf position 2))
+               ((and (< (1+ position) end)
+                     (char= (char source position) #\|)
+                     (char= (char source (1+ position)) #\#))
+                (decf depth)
+                (incf position 2)
+                (when (zerop depth)
+                  (return position)))
+               (t
+                (incf position))))
+    end))
+
+(defun skip-source-whitespace-and-comments (source start end)
+  (let ((position start))
+    (loop while (< position end)
+          for character = (char source position)
+          do (cond
+               ((whitespace-character-p character)
+                (incf position))
+               ((char= character #\;)
+                (setf position (source-comment-end source position end)))
+               ((and (< (1+ position) end)
+                     (char= character #\#)
+                     (char= (char source (1+ position)) #\|))
+                (setf position
+                      (source-block-comment-end source position end)))
+               (t
+                (return position))))
+    position))
+
+(defun source-string-end (source start end)
+  (let ((position (1+ start)))
+    (loop while (< position end)
+          for character = (char source position)
+          do (cond
+               ((char= character #\\)
+                (incf position 2))
+               ((char= character #\")
+                (return (1+ position)))
+               (t
+                (incf position))))
+    end))
+
+(defun source-symbol-escape-end (source start end)
+  (let ((position (1+ start)))
+    (loop while (< position end)
+          for character = (char source position)
+          do (cond
+               ((char= character #\\)
+                (incf position 2))
+               ((char= character #\|)
+                (return (1+ position)))
+               (t
+                (incf position))))
+    end))
+
+(defun source-atom-end (source start end)
+  (let ((position start))
+    (loop while (< position end)
+          for character = (char source position)
+          do (cond
+               ((or (whitespace-character-p character)
+                    (find character '(#\( #\) #\" #\;)))
+                (return position))
+               ((char= character #\|)
+                (setf position (source-symbol-escape-end source position end)))
+               ((char= character #\\)
+                (incf position 2))
+               (t
+                (incf position))))
+    position))
+
+(defun source-prefix-length (source start end)
+  (cond
+    ((>= start end) 0)
+    ((and (< (1+ start) end)
+          (char= (char source start) #\#)
+          (char= (char source (1+ start)) #\'))
+     2)
+    ((find (char source start) '(#\' #\`))
+     1)
+    ((char= (char source start) #\,)
+     (if (and (< (1+ start) end)
+              (char= (char source (1+ start)) #\@))
+         2
+         1))
+    (t
+     0)))
+
+(defun source-form-span (source start end)
+  (let ((position (skip-source-whitespace-and-comments source start end)))
+    (when (< position end)
+      (let* ((prefix-length (source-prefix-length source position end))
+             (form-start position)
+             (core-start (+ position prefix-length)))
+        (when (< core-start end)
+          (let ((character (char source core-start)))
+            (cond
+              ((char= character #\()
+               (let ((list-end (source-list-end source core-start end)))
+                 (and list-end
+                      (list form-start list-end))))
+              ((char= character #\")
+               (list form-start
+                     (source-string-end source core-start end)))
+              (t
+               (let ((atom-end (source-atom-end source core-start end)))
+                 (and (< core-start atom-end)
+                      (list form-start atom-end)))))))))))
+
+(defun source-list-end (source start end)
+  (let ((position (1+ start)))
+    (loop
+     (setf position (skip-source-whitespace-and-comments source position end))
+     (when (>= position end)
+       (return nil))
+     (when (char= (char source position) #\))
+       (return (1+ position)))
+     (let ((child-span (source-form-span source position end)))
+       (unless child-span
+         (return nil))
+       (setf position (second child-span))))))
+
+(defun source-child-form-spans (source span)
+  (destructuring-bind (start end) span
+    (let ((position (1+ start))
+          (child-spans nil))
+      (loop
+       (setf position
+             (skip-source-whitespace-and-comments
+              source
+              position
+              (1- end)))
+       (when (>= position (1- end))
+         (return (nreverse child-spans)))
+       (let ((child-span (source-form-span source position (1- end))))
+         (unless child-span
+           (return (nreverse child-spans)))
+         (push child-span child-spans)
+         (setf position (second child-span)))))))
+
+(defun source-top-level-form-spans (source)
+  (let ((position 0)
+        (end (length source))
+        (spans nil))
+    (loop
+     (setf position (skip-source-whitespace-and-comments source position end))
+     (when (>= position end)
+       (return (nreverse spans)))
+     (let ((span (source-form-span source position end)))
+       (unless span
+         (return (nreverse spans)))
+       (push span spans)
+       (setf position (second span))))))
+
+(defun source-span-for-path (source path)
+  (labels ((walk (spans indices)
+             (let ((span (nth (first indices) spans)))
+               (when span
+                 (if (null (rest indices))
+                     span
+                     (walk (source-child-form-spans source span)
+                           (rest indices)))))))
+    (and path
+         (walk (source-top-level-form-spans source) path))))
+
+(defun source-path-at-offset (source offset)
+  (let ((bounded-offset (max 0 (min offset (length source)))))
+    (labels ((find-containing-index (spans)
+               (position-if (lambda (span)
+                              (destructuring-bind (start end) span
+                                (and (<= start bounded-offset)
+                                     (<= bounded-offset end))))
+                            spans))
+             (walk (spans prefix)
+               (let ((index (find-containing-index spans)))
+                 (when index
+                   (let* ((path (append prefix (list index)))
+                          (span (nth index spans))
+                          (children (source-child-form-spans source span))
+                          (child-path (walk children path)))
+                     (or child-path path))))))
+      (walk (source-top-level-form-spans source) nil))))
+
 (defun serialize-common-lisp-forms (forms)
   (with-output-to-string (stream)
     (loop for form in forms
@@ -176,6 +376,27 @@
          (selected-path (code-block-selected-form-path block info))
          (forms (code-block-top-level-forms block info)))
     (code-form-at-path forms selected-path)))
+
+(defun code-block-selected-form-span (block &optional info)
+  (let ((info (or info (code-block-parse-info block))))
+    (when (and (not (getf info :error))
+               (not (getf info :unsupported-language)))
+      (source-span-for-path
+       (code-block-source block)
+       (code-block-selected-form-path block info)))))
+
+(defun code-block-selected-form-start-offset (block &optional info)
+  (let ((span (code-block-selected-form-span block info)))
+    (and span
+         (first span))))
+
+(defun select-code-block-form-at-source-offset (block offset &optional info)
+  (let ((info (or info (code-block-parse-info block))))
+    (when (and (not (getf info :error))
+               (not (getf info :unsupported-language)))
+      (let ((path (source-path-at-offset (code-block-source block) offset)))
+        (when path
+          (set-code-block-selected-form-path block path info))))))
 
 (defun code-form-child-items (form)
   (multiple-value-bind (items tail)
