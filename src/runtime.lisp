@@ -406,6 +406,49 @@
           (text-buffer-state (application-active-text-buffer application))))
   application)
 
+(defun clamp-editor-cursor (content cursor)
+  (max 0
+       (min (or cursor 0)
+            (length content))))
+
+(defun editor-state-snapshot (content cursor)
+  (list content
+        (clamp-editor-cursor content cursor)))
+
+(defun editor-state-from-content (content cursor undo-stack redo-stack)
+  (list :content content
+        :cursor (clamp-editor-cursor content cursor)
+        :undo-stack undo-stack
+        :redo-stack redo-stack))
+
+(defun remember-code-block-structural-edit (application block previous-source
+                                            &key previous-cursor)
+  (let ((new-source (code-block-source block)))
+    (unless (string= previous-source new-source)
+      (let* ((model-id (object-id block))
+             (saved-state (gethash model-id
+                                   (application-editor-state-table application)))
+             (matching-state-p (and saved-state
+                                    (string= (getf saved-state :content "")
+                                             previous-source)))
+             (undo-stack (if matching-state-p
+                             (copy-tree (getf saved-state :undo-stack))
+                             nil))
+             (historical-cursor (if matching-state-p
+                                    (getf saved-state :cursor 0)
+                                    previous-cursor))
+             (new-cursor (or (code-block-selected-form-start-offset block)
+                             (length new-source))))
+        (push (editor-state-snapshot previous-source historical-cursor)
+              undo-stack)
+        (setf (gethash model-id
+                       (application-editor-state-table application))
+              (editor-state-from-content new-source
+                                         new-cursor
+                                         undo-stack
+                                         nil)))))
+  block)
+
 (defun stop-editing (application)
   (sync-active-buffer-to-model application)
   (remember-active-editor-state application)
@@ -634,14 +677,27 @@
       (rebuild-root-cell application)
       model)))
 
-(defun edit-focused-code-form-structurally (application operator)
-  (let ((model (focused-model application)))
-    (when (typep model 'code-block)
-      (when (editing-active-p application)
-        (stop-editing application))
-      (funcall operator model)
+(defun edit-code-block-structurally (application block operator)
+  (when (typep block 'code-block)
+    (when (and (editing-active-p application)
+               (string= (application-active-editor-model-id application)
+                        (object-id block)))
+      (stop-editing application))
+    (let ((previous-source (code-block-source block))
+          (previous-cursor (or (code-block-selected-form-start-offset block)
+                               (length (code-block-source block)))))
+      (funcall operator block)
+      (remember-code-block-structural-edit application
+                                           block
+                                           previous-source
+                                           :previous-cursor previous-cursor)
       (rebuild-root-cell application)
-      model)))
+      block)))
+
+(defun edit-focused-code-form-structurally (application operator)
+  (edit-code-block-structurally application
+                                (focused-model application)
+                                operator))
 
 (define-command render (application)
   "Rebuild and render the current cell tree."
@@ -729,24 +785,27 @@
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
-    (prog1 (delete-selected-code-block-form block)
-      (rebuild-root-cell application))))
+    (edit-code-block-structurally application
+                                  block
+                                  #'delete-selected-code-block-form)))
 
 (define-command wrap-code-form (application block-id)
   "Wrap the selected structural form in PROGN."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
-    (prog1 (wrap-selected-code-block-form block)
-      (rebuild-root-cell application))))
+    (edit-code-block-structurally application
+                                  block
+                                  #'wrap-selected-code-block-form)))
 
 (define-command splice-code-form (application block-id)
   "Splice the selected PROGN/LOCALLY body into its surrounding sibling sequence."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
-    (prog1 (splice-selected-code-block-form block)
-      (rebuild-root-cell application))))
+    (edit-code-block-structurally application
+                                  block
+                                  #'splice-selected-code-block-form)))
 
 (define-command save-workspace (application &optional path)
   "Persist the current workspace to disk."
