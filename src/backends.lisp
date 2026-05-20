@@ -424,6 +424,40 @@
           ((and controlp
                 (sdl2:scancode= scancode :scancode-y))
            (redo-active-buffer-edit application))
+          ((and controlp
+                (typep (active-editor-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-leftbracket))
+           (step-focused-code-form-selection application -1))
+          ((and controlp
+                (typep (active-editor-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-rightbracket))
+           (step-focused-code-form-selection application 1))
+          ((and controlp
+                (typep (active-editor-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-left))
+           (shift-focused-code-form-depth application -1))
+          ((and controlp
+                (typep (active-editor-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-right))
+           (shift-focused-code-form-depth application 1))
+          ((and controlp
+                (typep (active-editor-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-x))
+           (edit-focused-code-form-structurally
+            application
+            #'delete-selected-code-block-form))
+          ((and controlp
+                (typep (active-editor-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-w))
+           (edit-focused-code-form-structurally
+            application
+            #'wrap-selected-code-block-form))
+          ((and controlp
+                (typep (active-editor-model application) 'code-block)
+                (sdl2:scancode= scancode :scancode-u))
+           (edit-focused-code-form-structurally
+            application
+            #'splice-selected-code-block-form))
           ((sdl2:scancode= scancode :scancode-escape)
            (stop-editing application))
           ((sdl2:scancode= scancode :scancode-backspace)

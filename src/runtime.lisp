@@ -74,6 +74,11 @@
                   (code-block-selection-status-line model info))))
       ""))
 
+(defun code-block-edit-status-controls (model)
+  (if (typep model 'code-block)
+      "  |  Ctrl+[/] sibling  |  Ctrl+Left/Right depth  |  Ctrl+X delete  |  Ctrl+W wrap  |  Ctrl+U splice"
+      ""))
+
 (defun inspector-lines-for-model (application model)
   (let ((lines (list "Inspector"
                      (format nil "focused: ~A" (object-summary-string model))
@@ -190,9 +195,10 @@
   (let ((model (focused-model application)))
     (if (editing-active-p application)
         (format nil
-                "EDIT ~A ~A  |  type to edit  |  Left/Right/Up/Down move  |  Home/End line bounds  |  Ctrl+Z undo  |  Ctrl+Y redo  |  Esc stop"
+                "EDIT ~A ~A  |  type to edit  |  Left/Right/Up/Down move  |  Home/End line bounds  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  Esc stop"
                 (if model (object-kind model) :none)
-                (or (application-active-editor-model-id application) "-"))
+                (or (application-active-editor-model-id application) "-")
+                (code-block-edit-status-controls model))
         (format nil
                 "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move~A  |  q quit"
                 (if model (object-kind model) :none)
@@ -351,6 +357,13 @@
        (find-object (application-registry application)
                     (application-active-editor-model-id application))))
 
+(defun active-editor-model-p (application model)
+  (and model
+       (editing-active-p application)
+       (application-active-editor-model-id application)
+       (string= (application-active-editor-model-id application)
+                (object-id model))))
+
 (defun sync-active-buffer-structure-selection (application)
   (when (editing-active-p application)
     (let ((model (active-editor-model application)))
@@ -420,6 +433,21 @@
         :cursor (clamp-editor-cursor content cursor)
         :undo-stack undo-stack
         :redo-stack redo-stack))
+
+(defun sync-active-buffer-cursor-to-code-block-selection (application block)
+  (when (active-editor-model-p application block)
+    (move-buffer-cursor-to
+     (application-active-text-buffer application)
+     (or (code-block-selected-form-start-offset block)
+         (length (code-block-source block))))))
+
+(defun sync-active-buffer-with-code-block-structural-edit (application block)
+  (when (active-editor-model-p application block)
+    (replace-buffer-content
+     (application-active-text-buffer application)
+     (code-block-source block)
+     :cursor (or (code-block-selected-form-start-offset block)
+                 (length (code-block-source block))))))
 
 (defun remember-code-block-structural-edit (application block previous-source
                                             &key previous-cursor)
@@ -656,43 +684,54 @@
 (defun step-focused-code-form-selection (application direction)
   (let ((model (focused-model application)))
     (when (typep model 'code-block)
-      (when (editing-active-p application)
+      (when (and (editing-active-p application)
+                 (not (active-editor-model-p application model)))
         (stop-editing application))
       (let ((info (code-block-parse-info model)))
         (if (minusp direction)
             (select-previous-code-block-form model info)
             (select-next-code-block-form model info)))
+      (sync-active-buffer-cursor-to-code-block-selection application model)
       (rebuild-root-cell application)
       model)))
 
 (defun shift-focused-code-form-depth (application direction)
   (let ((model (focused-model application)))
     (when (typep model 'code-block)
-      (when (editing-active-p application)
+      (when (and (editing-active-p application)
+                 (not (active-editor-model-p application model)))
         (stop-editing application))
       (let ((info (code-block-parse-info model)))
         (if (minusp direction)
             (select-parent-code-block-form model info)
             (select-child-code-block-form model info)))
+      (sync-active-buffer-cursor-to-code-block-selection application model)
       (rebuild-root-cell application)
       model)))
 
 (defun edit-code-block-structurally (application block operator)
   (when (typep block 'code-block)
-    (when (and (editing-active-p application)
-               (string= (application-active-editor-model-id application)
-                        (object-id block)))
-      (stop-editing application))
-    (let ((previous-source (code-block-source block))
-          (previous-cursor (or (code-block-selected-form-start-offset block)
-                               (length (code-block-source block)))))
-      (funcall operator block)
-      (remember-code-block-structural-edit application
-                                           block
-                                           previous-source
-                                           :previous-cursor previous-cursor)
-      (rebuild-root-cell application)
-      block)))
+    (let ((editing-active-model-p (active-editor-model-p application block)))
+      (when (and (editing-active-p application)
+                 (not editing-active-model-p))
+        (stop-editing application))
+      (let ((previous-source (code-block-source block))
+            (previous-cursor (if editing-active-model-p
+				 (text-buffer-cursor
+                                  (application-active-text-buffer application))
+				 (or (code-block-selected-form-start-offset block)
+                                     (length (code-block-source block))))))
+	(funcall operator block)
+	(if editing-active-model-p
+            (sync-active-buffer-with-code-block-structural-edit
+             application
+             block)
+            (remember-code-block-structural-edit application
+						 block
+						 previous-source
+						 :previous-cursor previous-cursor))
+	(rebuild-root-cell application)
+	block))))
 
 (defun edit-focused-code-form-structurally (application operator)
   (edit-code-block-structurally application
@@ -753,32 +792,44 @@
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
-    (prog1 (select-previous-code-block-form block)
-      (rebuild-root-cell application))))
+    (let ((info (code-block-parse-info block)))
+      (select-previous-code-block-form block info))
+    (sync-active-buffer-cursor-to-code-block-selection application block)
+    (rebuild-root-cell application)
+    block))
 
 (define-command select-next-code-form (application block-id)
   "Move the structural selection to the next sibling form."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
-    (prog1 (select-next-code-block-form block)
-      (rebuild-root-cell application))))
+    (let ((info (code-block-parse-info block)))
+      (select-next-code-block-form block info))
+    (sync-active-buffer-cursor-to-code-block-selection application block)
+    (rebuild-root-cell application)
+    block))
 
 (define-command select-child-code-form (application block-id)
   "Move the structural selection to the first child of the current form."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
-    (prog1 (select-child-code-block-form block)
-      (rebuild-root-cell application))))
+    (let ((info (code-block-parse-info block)))
+      (select-child-code-block-form block info))
+    (sync-active-buffer-cursor-to-code-block-selection application block)
+    (rebuild-root-cell application)
+    block))
 
 (define-command select-parent-code-form (application block-id)
   "Move the structural selection to the parent of the current form."
   (let ((block (find-object (application-registry application) block-id)))
     (unless (typep block 'code-block)
       (error "Object ~A is not a code block." block-id))
-    (prog1 (select-parent-code-block-form block)
-      (rebuild-root-cell application))))
+    (let ((info (code-block-parse-info block)))
+      (select-parent-code-block-form block info))
+    (sync-active-buffer-cursor-to-code-block-selection application block)
+    (rebuild-root-cell application)
+    block))
 
 (define-command delete-code-form (application block-id)
   "Delete the selected structural form from a code block."

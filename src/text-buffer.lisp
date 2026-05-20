@@ -175,6 +175,18 @@
   (incf (text-buffer-cursor buffer))
   (%clamp-buffer-cursor buffer))
 
+(defun replace-buffer-content (buffer content &key cursor)
+  (let* ((content (string content))
+         (new-cursor (if cursor
+                         (max 0 (min cursor (length content)))
+                         (length content))))
+    (unless (and (string= content (text-buffer-content buffer))
+                 (= new-cursor (text-buffer-cursor buffer)))
+      (%record-buffer-change buffer)
+      (setf (text-buffer-content buffer) content)
+      (setf (text-buffer-cursor buffer) new-cursor)))
+  (%clamp-buffer-cursor buffer))
+
 (defun undo-buffer-edit (buffer)
   (when (text-buffer-undo-stack buffer)
     (push (%buffer-snapshot buffer) (text-buffer-redo-stack buffer))

@@ -438,6 +438,61 @@
         "Moving onto another nested atom should retarget the structural selection.")
     (stop-editing application)))
 
+(deftest code-form-selection-navigation-stays-live-while-editing ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list (+ 1 2) (* 3 4))")))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (begin-editing-focused-model application)
+    (invoke-command application 'select-child-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (is (editing-active-p application)
+        "Structural selection commands should keep code-block edit mode active.")
+    (is (equal '(0 1) (code-block-selected-form-path block))
+        "Selection commands should still update the structural path while editing.")
+    (is (= 6
+           (text-buffer-cursor
+            (orra::application-active-text-buffer application)))
+        "Selection commands should move the live cursor to the selected form.")
+    (invoke-command application 'select-parent-code-form (object-id block))
+    (is (= 0
+           (text-buffer-cursor
+            (orra::application-active-text-buffer application)))
+        "Ascending the structural selection should retarget the live cursor.")
+    (stop-editing application)))
+
+(deftest structural-code-edit-keeps-active-buffer-in-sync ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list (+ 1 2) (* 3 4))")))
+    (invoke-command application 'select-child-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (begin-editing-focused-model application)
+    (invoke-command application 'wrap-code-form (object-id block))
+    (is (editing-active-p application)
+        "Structural rewrites should keep code-block edit mode active.")
+    (is (string= "(LIST (PROGN (+ 1 2)) (* 3 4))"
+                 (code-block-source block))
+        "Wrapping while editing should still rewrite the selected form.")
+    (is (string= (code-block-source block)
+                 (text-buffer-content
+                  (orra::application-active-text-buffer application)))
+        "The active text buffer should stay synchronized with structural rewrites.")
+    (is (= 6
+           (text-buffer-cursor
+            (orra::application-active-text-buffer application)))
+        "The live cursor should remain anchored to the rewritten selected form.")
+    (undo-active-buffer-edit application)
+    (is (string= "(list (+ 1 2) (* 3 4))"
+                 (code-block-source block))
+        "Undo in the active edit session should reverse the structural rewrite.")
+    (stop-editing application)))
+
 (deftest deleting-selected-code-form-rewrites-source ()
   (let* ((application (make-application :backend (make-null-backend)))
          (block (invoke-command application
