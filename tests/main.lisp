@@ -37,6 +37,12 @@
                        (return found)))))))
     (visit cell)))
 
+(defun find-styled-text-operation (backend text)
+  (find-if (lambda (operation)
+             (and (eq (first operation) :styled-text)
+                  (string= (fourth operation) text)))
+           (orra::backend-frame-operations backend)))
+
 (defun find-first-node-of-type (root type)
   (labels ((visit (node)
              (or (when (typep node type)
@@ -163,6 +169,40 @@
               (collect-text-cells (application-root-cell application))
               :test #'string=)
         "Code blocks should render a syntax summary for backend highlighting work.")))
+
+(deftest code-block-source-cell-carries-syntax-style-spans ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list :hello \"world\" 42)")))
+    (render-application application)
+    (let* ((cell (find-text-cell-for-model (application-root-cell application)
+                                           (object-id block)))
+           (spans (cell-style-spans cell))
+           (kinds (mapcar (lambda (span) (getf span :kind)) spans)))
+      (is (eq :editable-content (orra::cell-role cell))
+          "The code source cell should stay editable.")
+      (is (equal '(:paren :symbol :keyword :string :number :paren) kinds)
+          "Code source cells should carry syntax style spans for highlighting.")
+      (is (= 6 (getf (find :keyword spans
+                           :key (lambda (span) (getf span :kind)))
+                     :start))
+          "Syntax style spans should preserve source offsets."))))
+
+(deftest null-backend-records-styled-code-source ()
+  (let* ((backend (make-null-backend :stream (make-string-output-stream)))
+         (application (make-application :backend backend)))
+    (invoke-command application
+                    'append-code-block
+                    "(list :hello \"world\" 42)")
+    (render-application application)
+    (let* ((operation
+            (find-styled-text-operation backend "(list :hello \"world\" 42)"))
+           (spans (fifth operation)))
+      (is operation
+          "Rendering a styled code source cell should record a styled text operation.")
+      (is (find :string spans :key (lambda (span) (getf span :kind)))
+          "Styled text operations should include visible syntax spans."))))
 
 (deftest inspector-describes-code-block-syntax ()
   (let* ((application (make-application :backend (make-null-backend)))

@@ -46,7 +46,11 @@
    (role
     :initarg :role
     :accessor cell-role
-    :initform :content)))
+    :initform :content)
+   (style-spans
+    :initarg :style-spans
+    :accessor cell-style-spans
+    :initform nil)))
 
 (defun make-container-cell (&key registry model (label "") (orientation :vertical))
   (%register-if-present
@@ -58,7 +62,7 @@
                   :label label
                   :orientation orientation)))
 
-(defun make-text-cell (&key registry model (text "") (role :content))
+(defun make-text-cell (&key registry model (text "") (role :content) style-spans)
   (%register-if-present
    registry
    (make-instance 'text-cell
@@ -67,7 +71,8 @@
                   :model model
                   :label text
                   :text text
-                  :role role)))
+                  :role role
+                  :style-spans style-spans)))
 
 (defmethod append-child ((parent cell) (child cell))
   (setf (slot-value parent 'children)
@@ -145,7 +150,8 @@
                    :registry registry
                    :model node
                    :label (format nil "Code [~A]" (code-block-language node))))
-            (info (code-block-parse-info node)))
+            (info (code-block-parse-info node))
+            (syntax-tokens (code-block-syntax-tokens node)))
        (append-heading-cell cell
                             registry
                             node
@@ -155,12 +161,13 @@
                       :registry registry
                       :model node
                       :text (code-block-source node)
-                      :role :editable-content))
+                      :role :editable-content
+                      :style-spans syntax-tokens))
        (append-child cell
                      (make-text-cell
                       :registry registry
                       :model node
-                      :text (code-block-syntax-summary-line node)
+                      :text (code-block-syntax-summary-line node syntax-tokens)
                       :role :metadata))
        (append-child cell
                      (make-text-cell

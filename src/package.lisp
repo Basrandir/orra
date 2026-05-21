@@ -19,6 +19,7 @@
    #:cell-bounds
    #:cell-children
    #:cell-model
+   #:cell-style-spans
    #:children-of
    #:code-block
    #:code-block-language
