@@ -137,6 +137,46 @@
     (is (integerp (or (getf info :offset) 0))
         "Parse errors should report an offset when available.")))
 
+(deftest common-lisp-source-syntax-tokenizes-visible-forms ()
+  (let* ((source (format nil "; greeting~%(list :hello \"world\" 42)"))
+         (tokens (common-lisp-source-syntax-tokens source))
+         (kinds (mapcar (lambda (token) (getf token :kind)) tokens)))
+    (is (equal '(:comment :paren :symbol :keyword :string :number :paren)
+               kinds)
+        "Common Lisp syntax tokenization should classify visible source forms.")
+    (is (string= "; greeting" (getf (first tokens) :text))
+        "Syntax tokens should retain the original source text.")
+    (is (= 24
+           (getf (find :string tokens
+                       :key (lambda (token) (getf token :kind)))
+                 :start))
+        "Syntax tokens should retain source offsets for later highlighting.")))
+
+(deftest code-block-syntax-summary-renders ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                (format nil "; greeting~%(list :hello \"world\" 42)"))))
+    (declare (ignore block))
+    (render-application application)
+    (is (find "Syntax  |  comment 1  |  string 1  |  keyword 1  |  number 1  |  symbol 1  |  paren 2"
+              (collect-text-cells (application-root-cell application))
+              :test #'string=)
+        "Code blocks should render a syntax summary for backend highlighting work.")))
+
+(deftest inspector-describes-code-block-syntax ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                (format nil "; greeting~%(list :hello \"world\" 42)"))))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (render-application application)
+    (is (find "syntax: Syntax  |  comment 1  |  string 1  |  keyword 1  |  number 1  |  symbol 1  |  paren 2"
+              (collect-text-cells (application-root-cell application))
+              :test #'string=)
+        "Inspector should expose syntax metadata for focused code blocks.")))
+
 (deftest property-inheritance ()
   (let* ((registry (make-object-registry))
          (prototype (make-paragraph :text "proto" :registry registry))

@@ -76,7 +76,7 @@
                 (decf depth)
                 (incf position 2)
                 (when (zerop depth)
-                  (return position)))
+                  (return-from source-block-comment-end position)))
                (t
                 (incf position))))
     end))
@@ -107,7 +107,7 @@
                ((char= character #\\)
                 (incf position 2))
                ((char= character #\")
-                (return (1+ position)))
+                (return-from source-string-end (1+ position)))
                (t
                 (incf position))))
     end))
@@ -120,7 +120,7 @@
                ((char= character #\\)
                 (incf position 2))
                ((char= character #\|)
-                (return (1+ position)))
+                (return-from source-symbol-escape-end (1+ position)))
                (t
                 (incf position))))
     end))
@@ -157,6 +157,110 @@
          1))
     (t
      0)))
+
+(defparameter +common-lisp-syntax-summary-order+
+  '(:comment :string :keyword :number :symbol :paren :quote))
+
+(defun make-source-syntax-token (kind source start end)
+  (list :kind kind
+        :start start
+        :end end
+        :text (subseq source start end)))
+
+(defun common-lisp-number-token-p (text)
+  (handler-case
+      (let ((*read-eval* nil))
+        (multiple-value-bind (value end)
+            (read-from-string text nil :syntax-token-eof)
+          (and (not (eq value :syntax-token-eof))
+               (= end (length text))
+               (numberp value))))
+    (error ()
+      nil)))
+
+(defun common-lisp-atom-syntax-kind (text)
+  (cond
+    ((and (plusp (length text))
+          (char= (char text 0) #\:))
+     :keyword)
+    ((common-lisp-number-token-p text)
+     :number)
+    (t
+     :symbol)))
+
+(defun common-lisp-source-syntax-tokens (source)
+  (let ((position 0)
+        (end (length source))
+        (tokens nil))
+    (labels ((emit (kind start token-end)
+               (push (make-source-syntax-token kind source start token-end)
+                     tokens)
+               (setf position token-end)))
+      (loop while (< position end)
+            for character = (char source position)
+            do (cond
+                 ((whitespace-character-p character)
+                  (incf position))
+                 ((char= character #\;)
+                  (emit :comment
+                        position
+                        (source-comment-end source position end)))
+                 ((and (< (1+ position) end)
+                       (char= character #\#)
+                       (char= (char source (1+ position)) #\|))
+                  (emit :comment
+                        position
+                        (source-block-comment-end source position end)))
+                 ((find character '(#\( #\)))
+                  (emit :paren position (1+ position)))
+                 ((char= character #\")
+                  (emit :string
+                        position
+                        (source-string-end source position end)))
+                 ((plusp (source-prefix-length source position end))
+                  (emit :quote
+                        position
+                        (+ position
+                           (source-prefix-length source position end))))
+                 (t
+                  (let ((token-end (source-atom-end source position end)))
+                    (if (> token-end position)
+                        (emit (common-lisp-atom-syntax-kind
+                               (subseq source position token-end))
+                              position
+                              token-end)
+                        (incf position)))))))
+    (nreverse tokens)))
+
+(defun syntax-kind-label (kind)
+  (string-downcase (symbol-name kind)))
+
+(defun common-lisp-syntax-summary-line (tokens)
+  (let ((parts nil))
+    (dolist (kind +common-lisp-syntax-summary-order+)
+      (let ((count (count kind
+                          tokens
+                          :key (lambda (token) (getf token :kind)))))
+        (when (plusp count)
+          (push (format nil "~A ~D"
+                        (syntax-kind-label kind)
+                        count)
+                parts))))
+    (if parts
+        (format nil "Syntax  |  ~{~A~^  |  ~}" (nreverse parts))
+        "Syntax  |  no tokens")))
+
+(defun code-block-syntax-tokens (block)
+  (if (code-block-common-lisp-p block)
+      (common-lisp-source-syntax-tokens (code-block-source block))
+      nil))
+
+(defun code-block-syntax-summary-line (block &optional tokens)
+  (if (code-block-common-lisp-p block)
+      (common-lisp-syntax-summary-line
+       (or tokens
+           (code-block-syntax-tokens block)))
+      (format nil "Syntax skipped for ~A" (code-block-language block))))
 
 (defun source-form-span (source start end)
   (let ((position (skip-source-whitespace-and-comments source start end)))

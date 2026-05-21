@@ -115,6 +115,8 @@
                               (length (code-block-source model)))
                       (format nil "source: ~A"
                               (preview-string (code-block-source model)))
+                      (format nil "syntax: ~A"
+                              (code-block-syntax-summary-line model))
                       (format nil "parse: ~A"
                               (code-block-parse-status-line model))
                       (format nil "selection: ~A"

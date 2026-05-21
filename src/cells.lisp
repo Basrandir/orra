@@ -160,6 +160,12 @@
                      (make-text-cell
                       :registry registry
                       :model node
+                      :text (code-block-syntax-summary-line node)
+                      :role :metadata))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
                       :text (code-block-parse-status-line node info)
                       :role :metadata))
        (append-child cell

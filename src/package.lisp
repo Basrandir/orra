@@ -31,10 +31,13 @@
    #:code-block-source
    #:code-block-structure-lines
    #:code-block-structure-visible-p
+   #:code-block-syntax-summary-line
+   #:code-block-syntax-tokens
    #:command
    #:command-documentation
    #:command-function
    #:command-name
+   #:common-lisp-source-syntax-tokens
    #:container-cell
    #:define-command
    #:evaluate-code-block
