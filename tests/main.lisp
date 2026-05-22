@@ -209,6 +209,55 @@
                  :start))
         "Syntax tokens should retain source offsets for later highlighting.")))
 
+(deftest common-lisp-source-map-maps-nested-forms ()
+  (let* ((source "(list (+ 1 2) (* 3 4))")
+         (source-map (common-lisp-source-map source))
+         (nested-list (find '(0 1) source-map
+                            :test #'equal
+                            :key (lambda (entry) (getf entry :path))))
+         (nested-symbol (find '(0 1 0) source-map
+                              :test #'equal
+                              :key (lambda (entry) (getf entry :path)))))
+    (is (string= "(+ 1 2)" (getf nested-list :text))
+        "Source maps should retain text for nested forms.")
+    (is (equal '(6 13)
+               (list (getf nested-list :start)
+                     (getf nested-list :end)))
+        "Source maps should retain source spans for nested forms.")
+    (is (equal '(+ 1 2) (getf nested-list :form))
+        "Source maps should retain the parsed form at each path.")
+    (is (string= "+" (getf nested-symbol :text))
+        "Source maps should include atomic child forms.")))
+
+(deftest source-map-entry-at-offset-returns-deepest-form ()
+  (let* ((source "(list (+ 1 2) (* 3 4))")
+         (source-map (common-lisp-source-map source)))
+    (is (equal '(0 1 0)
+               (getf (source-map-entry-at-offset source-map 7) :path))
+        "Offset lookup should prefer the deepest containing source-mapped form.")
+    (is (equal '(0 1 1)
+               (getf (source-map-entry-at-offset source-map 9) :path))
+        "Offset lookup should return atom-level mappings inside nested lists.")
+    (is (equal '(0 1)
+               (getf (source-map-entry-at-offset source-map 6) :path))
+        "Offset lookup should return the nested list at its opening delimiter.")))
+
+(deftest code-block-source-map-respects-language-and-parse-state ()
+  (let ((block (make-code-block :source "(list :hello)")))
+    (is (equal '(0 1)
+               (getf (source-map-entry-at-offset
+                      (code-block-source-map block)
+                      6)
+                     :path))
+        "Code blocks should expose Common Lisp source mappings.")
+    (setf (code-block-source block) "(list :hello")
+    (is (null (code-block-source-map block))
+        "Malformed code blocks should not expose stale source mappings.")
+    (setf (code-block-source block) "(list :hello)")
+    (setf (code-block-language block) :text)
+    (is (null (code-block-source-map block))
+        "Unsupported code-block languages should not expose source mappings.")))
+
 (deftest code-block-syntax-summary-renders ()
   (let* ((application (make-application :backend (make-null-backend)))
          (block (invoke-command application

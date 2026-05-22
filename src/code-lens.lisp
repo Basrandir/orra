@@ -296,23 +296,33 @@
          (return nil))
        (setf position (second child-span))))))
 
+(defun source-list-core-start (source span)
+  (destructuring-bind (start end) span
+    (let ((core-start (+ start (source-prefix-length source start end))))
+      (and (< core-start end)
+           (char= (char source core-start) #\()
+           core-start))))
+
 (defun source-child-form-spans (source span)
   (destructuring-bind (start end) span
-    (let ((position (1+ start))
-          (child-spans nil))
-      (loop
-       (setf position
-             (skip-source-whitespace-and-comments
-              source
-              position
-              (1- end)))
-       (when (>= position (1- end))
-         (return (nreverse child-spans)))
-       (let ((child-span (source-form-span source position (1- end))))
-         (unless child-span
-           (return (nreverse child-spans)))
-         (push child-span child-spans)
-         (setf position (second child-span)))))))
+    (declare (ignore start))
+    (let ((list-start (source-list-core-start source span)))
+      (when list-start
+        (let ((position (1+ list-start))
+              (child-spans nil))
+          (loop
+           (setf position
+                 (skip-source-whitespace-and-comments
+                  source
+                  position
+                  (1- end)))
+           (when (>= position (1- end))
+             (return (nreverse child-spans)))
+           (let ((child-span (source-form-span source position (1- end))))
+             (unless child-span
+               (return (nreverse child-spans)))
+             (push child-span child-spans)
+             (setf position (second child-span)))))))))
 
 (defun source-top-level-form-spans (source)
   (let ((position 0)
@@ -356,6 +366,75 @@
                           (child-path (walk children path)))
                      (or child-path path))))))
       (walk (source-top-level-form-spans source) nil))))
+
+(defun make-source-map-entry (source path span form)
+  (destructuring-bind (start end) span
+    (list :path path
+          :start start
+          :end end
+          :text (subseq source start end)
+          :form form
+          :summary (simple-form-summary form))))
+
+(defun source-map-entries-for-form (source path span form)
+  (let ((entry (make-source-map-entry source path span form)))
+    (if (consp form)
+        (append
+         (list entry)
+         (loop for child in (code-form-child-items form)
+               for child-span in (source-child-form-spans source span)
+               for index from 0
+               append (source-map-entries-for-form
+                       source
+                       (append path (list index))
+                       child-span
+                       child)))
+        (list entry))))
+
+(defun common-lisp-source-map (source &optional info)
+  (let ((info (or info (parse-common-lisp-source source))))
+    (unless (getf info :error)
+      (loop for form in (getf info :forms)
+            for span in (source-top-level-form-spans source)
+            for index from 0
+            append (source-map-entries-for-form
+                    source
+                    (list index)
+                    span
+                    form)))))
+
+(defun code-block-source-map (block &optional info)
+  (let ((info (or info (code-block-parse-info block))))
+    (when (and (code-block-common-lisp-p block)
+               (not (getf info :error))
+               (not (getf info :unsupported-language)))
+      (common-lisp-source-map (code-block-source block) info))))
+
+(defun source-map-entry-contains-offset-p (entry offset)
+  (and (<= (getf entry :start) offset)
+       (<= offset (getf entry :end))))
+
+(defun source-map-entry-more-specific-p (entry other-entry)
+  (or (null other-entry)
+      (> (length (getf entry :path))
+         (length (getf other-entry :path)))
+      (and (= (length (getf entry :path))
+              (length (getf other-entry :path)))
+           (< (- (getf entry :end)
+                 (getf entry :start))
+              (- (getf other-entry :end)
+                 (getf other-entry :start))))))
+
+(defun source-map-entry-at-offset (source-map offset)
+  (let ((bounded-offset (max 0 (or offset 0)))
+        (best-entry nil))
+    (dolist (entry source-map best-entry)
+      (when (and (source-map-entry-contains-offset-p entry bounded-offset)
+                 (source-map-entry-more-specific-p entry best-entry))
+        (setf best-entry entry)))))
+
+(defun code-block-source-map-entry-at-offset (block offset &optional info)
+  (source-map-entry-at-offset (code-block-source-map block info) offset))
 
 (defun serialize-common-lisp-forms (forms)
   (with-output-to-string (stream)

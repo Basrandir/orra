@@ -30,6 +30,8 @@
    #:code-block-selection-status-line
    #:code-block-result
    #:code-block-source
+   #:code-block-source-map
+   #:code-block-source-map-entry-at-offset
    #:code-block-structure-lines
    #:code-block-structure-visible-p
    #:code-block-syntax-summary-line
@@ -38,6 +40,7 @@
    #:command-documentation
    #:command-function
    #:command-name
+   #:common-lisp-source-map
    #:common-lisp-source-syntax-tokens
    #:container-cell
    #:define-command
@@ -123,6 +126,7 @@
    #:start-application
    #:start-demo
    #:stop-editing
+   #:source-map-entry-at-offset
    #:splice-code-form
    #:select-child-code-block-form
    #:select-next-code-block-form
