@@ -133,17 +133,24 @@
    #:text-cell
    #:text-buffer
    #:text-buffer-line-count
+   #:text-buffer-markers
    #:text-buffer-content
    #:text-buffer-cursor
+   #:text-marker
+   #:text-marker-gravity
+   #:text-marker-position
    #:buffer-cursor-line-column
    #:buffer-index-for-line-column
    #:delete-buffer-backward
    #:delete-buffer-forward
+   #:delete-text-marker
    #:insert-buffer-text
+   #:make-text-marker
    #:move-buffer-cursor-left
    #:move-buffer-cursor-right
    #:move-buffer-cursor-to
    #:move-buffer-cursor-up
+   #:replace-buffer-range
    #:redo-active-buffer-edit
    #:redo-buffer-edit
    #:undo-active-buffer-edit

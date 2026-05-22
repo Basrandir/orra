@@ -17,7 +17,28 @@
     :initform nil)
    (redo-stack
     :accessor text-buffer-redo-stack
+    :initform nil)
+   (markers
+    :accessor text-buffer-markers
     :initform nil)))
+
+(defclass text-marker ()
+  ((position
+    :initarg :position
+    :accessor text-marker-position
+    :initform 0)
+   (gravity
+    :initarg :gravity
+    :accessor text-marker-gravity
+    :initform :right)))
+
+(defun valid-text-marker-gravity-p (gravity)
+  (member gravity '(:left :right)))
+
+(defun clamp-text-position (content position)
+  (max 0
+       (min (or position 0)
+            (length content))))
 
 (defmethod print-object ((buffer text-buffer) stream)
   (print-unreadable-object (buffer stream :type t :identity nil)
@@ -25,22 +46,73 @@
             (object-id buffer)
             (text-buffer-cursor buffer))))
 
+(defmethod print-object ((marker text-marker) stream)
+  (print-unreadable-object (marker stream :type t :identity nil)
+    (format stream "~D ~A"
+            (text-marker-position marker)
+            (text-marker-gravity marker))))
+
 (defun %clamp-buffer-cursor (buffer)
   (setf (text-buffer-cursor buffer)
-        (max 0
-             (min (text-buffer-cursor buffer)
-                  (length (text-buffer-content buffer)))))
+        (clamp-text-position (text-buffer-content buffer)
+                             (text-buffer-cursor buffer)))
   buffer)
 
-(defun %buffer-snapshot (buffer)
+(defun %clamp-text-marker (buffer marker)
+  (setf (text-marker-position marker)
+        (clamp-text-position (text-buffer-content buffer)
+                             (text-marker-position marker)))
+  marker)
+
+(defun %clamp-buffer-markers (buffer)
+  (dolist (marker (text-buffer-markers buffer) buffer)
+    (%clamp-text-marker buffer marker)))
+
+(defun make-text-marker (buffer &key position (gravity :right))
+  (unless (valid-text-marker-gravity-p gravity)
+    (error "Invalid text marker gravity ~S." gravity))
+  (let ((marker (make-instance 'text-marker
+                               :position (clamp-text-position
+                                          (text-buffer-content buffer)
+                                          (or position
+                                              (text-buffer-cursor buffer)))
+                               :gravity gravity)))
+    (push marker (text-buffer-markers buffer))
+    marker))
+
+(defun delete-text-marker (buffer marker)
+  (setf (text-buffer-markers buffer)
+        (remove marker (text-buffer-markers buffer)))
+  marker)
+
+(defun %buffer-marker-snapshot (buffer)
+  (mapcar (lambda (marker)
+            (list marker (text-marker-position marker)))
+          (text-buffer-markers buffer)))
+
+(defun %buffer-snapshot (buffer &key (include-markers t))
   (list (text-buffer-content buffer)
-        (text-buffer-cursor buffer)))
+        (text-buffer-cursor buffer)
+        (and include-markers
+             (%buffer-marker-snapshot buffer))))
+
+(defun %restore-buffer-marker-snapshot (buffer marker-snapshot)
+  (dolist (entry marker-snapshot)
+    (destructuring-bind (marker position) entry
+      (when (find marker (text-buffer-markers buffer))
+        (setf (text-marker-position marker) position))))
+  (%clamp-buffer-markers buffer))
 
 (defun %restore-buffer-snapshot (buffer snapshot)
-  (destructuring-bind (content cursor) snapshot
+  (let ((content (first snapshot))
+        (cursor (second snapshot))
+        (marker-snapshot (third snapshot)))
     (setf (text-buffer-content buffer) content)
-    (setf (text-buffer-cursor buffer) cursor))
-  (%clamp-buffer-cursor buffer))
+    (setf (text-buffer-cursor buffer) cursor)
+    (when marker-snapshot
+      (%restore-buffer-marker-snapshot buffer marker-snapshot)))
+  (%clamp-buffer-cursor buffer)
+  (%clamp-buffer-markers buffer))
 
 (defun %record-buffer-change (buffer)
   (push (%buffer-snapshot buffer) (text-buffer-undo-stack buffer))
@@ -130,42 +202,93 @@
                                :cursor (or cursor (length content)))))
     (%clamp-buffer-cursor buffer)))
 
-(defun insert-buffer-text (buffer text)
+(defun adjusted-position-for-replacement (position start end replacement-length gravity)
+  (let ((delta (- replacement-length (- end start))))
+    (cond
+      ((< position start)
+       position)
+      ((> position end)
+       (+ position delta))
+      ((= start end)
+       (if (eq gravity :right)
+           (+ start replacement-length)
+           start))
+      ((= position end)
+       (+ start replacement-length))
+      ((eq gravity :right)
+       (+ start replacement-length))
+      (t
+       start))))
+
+(defun adjust-buffer-markers-for-replacement (buffer start end replacement-length)
+  (dolist (marker (text-buffer-markers buffer) buffer)
+    (setf (text-marker-position marker)
+          (adjusted-position-for-replacement
+           (text-marker-position marker)
+           start
+           end
+           replacement-length
+           (text-marker-gravity marker))))
+  (%clamp-buffer-markers buffer))
+
+(defun replace-buffer-range (buffer start end replacement &key cursor)
   (let* ((content (text-buffer-content buffer))
-         (cursor (text-buffer-cursor buffer))
-         (text (string text)))
-    (when (plusp (length text))
+         (range-start (clamp-text-position content start))
+         (range-end (clamp-text-position content end))
+         (start (min range-start range-end))
+         (end (max range-start range-end))
+         (replacement (string replacement)))
+    (unless (and (= start end)
+                 (zerop (length replacement)))
       (%record-buffer-change buffer)
       (setf (text-buffer-content buffer)
             (concatenate 'string
-                         (subseq content 0 cursor)
-                         text
-                         (subseq content cursor)))
-      (incf (text-buffer-cursor buffer) (length text)))
-    (%clamp-buffer-cursor buffer)))
+                         (subseq content 0 start)
+                         replacement
+                         (subseq content end)))
+      (setf (text-buffer-cursor buffer)
+            (if cursor
+                cursor
+                (adjusted-position-for-replacement
+                 (text-buffer-cursor buffer)
+                 start
+                 end
+                 (length replacement)
+                 :right)))
+      (adjust-buffer-markers-for-replacement buffer
+                                             start
+                                             end
+                                             (length replacement))))
+  (%clamp-buffer-cursor buffer))
+
+(defun insert-buffer-text (buffer text)
+  (let ((cursor (text-buffer-cursor buffer)))
+    (replace-buffer-range buffer
+                          cursor
+                          cursor
+                          text
+                          :cursor (+ cursor (length (string text))))))
 
 (defun delete-buffer-backward (buffer)
   (let ((cursor (text-buffer-cursor buffer)))
     (when (plusp cursor)
-      (let ((content (text-buffer-content buffer)))
-        (%record-buffer-change buffer)
-        (setf (text-buffer-content buffer)
-              (concatenate 'string
-                           (subseq content 0 (1- cursor))
-                           (subseq content cursor)))
-        (decf (text-buffer-cursor buffer)))))
-  (%clamp-buffer-cursor buffer))
+      (replace-buffer-range buffer
+                            (1- cursor)
+                            cursor
+                            ""
+                            :cursor (1- cursor))))
+  buffer)
 
 (defun delete-buffer-forward (buffer)
   (let* ((content (text-buffer-content buffer))
          (cursor (text-buffer-cursor buffer)))
     (when (< cursor (length content))
-      (%record-buffer-change buffer)
-      (setf (text-buffer-content buffer)
-            (concatenate 'string
-                         (subseq content 0 cursor)
-                         (subseq content (1+ cursor))))))
-  (%clamp-buffer-cursor buffer))
+      (replace-buffer-range buffer
+                            cursor
+                            (1+ cursor)
+                            ""
+                            :cursor cursor)))
+  buffer)
 
 (defun move-buffer-cursor-left (buffer)
   (decf (text-buffer-cursor buffer))
@@ -178,14 +301,16 @@
 (defun replace-buffer-content (buffer content &key cursor)
   (let* ((content (string content))
          (new-cursor (if cursor
-                         (max 0 (min cursor (length content)))
+                         (clamp-text-position content cursor)
                          (length content))))
     (unless (and (string= content (text-buffer-content buffer))
                  (= new-cursor (text-buffer-cursor buffer)))
-      (%record-buffer-change buffer)
-      (setf (text-buffer-content buffer) content)
-      (setf (text-buffer-cursor buffer) new-cursor)))
-  (%clamp-buffer-cursor buffer))
+      (replace-buffer-range buffer
+                            0
+                            (length (text-buffer-content buffer))
+                            content
+                            :cursor new-cursor)))
+  buffer)
 
 (defun undo-buffer-edit (buffer)
   (when (text-buffer-undo-stack buffer)
@@ -201,11 +326,19 @@
                               (pop (text-buffer-redo-stack buffer))))
   buffer)
 
+(defun %buffer-state-snapshot (snapshot)
+  (list (first snapshot)
+        (second snapshot)))
+
 (defun text-buffer-state (buffer)
   (list :content (text-buffer-content buffer)
         :cursor (text-buffer-cursor buffer)
-        :undo-stack (copy-tree (text-buffer-undo-stack buffer))
-        :redo-stack (copy-tree (text-buffer-redo-stack buffer))))
+        :undo-stack (mapcar (lambda (snapshot)
+                              (%buffer-state-snapshot snapshot))
+                            (text-buffer-undo-stack buffer))
+        :redo-stack (mapcar (lambda (snapshot)
+                              (%buffer-state-snapshot snapshot))
+                            (text-buffer-redo-stack buffer))))
 
 (defun make-text-buffer-from-state (state)
   (let ((buffer (make-text-buffer
