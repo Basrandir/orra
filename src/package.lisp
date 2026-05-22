@@ -23,6 +23,7 @@
    #:children-of
    #:code-block
    #:code-block-language
+   #:code-block-incremental-parse-info
    #:code-block-parse-info
    #:code-block-parse-status-line
    #:code-block-selected-form-index
@@ -41,6 +42,7 @@
    #:command-function
    #:command-name
    #:common-lisp-source-map
+   #:common-lisp-incremental-parse-info
    #:common-lisp-source-syntax-tokens
    #:container-cell
    #:define-command

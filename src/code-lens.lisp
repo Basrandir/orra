@@ -14,24 +14,7 @@
                  :test #'string=))))
 
 (defun parse-common-lisp-source (source)
-  (let ((offset 0)
-        (forms nil))
-    (handler-case
-        (with-input-from-string (stream source)
-          (loop for form = (progn
-                             (setf offset
-                                   (or (ignore-errors (file-position stream))
-                                       offset))
-                             (read stream nil :eof))
-		until (eq form :eof)
-		do (push form forms))
-          (list :forms (nreverse forms)
-                :error nil
-                :offset nil))
-      (error (condition)
-        (list :forms (nreverse forms)
-              :error (princ-to-string condition)
-              :offset offset)))))
+  (parse-common-lisp-source-region source 0 (length source)))
 
 (defun code-block-parse-info (block)
   (if (code-block-common-lisp-p block)
@@ -338,6 +321,253 @@
        (push span spans)
        (setf position (second span))))))
 
+(defun make-common-lisp-source-form-record (source form span)
+  (destructuring-bind (start end) span
+    (list :form form
+          :span (list start end)
+          :start start
+          :end end
+          :text (subseq source start end))))
+
+(defun parse-common-lisp-source-region (source start end)
+  (let* ((source-length (length source))
+         (start (clamp-text-position source start))
+         (end (clamp-text-position source end))
+         (region-start (min start end))
+         (region-end (max start end))
+         (region (subseq source region-start region-end))
+         (offset region-start)
+         (forms nil)
+         (spans nil)
+         (records nil))
+    (handler-case
+        (with-input-from-string (stream region)
+          (loop for form = (progn
+                             (setf offset
+                                   (+ region-start
+                                      (or (ignore-errors
+                                            (file-position stream))
+                                          0)))
+                             (read stream nil :eof))
+                until (eq form :eof)
+                do (let* ((read-end (+ region-start
+                                       (or (ignore-errors
+                                             (file-position stream))
+                                           (- region-end region-start))))
+                          (span (or (source-form-span source
+                                                      offset
+                                                      region-end)
+                                    (list offset
+                                          (min source-length read-end))))
+                          (record (make-common-lisp-source-form-record
+                                   source
+                                   form
+                                   span)))
+                     (push form forms)
+                     (push (getf record :span) spans)
+                     (push record records)))
+          (list :forms (nreverse forms)
+                :spans (nreverse spans)
+                :records (nreverse records)
+                :error nil
+                :offset nil))
+      (error (condition)
+        (list :forms (nreverse forms)
+              :spans (nreverse spans)
+              :records (nreverse records)
+              :error (princ-to-string condition)
+              :offset offset)))))
+
+(defun common-lisp-parse-info-records (source info)
+  (or (copy-list (getf info :records))
+      (loop for form in (getf info :forms)
+            for span in (or (getf info :spans)
+                            (source-top-level-form-spans source))
+            collect (make-common-lisp-source-form-record
+                     source
+                     form
+                     span))))
+
+(defun source-ranges-intersect-p (first-start first-end second-start second-end)
+  (and (< first-start second-end)
+       (< second-start first-end)))
+
+(defun source-span-touches-position-p (span position)
+  (and (< (first span) position)
+       (< position (second span))))
+
+(defun source-span-dirty-for-edit-p (span start end)
+  (if (= start end)
+      (source-span-touches-position-p span start)
+      (source-ranges-intersect-p (first span)
+                                 (second span)
+                                 start
+                                 end)))
+
+(defun source-record-dirty-for-edit-p (record start end)
+  (source-span-dirty-for-edit-p (getf record :span) start end))
+
+(defun source-dirty-span-range (spans fallback-start fallback-end)
+  (if spans
+      (list (reduce #'min spans :key #'first)
+            (reduce #'max spans :key #'second))
+      (list fallback-start fallback-end)))
+
+(defun shift-common-lisp-source-form-record (source record delta)
+  (make-common-lisp-source-form-record
+   source
+   (getf record :form)
+   (list (+ (getf record :start) delta)
+         (+ (getf record :end) delta))))
+
+(defun rebase-common-lisp-source-form-record (source record)
+  (make-common-lisp-source-form-record
+   source
+   (getf record :form)
+   (getf record :span)))
+
+(defun common-lisp-parse-info-from-records
+    (records &key error offset incremental-p dirty-range reused-prefix-count
+               reused-suffix-count dirty-form-count fallback-reason)
+  (let ((info (list :forms (mapcar (lambda (record)
+                                     (getf record :form))
+                                   records)
+                    :spans (mapcar (lambda (record)
+                                     (getf record :span))
+                                   records)
+                    :records records
+                    :error error
+                    :offset offset
+                    :incremental-p incremental-p
+                    :dirty-range dirty-range
+                    :reused-prefix-count (or reused-prefix-count 0)
+                    :reused-suffix-count (or reused-suffix-count 0)
+                    :dirty-form-count (or dirty-form-count 0))))
+    (when fallback-reason
+      (setf (getf info :fallback-reason) fallback-reason))
+    info))
+
+(defun mark-common-lisp-parse-info-fallback (info reason)
+  (setf (getf info :incremental-p) nil)
+  (setf (getf info :fallback-reason) reason)
+  (setf (getf info :reused-prefix-count) 0)
+  (setf (getf info :reused-suffix-count) 0)
+  (setf (getf info :dirty-form-count)
+        (length (getf info :forms)))
+  info)
+
+(defun common-lisp-incremental-parse-info
+    (old-source new-source edit-start edit-end
+     &key replacement previous-info)
+  (let* ((old-source (string old-source))
+         (new-source (string new-source))
+         (previous-info (or previous-info
+                            (parse-common-lisp-source old-source)))
+         (old-length (length old-source))
+         (start (clamp-text-position old-source edit-start))
+         (end (clamp-text-position old-source edit-end))
+         (edit-start (min start end))
+         (edit-end (max start end))
+         (replacement-length (if replacement
+                                 (length (string replacement))
+                                 (- (length new-source)
+                                    (- old-length (- edit-end edit-start)))))
+         (delta (- replacement-length (- edit-end edit-start))))
+    (if (getf previous-info :error)
+        (mark-common-lisp-parse-info-fallback
+         (parse-common-lisp-source new-source)
+         :previous-error)
+        (let* ((old-records
+                (common-lisp-parse-info-records old-source previous-info))
+               (dirty-old-records
+                (remove-if-not
+                 (lambda (record)
+                   (source-record-dirty-for-edit-p record
+                                                   edit-start
+                                                   edit-end))
+                 old-records))
+               (old-dirty-range
+                (source-dirty-span-range
+                 (mapcar (lambda (record)
+                           (getf record :span))
+                         dirty-old-records)
+                 edit-start
+                 edit-end))
+               (old-dirty-start (first old-dirty-range))
+               (old-dirty-end (second old-dirty-range))
+               (new-dirty-start old-dirty-start)
+               (new-dirty-end (max new-dirty-start
+                                   (+ old-dirty-end delta)))
+               (new-top-level-spans (source-top-level-form-spans new-source))
+               (dirty-new-spans
+                (remove-if-not
+                 (lambda (span)
+                   (source-ranges-intersect-p (first span)
+                                              (second span)
+                                              new-dirty-start
+                                              new-dirty-end))
+                 new-top-level-spans))
+               (new-dirty-range
+                (source-dirty-span-range dirty-new-spans
+                                         new-dirty-start
+                                         new-dirty-end))
+               (prefix-records
+                (loop for record in old-records
+                      while (<= (getf record :end) old-dirty-start)
+                      collect (rebase-common-lisp-source-form-record
+                               new-source
+                               record)))
+               (suffix-records
+                (loop for record in old-records
+                      when (>= (getf record :start) old-dirty-end)
+                      collect (shift-common-lisp-source-form-record
+                               new-source
+                               record
+                               delta)))
+               (dirty-info
+                (if (or dirty-new-spans
+                        dirty-old-records
+                        (plusp replacement-length))
+                    (parse-common-lisp-source-region new-source
+                                                     (first new-dirty-range)
+                                                     (second new-dirty-range))
+                    (common-lisp-parse-info-from-records nil)))
+               (dirty-records (getf dirty-info :records)))
+          (if (getf dirty-info :error)
+              (common-lisp-parse-info-from-records
+               prefix-records
+               :error (getf dirty-info :error)
+               :offset (getf dirty-info :offset)
+               :incremental-p t
+               :dirty-range new-dirty-range
+               :reused-prefix-count (length prefix-records))
+              (common-lisp-parse-info-from-records
+               (append prefix-records
+                       dirty-records
+                       suffix-records)
+               :incremental-p t
+               :dirty-range new-dirty-range
+               :reused-prefix-count (length prefix-records)
+               :reused-suffix-count (length suffix-records)
+               :dirty-form-count (length dirty-records)))))))
+
+(defun code-block-incremental-parse-info
+    (block new-source edit-start edit-end &key replacement previous-info)
+  (if (code-block-common-lisp-p block)
+      (common-lisp-incremental-parse-info
+       (code-block-source block)
+       new-source
+       edit-start
+       edit-end
+       :replacement replacement
+       :previous-info previous-info)
+      (list :forms nil
+            :spans nil
+            :records nil
+            :error nil
+            :offset nil
+            :unsupported-language (code-block-language block))))
+
 (defun source-span-for-path (source path)
   (labels ((walk (spans indices)
              (let ((span (nth (first indices) spans)))
@@ -394,14 +624,13 @@
 (defun common-lisp-source-map (source &optional info)
   (let ((info (or info (parse-common-lisp-source source))))
     (unless (getf info :error)
-      (loop for form in (getf info :forms)
-            for span in (source-top-level-form-spans source)
+      (loop for record in (common-lisp-parse-info-records source info)
             for index from 0
             append (source-map-entries-for-form
                     source
                     (list index)
-                    span
-                    form)))))
+                    (getf record :span)
+                    (getf record :form))))))
 
 (defun code-block-source-map (block &optional info)
   (let ((info (or info (code-block-parse-info block))))

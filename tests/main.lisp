@@ -194,6 +194,18 @@
     (is (integerp (or (getf info :offset) 0))
         "Parse errors should report an offset when available.")))
 
+(deftest common-lisp-source-parse-info-records-spans ()
+  (let* ((source (format nil "(list :hello)~%(+ 1 2)"))
+         (info (parse-common-lisp-source source))
+         (records (getf info :records)))
+    (is (equal '((0 13) (14 21))
+               (mapcar (lambda (record)
+                         (getf record :span))
+                       records))
+        "Parse records should keep absolute source spans for top-level forms.")
+    (is (string= "(+ 1 2)" (getf (second records) :text))
+        "Parse records should retain the source text for each form.")))
+
 (deftest common-lisp-source-syntax-tokenizes-visible-forms ()
   (let* ((source (format nil "; greeting~%(list :hello \"world\" 42)"))
          (tokens (common-lisp-source-syntax-tokens source))
@@ -257,6 +269,101 @@
     (setf (code-block-language block) :text)
     (is (null (code-block-source-map block))
         "Unsupported code-block languages should not expose source mappings.")))
+
+(deftest common-lisp-incremental-parse-reuses-clean-top-level-forms ()
+  (let* ((old-source (format nil "(list :a)~%(+ 1 2)~%(list :c)"))
+         (old-info (parse-common-lisp-source old-source))
+         (replacement "(* 10 2)")
+         (start (search "(+ 1 2)" old-source :test #'char=))
+         (end (+ start (length "(+ 1 2)")))
+         (new-source (concatenate 'string
+                                  (subseq old-source 0 start)
+                                  replacement
+                                  (subseq old-source end)))
+         (info (common-lisp-incremental-parse-info
+                old-source
+                new-source
+                start
+                end
+                :replacement replacement
+                :previous-info old-info))
+         (old-forms (getf old-info :forms))
+         (forms (getf info :forms)))
+    (is (null (getf info :error))
+        "Incremental parse should succeed when the edited form is valid.")
+    (is (equal `((list :a) (* 10 2) (list :c)) forms)
+        "Incremental parse should return the updated top-level forms.")
+    (is (eq (first forms) (first old-forms))
+        "Incremental parse should reuse unchanged prefix form objects.")
+    (is (eq (third forms) (third old-forms))
+        "Incremental parse should reuse unchanged suffix form objects.")
+    (is (= 1 (getf info :reused-prefix-count))
+        "Incremental parse should report reused prefix forms.")
+    (is (= 1 (getf info :reused-suffix-count))
+        "Incremental parse should report reused suffix forms.")
+    (is (= 1 (getf info :dirty-form-count))
+        "Incremental parse should report the reparsed dirty form count.")
+    (is (string= "(* 10 2)"
+                 (getf (find '(1) (common-lisp-source-map new-source info)
+                             :test #'equal
+                             :key (lambda (entry) (getf entry :path)))
+                       :text))
+        "Incremental parse records should feed source maps for changed forms.")))
+
+(deftest common-lisp-incremental-parse-inserts-top-level-form ()
+  (let* ((old-source (format nil "(list :a)~%(list :c)"))
+         (old-info (parse-common-lisp-source old-source))
+         (replacement (format nil "(list :b)~%"))
+         (start (search "(list :c)" old-source :test #'char=))
+         (new-source (concatenate 'string
+                                  (subseq old-source 0 start)
+                                  replacement
+                                  (subseq old-source start)))
+         (info (common-lisp-incremental-parse-info
+                old-source
+                new-source
+                start
+                start
+                :replacement replacement
+                :previous-info old-info))
+         (old-forms (getf old-info :forms))
+         (forms (getf info :forms)))
+    (is (equal '((list :a) (list :b) (list :c)) forms)
+        "Incremental parse should insert a new top-level form between reused forms.")
+    (is (eq (first forms) (first old-forms))
+        "Top-level insertion should preserve the prefix form object.")
+    (is (eq (third forms) (second old-forms))
+        "Top-level insertion should preserve and shift the suffix form object.")
+    (is (= 1 (getf info :reused-prefix-count))
+        "Top-level insertion should report reused prefix forms.")
+    (is (= 1 (getf info :reused-suffix-count))
+        "Top-level insertion should report reused suffix forms.")
+    (is (= 1 (getf info :dirty-form-count))
+        "Top-level insertion should report one dirty parsed form.")))
+
+(deftest common-lisp-incremental-parse-reports-dirty-errors ()
+  (let* ((old-source (format nil "(list :a)~%(list :c)"))
+         (old-info (parse-common-lisp-source old-source))
+         (replacement "(list :c")
+         (start (search "(list :c)" old-source :test #'char=))
+         (end (+ start (length "(list :c)")))
+         (new-source (concatenate 'string
+                                  (subseq old-source 0 start)
+                                  replacement
+                                  (subseq old-source end)))
+         (info (common-lisp-incremental-parse-info
+                old-source
+                new-source
+                start
+                end
+                :replacement replacement
+                :previous-info old-info)))
+    (is (getf info :error)
+        "Incremental parse should surface dirty-region parse errors.")
+    (is (equal '((list :a)) (getf info :forms))
+        "Incremental dirty errors should keep only the valid reused prefix forms.")
+    (is (null (common-lisp-source-map new-source info))
+        "Source maps should stay unavailable while the incremental parse has an error.")))
 
 (deftest code-block-syntax-summary-renders ()
   (let* ((application (make-application :backend (make-null-backend)))
