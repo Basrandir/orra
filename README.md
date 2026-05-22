@@ -1,6 +1,6 @@
 # Orra
 
-Lisp-first structural computing environment, inspired by Project Mage.
+Lisp-first structural computing environment experiments.
 
 Run:
 
@@ -23,3 +23,7 @@ guix shell -m manifest.scm -- \
        --eval '(asdf:load-asd #P"/home/bassam/src/orra/orra-tests.asd")' \
        --eval '(asdf:test-system :orra-tests)'
 ```
+
+# Inspiration
+
+Emacs, Project Mage, Glamorous Toolkit, Medley Interlisp
