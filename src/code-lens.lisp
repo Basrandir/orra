@@ -16,13 +16,35 @@
 (defun parse-common-lisp-source (source)
   (parse-common-lisp-source-region source 0 (length source)))
 
+(defun code-block-parse-cache-valid-p (block cache)
+  (and cache
+       (equal (getf cache :language) (code-block-language block))
+       (string= (getf cache :source "") (code-block-source block))))
+
+(defun cache-code-block-parse-info (block info)
+  (setf (code-block-parse-cache block)
+        (list :language (code-block-language block)
+              :source (code-block-source block)
+              :info info))
+  info)
+
+(defun code-block-cached-parse-info (block)
+  (let ((cache (code-block-parse-cache block)))
+    (and (code-block-parse-cache-valid-p block cache)
+         (getf cache :info))))
+
 (defun code-block-parse-info (block)
-  (if (code-block-common-lisp-p block)
-      (parse-common-lisp-source (code-block-source block))
-      (list :forms nil
-            :error nil
-            :offset nil
-            :unsupported-language (code-block-language block))))
+  (or (code-block-cached-parse-info block)
+      (cache-code-block-parse-info
+       block
+       (if (code-block-common-lisp-p block)
+           (parse-common-lisp-source (code-block-source block))
+           (list :forms nil
+                 :spans nil
+                 :records nil
+                 :error nil
+                 :offset nil
+                 :unsupported-language (code-block-language block))))))
 
 (defun code-block-structure-visible-p (block)
   (object-property block :show-structure :default nil :inherit nil))
@@ -567,6 +589,23 @@
             :error nil
             :offset nil
             :unsupported-language (code-block-language block))))
+
+(defun replace-code-block-source-incrementally
+    (block new-source edit-start edit-end &key replacement previous-info)
+  (let ((new-source (string new-source)))
+    (if (string= (code-block-source block) new-source)
+        block
+        (let ((info (code-block-incremental-parse-info
+                     block
+                     new-source
+                     edit-start
+                     edit-end
+                     :replacement replacement
+                     :previous-info (or previous-info
+                                        (code-block-parse-info block)))))
+          (replace-code-block-source block new-source)
+          (cache-code-block-parse-info block info)
+          block))))
 
 (defun source-span-for-path (source path)
   (labels ((walk (spans indices)

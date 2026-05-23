@@ -105,6 +105,7 @@
    #:rebuild-root-cell
    #:register-object
    #:replace-code-block-source
+   #:replace-code-block-source-incrementally
    #:registry-objects-list
    #:render
    #:render-application

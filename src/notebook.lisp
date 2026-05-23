@@ -74,8 +74,11 @@
   block)
 
 (defun replace-code-block-source (block source)
-  (setf (code-block-source block) source)
-  (invalidate-code-block-result block)
+  (let ((source (string source)))
+    (unless (string= (code-block-source block) source)
+      (setf (code-block-source block) source)
+      (setf (code-block-parse-cache block) nil)
+      (invalidate-code-block-result block)))
   block)
 
 (defclass code-block (node)
@@ -87,6 +90,9 @@
     :initarg :source
     :accessor code-block-source
     :initform "")
+   (parse-cache
+    :accessor code-block-parse-cache
+    :initform nil)
    (result
     :initarg :result
     :accessor code-block-result

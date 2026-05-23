@@ -375,14 +375,69 @@
          (text-buffer-cursor (application-active-text-buffer application))))))
   application)
 
-(defun sync-active-buffer-to-model (application)
+(defun string-edit-diff (old-content new-content)
+  (let* ((old-content (string old-content))
+         (new-content (string new-content))
+         (old-length (length old-content))
+         (new-length (length new-content))
+         (prefix 0)
+         (suffix 0)
+         (prefix-limit (min old-length new-length)))
+    (loop while (and (< prefix prefix-limit)
+                     (char= (char old-content prefix)
+                            (char new-content prefix)))
+          do (incf prefix))
+    (loop while (and (< suffix (- old-length prefix))
+                     (< suffix (- new-length prefix))
+                     (char= (char old-content (- old-length suffix 1))
+                            (char new-content (- new-length suffix 1))))
+          do (incf suffix))
+    (values prefix
+            (- old-length suffix)
+            (subseq new-content prefix (- new-length suffix))
+            (not (string= old-content new-content)))))
+
+(defun sync-code-buffer-content-to-model
+    (block new-content &key previous-content edit-start edit-end replacement)
+  (let ((old-source (code-block-source block)))
+    (unless (string= old-source new-content)
+      (multiple-value-bind (dirty-start dirty-end dirty-replacement changedp)
+          (cond
+            ((and edit-start edit-end replacement)
+             (values edit-start edit-end replacement t))
+            ((and previous-content
+                  (string= (string previous-content) old-source))
+             (string-edit-diff previous-content new-content))
+            (t
+             (values 0 (length old-source) new-content t)))
+        (when changedp
+          (replace-code-block-source-incrementally
+           block
+           new-content
+           dirty-start
+           dirty-end
+           :replacement dirty-replacement
+           :previous-info (code-block-parse-info block))))))
+  block)
+
+(defun sync-active-buffer-to-model
+    (application &key previous-content edit-start edit-end replacement)
   (when (editing-active-p application)
     (let ((model (active-editor-model application)))
       (when (editable-model-p model)
-        (setf (editable-model-string model)
-              (text-buffer-content (application-active-text-buffer application)))
-        (when (typep model 'code-block)
-          (sync-active-buffer-structure-selection application)))))
+        (let ((content (text-buffer-content
+                        (application-active-text-buffer application))))
+          (if (typep model 'code-block)
+              (progn
+                (sync-code-buffer-content-to-model
+                 model
+                 content
+                 :previous-content previous-content
+                 :edit-start edit-start
+                 :edit-end edit-end
+                 :replacement replacement)
+                (sync-active-buffer-structure-selection application))
+              (setf (editable-model-string model) content))))))
   application)
 
 (defun begin-editing-model (application model)
@@ -488,20 +543,43 @@
 
 (defun insert-into-active-buffer (application text)
   (when (editing-active-p application)
-    (insert-buffer-text (application-active-text-buffer application) text)
-    (sync-active-buffer-to-model application))
+    (let* ((buffer (application-active-text-buffer application))
+           (old-content (text-buffer-content buffer))
+           (cursor (text-buffer-cursor buffer))
+           (text (string text)))
+      (insert-buffer-text buffer text)
+      (sync-active-buffer-to-model application
+                                   :previous-content old-content
+                                   :edit-start cursor
+                                   :edit-end cursor
+                                   :replacement text)))
   application)
 
 (defun delete-active-buffer-backward (application)
   (when (editing-active-p application)
-    (delete-buffer-backward (application-active-text-buffer application))
-    (sync-active-buffer-to-model application))
+    (let* ((buffer (application-active-text-buffer application))
+           (old-content (text-buffer-content buffer))
+           (cursor (text-buffer-cursor buffer)))
+      (delete-buffer-backward buffer)
+      (sync-active-buffer-to-model application
+                                   :previous-content old-content
+                                   :edit-start (max 0 (1- cursor))
+                                   :edit-end cursor
+                                   :replacement "")))
   application)
 
 (defun delete-active-buffer-forward (application)
   (when (editing-active-p application)
-    (delete-buffer-forward (application-active-text-buffer application))
-    (sync-active-buffer-to-model application))
+    (let* ((buffer (application-active-text-buffer application))
+           (old-content (text-buffer-content buffer))
+           (cursor (text-buffer-cursor buffer)))
+      (delete-buffer-forward buffer)
+      (sync-active-buffer-to-model application
+                                   :previous-content old-content
+                                   :edit-start cursor
+                                   :edit-end (min (length old-content)
+                                                  (1+ cursor))
+                                   :replacement "")))
   application)
 
 (defun move-active-buffer-cursor-left (application)
@@ -542,14 +620,20 @@
 
 (defun undo-active-buffer-edit (application)
   (when (editing-active-p application)
-    (undo-buffer-edit (application-active-text-buffer application))
-    (sync-active-buffer-to-model application))
+    (let* ((buffer (application-active-text-buffer application))
+           (old-content (text-buffer-content buffer)))
+      (undo-buffer-edit buffer)
+      (sync-active-buffer-to-model application
+                                   :previous-content old-content)))
   application)
 
 (defun redo-active-buffer-edit (application)
   (when (editing-active-p application)
-    (redo-buffer-edit (application-active-text-buffer application))
-    (sync-active-buffer-to-model application))
+    (let* ((buffer (application-active-text-buffer application))
+           (old-content (text-buffer-content buffer)))
+      (redo-buffer-edit buffer)
+      (sync-active-buffer-to-model application
+                                   :previous-content old-content)))
   application)
 
 (defun render-application (application)
