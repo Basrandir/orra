@@ -139,6 +139,7 @@
    #:toggle-code-structure
    #:text-cell
    #:text-buffer
+   #:text-buffer-gap-size
    #:text-buffer-line-count
    #:text-buffer-markers
    #:text-buffer-content

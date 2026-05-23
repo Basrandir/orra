@@ -73,6 +73,22 @@
     (is (= 1 (text-buffer-cursor buffer))
         "Cursor should stay within bounds.")))
 
+(deftest text-buffer-uses-gap-backing ()
+  (let ((buffer (make-text-buffer :content "abc" :cursor 1)))
+    (is (typep (orra::%text-buffer-gap buffer) 'orra::gap-buffer)
+        "Text buffers should use an internal gap-buffer backing store.")
+    (let ((initial-gap-size (text-buffer-gap-size buffer)))
+      (insert-buffer-text buffer "XYZ")
+      (is (string= "aXYZbc" (text-buffer-content buffer))
+          "Gap-backed insertion should preserve visible content.")
+      (is (< (text-buffer-gap-size buffer) initial-gap-size)
+          "Inserting into the buffer should consume available gap space.")
+      (replace-buffer-range buffer 1 4 "")
+      (is (string= "abc" (text-buffer-content buffer))
+          "Gap-backed range deletion should preserve visible content.")
+      (is (> (text-buffer-gap-size buffer) 0)
+          "Deleting text should leave reusable gap capacity."))))
+
 (deftest text-buffer-multiline-navigation-and-history ()
   (let ((buffer (make-text-buffer
                  :content (format nil "alpha~%beta~%gamma")
