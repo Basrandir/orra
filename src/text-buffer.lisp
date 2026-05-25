@@ -132,6 +132,10 @@
     :initform nil)
    (markers
     :accessor text-buffer-markers
+    :initform nil)
+   (style-spans
+    :initarg :style-spans
+    :accessor text-buffer-style-spans
     :initform nil)))
 
 (defmethod initialize-instance :after ((buffer text-buffer) &key)
@@ -148,10 +152,69 @@
 
 (defmethod (setf text-buffer-content) (value (buffer text-buffer))
   (reset-gap-buffer-content (%text-buffer-gap buffer) value)
+  (%clamp-buffer-style-spans buffer)
   (string value))
 
 (defun text-buffer-gap-size (buffer)
   (gap-buffer-gap-size (%text-buffer-gap buffer)))
+
+(defun normalize-text-style-span (buffer span)
+  (let* ((content (text-buffer-content buffer))
+         (start (clamp-text-position content (getf span :start)))
+         (end (clamp-text-position content (getf span :end)))
+         (start (min start end))
+         (end (max start end)))
+    (when (< start end)
+      (let ((normalized (copy-list span)))
+        (setf (getf normalized :start) start)
+        (setf (getf normalized :end) end)
+        normalized))))
+
+(defun normalize-text-style-spans (buffer spans)
+  (loop for span in spans
+        for normalized = (normalize-text-style-span buffer span)
+        when normalized
+        collect normalized))
+
+(defun %clamp-buffer-style-spans (buffer)
+  (setf (text-buffer-style-spans buffer)
+        (normalize-text-style-spans buffer
+                                    (text-buffer-style-spans buffer)))
+  buffer)
+
+(defun add-text-buffer-style-span (buffer start end kind &rest attributes)
+  (let ((span (normalize-text-style-span
+               buffer
+               (append (list :start start :end end :kind kind)
+                       attributes))))
+    (when span
+      (setf (text-buffer-style-spans buffer)
+            (append (text-buffer-style-spans buffer)
+                    (list span)))))
+  buffer)
+
+(defun clear-text-buffer-style-spans (buffer)
+  (setf (text-buffer-style-spans buffer) nil)
+  buffer)
+
+(defun text-buffer-style-spans-for-range (buffer start end)
+  (let* ((content (text-buffer-content buffer))
+         (range-start (clamp-text-position content start))
+         (range-end (clamp-text-position content end))
+         (start (min range-start range-end))
+         (end (max range-start range-end)))
+    (loop for span in (text-buffer-style-spans buffer)
+          for span-start = (getf span :start)
+          for span-end = (getf span :end)
+          for visible-start = (max start span-start)
+          for visible-end = (min end span-end)
+          when (< visible-start visible-end)
+          collect (let ((visible (copy-list span)))
+                    (setf (getf visible :start)
+                          (- visible-start start))
+                    (setf (getf visible :end)
+                          (- visible-end start))
+                    visible))))
 
 (defclass text-marker ()
   ((position
@@ -225,7 +288,8 @@
   (list (text-buffer-content buffer)
         (text-buffer-cursor buffer)
         (and include-markers
-             (%buffer-marker-snapshot buffer))))
+             (%buffer-marker-snapshot buffer))
+        (copy-tree (text-buffer-style-spans buffer))))
 
 (defun %restore-buffer-marker-snapshot (buffer marker-snapshot)
   (dolist (entry marker-snapshot)
@@ -237,13 +301,17 @@
 (defun %restore-buffer-snapshot (buffer snapshot)
   (let ((content (first snapshot))
         (cursor (second snapshot))
-        (marker-snapshot (third snapshot)))
+        (marker-snapshot (third snapshot))
+        (style-spans (fourth snapshot)))
     (setf (text-buffer-content buffer) content)
     (setf (text-buffer-cursor buffer) cursor)
+    (setf (text-buffer-style-spans buffer)
+          (copy-tree style-spans))
     (when marker-snapshot
       (%restore-buffer-marker-snapshot buffer marker-snapshot)))
   (%clamp-buffer-cursor buffer)
-  (%clamp-buffer-markers buffer))
+  (%clamp-buffer-markers buffer)
+  (%clamp-buffer-style-spans buffer))
 
 (defun %record-buffer-change (buffer)
   (push (%buffer-snapshot buffer) (text-buffer-undo-stack buffer))
@@ -326,11 +394,13 @@
                                                          (1+ line)
                                                          column))))
 
-(defun make-text-buffer (&key (content "") cursor)
+(defun make-text-buffer (&key (content "") cursor style-spans)
   (let ((buffer (make-instance 'text-buffer
                                :id (fresh-id "buffer")
                                :content content
-                               :cursor (or cursor (length content)))))
+                               :cursor (or cursor (length content))
+                               :style-spans style-spans)))
+    (%clamp-buffer-style-spans buffer)
     (%clamp-buffer-cursor buffer)))
 
 (defun adjusted-position-for-replacement (position start end replacement-length gravity)
@@ -362,6 +432,39 @@
            (text-marker-gravity marker))))
   (%clamp-buffer-markers buffer))
 
+(defun adjusted-style-span-for-replacement
+    (span start end replacement-length)
+  (let* ((new-start (adjusted-position-for-replacement
+                     (getf span :start)
+                     start
+                     end
+                     replacement-length
+                     :left))
+         (new-end (adjusted-position-for-replacement
+                   (getf span :end)
+                   start
+                   end
+                   replacement-length
+                   :right)))
+    (when (< new-start new-end)
+      (let ((adjusted (copy-list span)))
+        (setf (getf adjusted :start) new-start)
+        (setf (getf adjusted :end) new-end)
+        adjusted))))
+
+(defun adjust-buffer-style-spans-for-replacement
+    (buffer start end replacement-length)
+  (setf (text-buffer-style-spans buffer)
+        (loop for span in (text-buffer-style-spans buffer)
+              for adjusted = (adjusted-style-span-for-replacement
+                              span
+                              start
+                              end
+                              replacement-length)
+              when adjusted
+              collect adjusted))
+  (%clamp-buffer-style-spans buffer))
+
 (defun replace-buffer-range (buffer start end replacement &key cursor)
   (let* ((content (text-buffer-content buffer))
          (range-start (clamp-text-position content start))
@@ -388,7 +491,11 @@
       (adjust-buffer-markers-for-replacement buffer
                                              start
                                              end
-                                             (length replacement))))
+                                             (length replacement))
+      (adjust-buffer-style-spans-for-replacement buffer
+                                                 start
+                                                 end
+                                                 (length replacement))))
   (%clamp-buffer-cursor buffer))
 
 (defun insert-buffer-text (buffer text)

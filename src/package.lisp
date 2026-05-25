@@ -9,6 +9,7 @@
    #:application-root-cell
    #:application-save-path
    #:application-workspace
+   #:add-text-buffer-style-span
    #:append-code-block
    #:append-child
    #:append-paragraph
@@ -21,6 +22,7 @@
    #:cell-model
    #:cell-style-spans
    #:children-of
+   #:clear-text-buffer-style-spans
    #:code-block
    #:code-block-language
    #:code-block-incremental-parse-info
@@ -142,6 +144,8 @@
    #:text-buffer-gap-size
    #:text-buffer-line-count
    #:text-buffer-markers
+   #:text-buffer-style-spans
+   #:text-buffer-style-spans-for-range
    #:text-buffer-content
    #:text-buffer-cursor
    #:text-marker
