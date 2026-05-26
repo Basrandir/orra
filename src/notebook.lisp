@@ -98,6 +98,97 @@
     :accessor code-block-result
     :initform nil)))
 
+(defclass quote-block (node)
+  ((text
+    :initarg :text
+    :accessor quote-block-text
+    :initform "")
+   (attribution
+    :initarg :attribution
+    :accessor quote-block-attribution
+    :initform "")))
+
+(defclass reference-block (node)
+  ((target
+    :initarg :target
+    :accessor reference-block-target
+    :initform nil)
+   (label
+    :initarg :label
+    :accessor reference-block-label
+    :initform "")
+   (note
+    :initarg :note
+    :accessor reference-block-note
+    :initform "")))
+
+(defclass list-block (node)
+  ((items
+    :initarg :items
+    :accessor list-block-items
+    :initform nil)
+   (ordered-p
+    :initarg :ordered-p
+    :accessor list-block-ordered-p
+    :initform nil)))
+
+(defclass table-block (node)
+  ((columns
+    :initarg :columns
+    :accessor table-block-columns
+    :initform nil)
+   (rows
+    :initarg :rows
+    :accessor table-block-rows
+    :initform nil)))
+
+(defclass task-list (node)
+  ((items
+    :initarg :items
+    :accessor task-list-items
+    :initform nil)))
+
+(defun normalize-display-string (value)
+  (cond
+    ((null value) "")
+    ((stringp value) value)
+    (t (princ-to-string value))))
+
+(defun normalize-display-strings (values)
+  (mapcar #'normalize-display-string values))
+
+(defun normalize-table-row (row)
+  (normalize-display-strings (ensure-list row)))
+
+(defun normalize-table-rows (rows)
+  (mapcar #'normalize-table-row rows))
+
+(defun make-task-item (&key (text "") done)
+  (list :text (normalize-display-string text)
+        :done (not (null done))))
+
+(defun task-item-text (item)
+  (if (listp item)
+      (normalize-display-string (getf item :text ""))
+      (normalize-display-string item)))
+
+(defun task-item-done-p (item)
+  (and (listp item)
+       (not (null (getf item :done)))))
+
+(defun normalize-task-item (item)
+  (cond
+    ((stringp item)
+     (make-task-item :text item))
+    ((listp item)
+     (make-task-item :text (task-item-text item)
+                     :done (task-item-done-p item)))
+    (t
+     (make-task-item :text item))))
+
+(defun normalize-task-items (items)
+  (mapcar #'normalize-task-item items))
+
 (defun %register-if-present (registry object)
   (when registry
     (register-object registry object))
@@ -143,6 +234,51 @@
                   :kind :code-block
                   :language language
                   :source source)))
+
+(defun make-quote-block (&key (text "") (attribution "") registry)
+  (%register-if-present
+   registry
+   (make-instance 'quote-block
+                  :id (fresh-id "quote")
+                  :kind :quote-block
+                  :text (normalize-display-string text)
+                  :attribution (normalize-display-string attribution))))
+
+(defun make-reference-block (&key target (label "") (note "") registry)
+  (%register-if-present
+   registry
+   (make-instance 'reference-block
+                  :id (fresh-id "ref")
+                  :kind :reference-block
+                  :target target
+                  :label (normalize-display-string label)
+                  :note (normalize-display-string note))))
+
+(defun make-list-block (&key items ordered-p registry)
+  (%register-if-present
+   registry
+   (make-instance 'list-block
+                  :id (fresh-id "list")
+                  :kind :list-block
+                  :items (normalize-display-strings items)
+                  :ordered-p (not (null ordered-p)))))
+
+(defun make-table-block (&key columns rows registry)
+  (%register-if-present
+   registry
+   (make-instance 'table-block
+                  :id (fresh-id "table")
+                  :kind :table-block
+                  :columns (normalize-display-strings columns)
+                  :rows (normalize-table-rows rows))))
+
+(defun make-task-list (&key items registry)
+  (%register-if-present
+   registry
+   (make-instance 'task-list
+                  :id (fresh-id "tasks")
+                  :kind :task-list
+                  :items (normalize-task-items items))))
 
 (defun make-result-block (&key value (presentation "") registry)
   (%register-if-present

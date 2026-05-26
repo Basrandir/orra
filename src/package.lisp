@@ -12,7 +12,12 @@
    #:add-text-buffer-style-span
    #:append-code-block
    #:append-child
+   #:append-list-block
    #:append-paragraph
+   #:append-quote-block
+   #:append-reference-block
+   #:append-table-block
+   #:append-task-list
    #:backend
    #:backend-name
    #:build-workspace-cell-tree
@@ -63,19 +68,28 @@
    #:invoke-command
    #:insert-into-active-buffer
    #:list-commands
+   #:list-block
+   #:list-block-items
+   #:list-block-ordered-p
    #:load-workspace
    #:load-workspace-into-application
    #:load-workspace-from-file
    #:make-application
    #:make-code-block
    #:make-container-cell
+   #:make-list-block
    #:make-notebook
    #:make-null-backend
    #:make-object-registry
    #:make-paragraph
+   #:make-quote-block
+   #:make-reference-block
    #:make-result-block
    #:make-section
    #:make-sdl2-backend
+   #:make-table-block
+   #:make-task-item
+   #:make-task-list
    #:make-text-cell
    #:make-text-buffer
    #:make-workspace
@@ -104,8 +118,15 @@
    #:parent-of
    #:perform-layout
    #:quit-application
+   #:quote-block
+   #:quote-block-attribution
+   #:quote-block-text
    #:rebuild-root-cell
    #:register-object
+   #:reference-block
+   #:reference-block-label
+   #:reference-block-note
+   #:reference-block-target
    #:replace-code-block-source
    #:replace-code-block-source-incrementally
    #:registry-objects-list
@@ -131,6 +152,13 @@
    #:start-application
    #:start-demo
    #:stop-editing
+   #:table-block
+   #:table-block-columns
+   #:table-block-rows
+   #:task-item-done-p
+   #:task-item-text
+   #:task-list
+   #:task-list-items
    #:source-map-entry-at-offset
    #:splice-code-form
    #:select-child-code-block-form

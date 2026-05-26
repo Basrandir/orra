@@ -9,6 +9,11 @@
 (defmethod persistable-object-p ((object section)) t)
 (defmethod persistable-object-p ((object paragraph)) t)
 (defmethod persistable-object-p ((object code-block)) t)
+(defmethod persistable-object-p ((object quote-block)) t)
+(defmethod persistable-object-p ((object reference-block)) t)
+(defmethod persistable-object-p ((object list-block)) t)
+(defmethod persistable-object-p ((object table-block)) t)
+(defmethod persistable-object-p ((object task-list)) t)
 (defmethod persistable-object-p ((object result-block)) t)
 
 (defun encode-value (value)
@@ -76,7 +81,11 @@
                  (dolist (child (children-of object))
                    (visit child))
                  (when (typep object 'code-block)
-                   (visit (code-block-result object))))))
+                   (visit (code-block-result object)))
+                 (when (and (typep object 'reference-block)
+                            (typep (reference-block-target object)
+                                   'model-object))
+                   (visit (reference-block-target object))))))
       (visit workspace))
     (nreverse objects)))
 
@@ -118,6 +127,31 @@
                 :result (and (code-block-result object)
                              (object-id (code-block-result object))))))
 
+(defmethod serialize-object-record ((object quote-block))
+  (append (base-record object :quote-block)
+          (list :text (quote-block-text object)
+                :attribution (quote-block-attribution object))))
+
+(defmethod serialize-object-record ((object reference-block))
+  (append (base-record object :reference-block)
+          (list :target (encode-value (reference-block-target object))
+                :label (reference-block-label object)
+                :note (reference-block-note object))))
+
+(defmethod serialize-object-record ((object list-block))
+  (append (base-record object :list-block)
+          (list :items (list-block-items object)
+                :ordered-p (list-block-ordered-p object))))
+
+(defmethod serialize-object-record ((object table-block))
+  (append (base-record object :table-block)
+          (list :columns (table-block-columns object)
+                :rows (table-block-rows object))))
+
+(defmethod serialize-object-record ((object task-list))
+  (append (base-record object :task-list)
+          (list :items (task-list-items object))))
+
 (defmethod serialize-object-record ((object result-block))
   (append (base-record object :result-block)
           (list :value (encode-value (result-block-value object))
@@ -137,6 +171,16 @@
        (make-instance 'paragraph :id id :kind :paragraph))
       (:code-block
        (make-instance 'code-block :id id :kind :code-block))
+      (:quote-block
+       (make-instance 'quote-block :id id :kind :quote-block))
+      (:reference-block
+       (make-instance 'reference-block :id id :kind :reference-block))
+      (:list-block
+       (make-instance 'list-block :id id :kind :list-block))
+      (:table-block
+       (make-instance 'table-block :id id :kind :table-block))
+      (:task-list
+       (make-instance 'task-list :id id :kind :task-list))
       (:result-block
        (make-instance 'result-block :id id :kind :result-block)))))
 
@@ -178,6 +222,31 @@
      (setf (code-block-result object)
            (and (getf record :result)
                 (gethash (getf record :result) object-table))))
+    (quote-block
+     (setf (quote-block-text object)
+           (normalize-display-string (getf record :text)))
+     (setf (quote-block-attribution object)
+           (normalize-display-string (getf record :attribution))))
+    (reference-block
+     (setf (reference-block-target object)
+           (decode-value (getf record :target) object-table))
+     (setf (reference-block-label object)
+           (normalize-display-string (getf record :label)))
+     (setf (reference-block-note object)
+           (normalize-display-string (getf record :note))))
+    (list-block
+     (setf (list-block-items object)
+           (normalize-display-strings (getf record :items)))
+     (setf (list-block-ordered-p object)
+           (not (null (getf record :ordered-p)))))
+    (table-block
+     (setf (table-block-columns object)
+           (normalize-display-strings (getf record :columns)))
+     (setf (table-block-rows object)
+           (normalize-table-rows (getf record :rows))))
+    (task-list
+     (setf (task-list-items object)
+           (normalize-task-items (getf record :items))))
     (result-block
      (setf (result-block-value object)
            (decode-value (getf record :value) object-table))

@@ -526,6 +526,134 @@
     (is (typep (second (children-of tree)) 'container-cell)
         "Notebook cell should be a container.")))
 
+(deftest rich-notebook-nodes-render ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (invoke-command application 'append-quote-block "Lisp is a medium." "Orra")
+    (invoke-command application 'append-list-block '("one" "two") t)
+    (invoke-command application
+                    'append-table-block
+                    '("Name" "Value")
+                    '(("language" "Common Lisp")))
+    (invoke-command application
+                    'append-task-list
+                    (list (make-task-item :text "ship notebook nodes"
+                                          :done t)
+                          "write object reference lens"))
+    (let ((focused (focused-model application)))
+      (invoke-command application
+                      'append-reference-block
+                      (object-id focused)
+                      "current focus"
+                      "object-native link")
+      (render-application application)
+      (let ((texts (collect-text-cells (application-root-cell application))))
+        (is (find (format nil "> Lisp is a medium.~%-- Orra")
+                  texts
+                  :test #'string=)
+            "Quote blocks should render quote text and attribution.")
+        (is (find "1. one" texts :test #'string=)
+            "Ordered list blocks should render numbered items.")
+        (is (find "Name | Value" texts :test #'string=)
+            "Table blocks should render column headings.")
+        (is (find "[x] ship notebook nodes" texts :test #'string=)
+            "Task lists should render completed tasks.")
+        (is (some (lambda (text)
+                    (and (search "@ current focus ->" text)
+                         (search (object-id focused) text)
+                         (search "object-native link" text)))
+                  texts)
+            "Reference blocks should render their target object and note.")))))
+
+(deftest rich-notebook-nodes-persist ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (paragraph (make-paragraph :text "target" :registry registry))
+         (quote (make-quote-block :text "quoted" :attribution "source"
+                                  :registry registry))
+         (reference (make-reference-block :target paragraph
+                                          :label "target paragraph"
+                                          :note "same workspace"
+                                          :registry registry))
+         (list-block (make-list-block :items '("alpha" "beta")
+                                      :ordered-p t
+                                      :registry registry))
+         (table (make-table-block :columns '("A" "B")
+                                  :rows '(("1" "2"))
+                                  :registry registry))
+         (tasks (make-task-list
+                 :items (list (make-task-item :text "done" :done t)
+                              (make-task-item :text "todo"))
+                 :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (dolist (node (list paragraph quote reference list-block table tasks))
+      (append-child section node))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (children (children-of loaded-section))
+                    (loaded-reference
+                     (find-if (lambda (object)
+                                (typep object 'reference-block))
+                              children))
+                    (loaded-tasks
+                     (find-if (lambda (object)
+                                (typep object 'task-list))
+                              children)))
+               (is (find-if (lambda (object)
+                              (and (typep object 'quote-block)
+                                   (string= "quoted"
+                                            (quote-block-text object))))
+                            children)
+                   "Quote blocks should survive persistence.")
+               (is (typep (reference-block-target loaded-reference)
+                          'paragraph)
+                   "Reference block targets should reload as objects.")
+               (is (equal '("alpha" "beta")
+                          (list-block-items
+                           (find-if (lambda (object)
+                                      (typep object 'list-block))
+                                    children)))
+                   "List block items should survive persistence.")
+               (is (equal '(("1" "2"))
+                          (table-block-rows
+                           (find-if (lambda (object)
+                                      (typep object 'table-block))
+                                    children)))
+                   "Table block rows should survive persistence.")
+               (is (= 1
+                      (count-if #'task-item-done-p
+                                (task-list-items loaded-tasks)))
+                   "Task completion state should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest reference-block-registration-handles-cycles ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (reference (make-reference-block :target workspace
+                                          :label "root"
+                                          :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section reference)
+    (orra::register-tree registry workspace)
+    (is (eq workspace (find-object registry (object-id workspace)))
+        "Registering a tree with a backward object reference should terminate.")
+    (is (eq reference (find-object registry (object-id reference)))
+        "Reference blocks should still be registered when cycles are skipped.")))
+
 (deftest application-shell-includes-inspector ()
   (let ((application (make-application :backend (make-null-backend))))
     (render-application application)

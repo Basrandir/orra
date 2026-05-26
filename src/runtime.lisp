@@ -40,13 +40,20 @@
     :accessor application-save-path
     :initform nil)))
 
-(defun register-tree (registry object)
-  (when (and object (typep object 'model-object))
-    (register-object registry object)
-    (dolist (child (children-of object))
-      (register-tree registry child))
-    (when (typep object 'code-block)
-      (register-tree registry (code-block-result object)))))
+(defun register-tree (registry object &optional seen)
+  (let ((seen (or seen (make-hash-table :test #'equal))))
+    (when (and object
+               (typep object 'model-object)
+               (not (gethash (object-id object) seen)))
+      (setf (gethash (object-id object) seen) t)
+      (register-object registry object)
+      (dolist (child (children-of object))
+        (register-tree registry child seen))
+      (when (typep object 'code-block)
+        (register-tree registry (code-block-result object) seen))
+      (when (and (typep object 'reference-block)
+                 (typep (reference-block-target object) 'model-object))
+        (register-tree registry (reference-block-target object) seen)))))
 
 (defun object-summary-string (object)
   (if object
@@ -144,6 +151,41 @@
                                   (result-block-status
                                    (code-block-result model))
                                   "-"))))
+               (quote-block
+                (list (format nil "text-len: ~D"
+                              (length (quote-block-text model)))
+                      (format nil "attribution: ~A"
+                              (if (string= "" (quote-block-attribution model))
+                                  "-"
+                                  (quote-block-attribution model)))))
+               (reference-block
+                (list (format nil "target: ~A"
+                              (object-reference-summary-string
+                               (reference-block-target model)))
+                      (format nil "label: ~A"
+                              (if (string= "" (reference-block-label model))
+                                  "-"
+                                  (reference-block-label model)))
+                      (format nil "note: ~A"
+                              (if (string= "" (reference-block-note model))
+                                  "-"
+                                  (reference-block-note model)))))
+               (list-block
+                (list (format nil "items: ~D"
+                              (length (list-block-items model)))
+                      (format nil "ordered: ~:[no~;yes~]"
+                              (list-block-ordered-p model))))
+               (table-block
+                (list (format nil "columns: ~D"
+                              (length (table-block-columns model)))
+                      (format nil "rows: ~D"
+                              (length (table-block-rows model)))))
+               (task-list
+                (list (format nil "tasks: ~D"
+                              (length (task-list-items model)))
+                      (format nil "done: ~D"
+                              (count-if #'task-item-done-p
+                                        (task-list-items model)))))
                (result-block
                 (list (format nil "status: ~A"
                               (result-block-status model))
@@ -208,7 +250,9 @@
                 (code-block-status-controls model)))))
 
 (defun focusable-model-object-p (object)
-  (typep object '(or notebook section paragraph code-block result-block)))
+  (typep object
+         '(or notebook section paragraph code-block quote-block
+           reference-block list-block table-block task-list result-block)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -852,6 +896,80 @@
          (block (make-code-block
                  :language language
                  :source source
+                 :registry registry)))
+    (append-child section block)
+    (rebuild-root-cell application)
+    block))
+
+(define-command append-quote-block (application text &optional (attribution ""))
+  "Append a quote block to the default section."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (block (make-quote-block
+                 :text text
+                 :attribution attribution
+                 :registry registry)))
+    (append-child section block)
+    (rebuild-root-cell application)
+    block))
+
+(define-command append-reference-block
+    (application target-id &optional (label "") (note ""))
+  "Append an object reference block to the default section."
+  (let* ((registry (application-registry application))
+         (target (find-object registry target-id)))
+    (unless target
+      (error "Unknown reference target ~A." target-id))
+    (let* ((section (ensure-default-section
+                     (application-workspace application)
+                     registry))
+           (block (make-reference-block
+                   :target target
+                   :label label
+                   :note note
+                   :registry registry)))
+      (append-child section block)
+      (rebuild-root-cell application)
+      block)))
+
+(define-command append-list-block (application items &optional ordered-p)
+  "Append a list block to the default section."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (block (make-list-block
+                 :items items
+                 :ordered-p ordered-p
+                 :registry registry)))
+    (append-child section block)
+    (rebuild-root-cell application)
+    block))
+
+(define-command append-table-block (application columns rows)
+  "Append a table block to the default section."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (block (make-table-block
+                 :columns columns
+                 :rows rows
+                 :registry registry)))
+    (append-child section block)
+    (rebuild-root-cell application)
+    block))
+
+(define-command append-task-list (application items)
+  "Append a task list to the default section."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (block (make-task-list
+                 :items items
                  :registry registry)))
     (append-child section block)
     (rebuild-root-cell application)

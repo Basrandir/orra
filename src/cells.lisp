@@ -96,6 +96,15 @@
                   (mapcar #'preferred-height (children-of cell))
                   :initial-value 0))))
 
+(defun append-text-lines (container registry model lines &key (role :content))
+  (dolist (line lines container)
+    (append-child container
+                  (make-text-cell
+                   :registry registry
+                   :model model
+                   :text line
+                   :role role))))
+
 (defun append-heading-cell (container registry model text)
   (append-child container
                 (make-text-cell
@@ -103,6 +112,38 @@
                  :model model
                  :text text
                  :role :heading)))
+
+(defun object-reference-summary-string (object)
+  (cond
+    ((typep object 'model-object)
+     (format nil "~A ~A" (object-kind object) (object-id object)))
+    ((null object)
+     "-")
+    (t
+     (normalize-display-string object))))
+
+(defun quote-block-lines (node)
+  (let ((lines (mapcar (lambda (line)
+                         (format nil "> ~A" line))
+                       (split-lines (quote-block-text node)))))
+    (if (string= "" (quote-block-attribution node))
+        lines
+        (append lines
+                (list (format nil "-- ~A"
+                              (quote-block-attribution node)))))))
+
+(defun format-list-block-item (node item index)
+  (if (list-block-ordered-p node)
+      (format nil "~D. ~A" (1+ index) item)
+      (format nil "- ~A" item)))
+
+(defun format-table-row (values)
+  (format nil "~{~A~^ | ~}" values))
+
+(defun format-task-list-item (item)
+  (format nil "[~A] ~A"
+          (if (task-item-done-p item) "x" " ")
+          (task-item-text item)))
 
 (defun perform-layout (cell &key (x 0) (y 0) (width 80))
   (setf (cell-bounds cell)
@@ -201,6 +242,72 @@
        (when (code-block-result node)
          (append-child cell
                        (build-node-cell (code-block-result node) registry)))
+       cell))
+    (quote-block
+     (make-text-cell
+      :registry registry
+      :model node
+      :text (format nil "~{~A~^~%~}" (quote-block-lines node))
+      :role :quote))
+    (reference-block
+     (make-text-cell
+      :registry registry
+      :model node
+      :text (format nil "@ ~A -> ~A~@[  |  ~A~]"
+                    (if (string= "" (reference-block-label node))
+                        "reference"
+                        (reference-block-label node))
+                    (object-reference-summary-string
+                     (reference-block-target node))
+                    (and (not (string= "" (reference-block-note node)))
+                         (reference-block-note node)))
+      :role :reference))
+    (list-block
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label "List")))
+       (append-heading-cell cell registry node "List")
+       (loop for item in (list-block-items node)
+             for index from 0
+             do (append-child cell
+                              (make-text-cell
+                               :registry registry
+                               :model node
+                               :text (format-list-block-item node
+                                                             item
+                                                             index))))
+       cell))
+    (table-block
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label "Table")))
+       (append-heading-cell cell registry node "Table")
+       (when (table-block-columns node)
+         (append-child cell
+                       (make-text-cell
+                        :registry registry
+                        :model node
+                        :text (format-table-row (table-block-columns node))
+                        :role :heading)))
+       (append-text-lines cell
+                          registry
+                          node
+                          (mapcar #'format-table-row
+                                  (table-block-rows node)))
+       cell))
+    (task-list
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label "Tasks")))
+       (append-heading-cell cell registry node "Tasks")
+       (append-text-lines cell
+                          registry
+                          node
+                          (mapcar #'format-task-list-item
+                                  (task-list-items node)))
        cell))
     (result-block
      (make-text-cell
