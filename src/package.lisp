@@ -8,6 +8,7 @@
    #:application-registry
    #:application-root-cell
    #:application-save-path
+   #:application-viewport-y
    #:application-workspace
    #:add-text-buffer-style-span
    #:append-code-block
@@ -146,6 +147,10 @@
    #:select-previous-code-form
    #:section
    #:section-title
+   #:scroll
+   #:scroll-application
+   #:scroll-application-page
+   #:scroll-page
    #:set-object-metadata
    #:set-object-property
    #:sdl2-backend

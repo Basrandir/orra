@@ -19,6 +19,10 @@
     :initarg :root-cell
     :accessor application-root-cell
     :initform nil)
+   (viewport-y
+    :initarg :viewport-y
+    :accessor application-viewport-y
+    :initform 0)
    (focused-model-id
     :initarg :focused-model-id
     :accessor application-focused-model-id
@@ -239,15 +243,128 @@
   (let ((model (focused-model application)))
     (if (editing-active-p application)
         (format nil
-                "EDIT ~A ~A  |  type to edit  |  Left/Right/Up/Down move  |  Home/End line bounds  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  Esc stop"
+                "EDIT ~A ~A  |  type to edit  |  arrows move  |  PgUp/PgDn scroll  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  Esc stop"
                 (if model (object-kind model) :none)
                 (or (application-active-editor-model-id application) "-")
                 (code-block-edit-status-controls model))
         (format nil
-                "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move~A  |  q quit"
+                "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move  |  PgUp/PgDn scroll~A  |  q quit"
                 (if model (object-kind model) :none)
                 (if model (object-id model) "-")
                 (code-block-status-controls model)))))
+
+(defun application-viewport-height (application)
+  (backend-layout-height (application-backend application)))
+
+(defun application-content-height (application)
+  (if (application-root-cell application)
+      (bounds-height (cell-bounds (application-root-cell application)))
+      0))
+
+(defun application-max-viewport-y (application)
+  (max 0
+       (- (application-content-height application)
+          (application-viewport-height application))))
+
+(defun clamp-application-viewport (application)
+  (setf (application-viewport-y application)
+        (max 0
+             (min (application-viewport-y application)
+                  (application-max-viewport-y application))))
+  application)
+
+(defun scroll-application (application rows)
+  (incf (application-viewport-y application) rows)
+  (clamp-application-viewport application))
+
+(defun scroll-application-page (application direction)
+  (scroll-application
+   application
+   (* direction
+      (max 1
+           (- (application-viewport-height application) 2)))))
+
+(defun cell-for-model-id (root model-id &key editable-only)
+  (labels ((matching-cell-p (cell)
+             (and (cell-model cell)
+                  (string= (object-id (cell-model cell)) model-id)
+                  (or (not editable-only)
+                      (editable-text-cell-p cell))))
+           (visit (cell)
+             (or (when (matching-cell-p cell)
+                   cell)
+                 (dolist (child (children-of cell) nil)
+                   (let ((found (visit child)))
+                     (when found
+                       (return found)))))))
+    (and root model-id (visit root))))
+
+(defun ensure-row-range-visible (application start end &key (margin 1))
+  (let* ((viewport-height (application-viewport-height application))
+         (viewport-start (application-viewport-y application))
+         (viewport-end (+ viewport-start viewport-height)))
+    (cond
+      ((< start (+ viewport-start margin))
+       (setf (application-viewport-y application)
+             (max 0 (- start margin))))
+      ((> end (- viewport-end margin))
+       (setf (application-viewport-y application)
+             (- end viewport-height (- margin))))))
+  (clamp-application-viewport application))
+
+(defun ensure-cell-visible (application cell)
+  (when cell
+    (let ((bounds (cell-bounds cell)))
+      (ensure-row-range-visible
+       application
+       (bounds-y bounds)
+       (+ (bounds-y bounds)
+          (bounds-height bounds)))))
+  application)
+
+(defun ensure-focused-model-visible (application)
+  (ensure-cell-visible
+   application
+   (cell-for-model-id (application-root-cell application)
+                      (application-focused-model-id application))))
+
+(defun ensure-active-caret-visible (application)
+  (when (editing-active-p application)
+    (let ((cell (cell-for-model-id
+                 (application-root-cell application)
+                 (application-active-editor-model-id application)
+                 :editable-only t)))
+      (when cell
+        (multiple-value-bind (line column)
+            (buffer-cursor-line-column
+             (application-active-text-buffer application))
+          (declare (ignore column))
+          (let ((row (+ (bounds-y (cell-bounds cell)) 1 line)))
+            (ensure-row-range-visible application row (1+ row)))))))
+  application)
+
+(defun draw-application-scrollbar (application)
+  (let* ((backend (application-backend application))
+         (content-height (application-content-height application))
+         (viewport-height (application-viewport-height application))
+         (max-scroll (application-max-viewport-y application)))
+    (when (plusp max-scroll)
+      (let* ((track-height viewport-height)
+             (thumb-height (max 1
+                                (floor (* viewport-height viewport-height)
+                                       content-height)))
+             (thumb-y (if (plusp (- track-height thumb-height))
+                          (floor (* (application-viewport-y application)
+                                    (- track-height thumb-height))
+                                 max-scroll)
+                          0)))
+        (backend-draw-scrollbar backend
+                                (max 0
+                                     (1- (backend-layout-width backend)))
+                                0
+                                track-height
+                                thumb-y
+                                thumb-height)))))
 
 (defun focusable-model-object-p (object)
   (typep object
@@ -303,7 +420,8 @@
                            0))
              (next-index (mod (+ position direction) (length models))))
         (setf (application-focused-model-id application)
-              (object-id (nth next-index models))))))
+              (object-id (nth next-index models)))
+        (ensure-focused-model-visible application))))
   application)
 
 (defun focus-next-model (application)
@@ -351,11 +469,12 @@
 (defun focus-model-at-pixel (application pixel-x pixel-y)
   (multiple-value-bind (grid-x grid-y)
       (backend-grid-point (application-backend application) pixel-x pixel-y)
-    (let* ((cell (and (application-root-cell application)
+    (let* ((logical-y (+ grid-y (application-viewport-y application)))
+           (cell (and (application-root-cell application)
                       (find-cell-at-point
                        (application-root-cell application)
                        grid-x
-                       grid-y)))
+                       logical-y)))
            (model (and cell (cell-model cell))))
       (when model
         (when (and (editing-active-p application)
@@ -374,11 +493,12 @@
             application
             cell
             grid-x
-            grid-y))
+            logical-y)
+           (ensure-active-caret-visible application))
           ((focusable-model-object-p model)
            (setf (application-focused-model-id application)
-                 (object-id model)))))))
-  application)
+                 (object-id model))))))
+    application))
 
 (defun editable-model-p (model)
   (typep model '(or paragraph code-block)))
@@ -507,7 +627,8 @@
             (move-buffer-cursor-to buffer offset))))
       (setf (application-active-text-buffer application) buffer)
       (when (typep model 'code-block)
-        (sync-active-buffer-structure-selection application))))
+        (sync-active-buffer-structure-selection application))
+      (ensure-active-caret-visible application)))
   application)
 
 (defun begin-editing-focused-model (application)
@@ -540,7 +661,8 @@
     (move-buffer-cursor-to
      (application-active-text-buffer application)
      (or (code-block-selected-form-start-offset block)
-         (length (code-block-source block))))))
+         (length (code-block-source block))))
+    (ensure-active-caret-visible application)))
 
 (defun sync-active-buffer-with-code-block-structural-edit (application block)
   (when (active-editor-model-p application block)
@@ -596,7 +718,8 @@
                                    :previous-content old-content
                                    :edit-start cursor
                                    :edit-end cursor
-                                   :replacement text)))
+                                   :replacement text)
+      (ensure-active-caret-visible application)))
   application)
 
 (defun delete-active-buffer-backward (application)
@@ -609,7 +732,8 @@
                                    :previous-content old-content
                                    :edit-start (max 0 (1- cursor))
                                    :edit-end cursor
-                                   :replacement "")))
+                                   :replacement "")
+      (ensure-active-caret-visible application)))
   application)
 
 (defun delete-active-buffer-forward (application)
@@ -623,43 +747,50 @@
                                    :edit-start cursor
                                    :edit-end (min (length old-content)
                                                   (1+ cursor))
-                                   :replacement "")))
+                                   :replacement "")
+      (ensure-active-caret-visible application)))
   application)
 
 (defun move-active-buffer-cursor-left (application)
   (when (editing-active-p application)
     (move-buffer-cursor-left (application-active-text-buffer application))
-    (sync-active-buffer-structure-selection application))
+    (sync-active-buffer-structure-selection application)
+    (ensure-active-caret-visible application))
   application)
 
 (defun move-active-buffer-cursor-right (application)
   (when (editing-active-p application)
     (move-buffer-cursor-right (application-active-text-buffer application))
-    (sync-active-buffer-structure-selection application))
+    (sync-active-buffer-structure-selection application)
+    (ensure-active-caret-visible application))
   application)
 
 (defun move-active-buffer-cursor-up (application)
   (when (editing-active-p application)
     (move-buffer-cursor-up (application-active-text-buffer application))
-    (sync-active-buffer-structure-selection application))
+    (sync-active-buffer-structure-selection application)
+    (ensure-active-caret-visible application))
   application)
 
 (defun move-active-buffer-cursor-down (application)
   (when (editing-active-p application)
     (move-buffer-cursor-down (application-active-text-buffer application))
-    (sync-active-buffer-structure-selection application))
+    (sync-active-buffer-structure-selection application)
+    (ensure-active-caret-visible application))
   application)
 
 (defun move-active-buffer-cursor-home (application)
   (when (editing-active-p application)
     (move-buffer-cursor-home (application-active-text-buffer application))
-    (sync-active-buffer-structure-selection application))
+    (sync-active-buffer-structure-selection application)
+    (ensure-active-caret-visible application))
   application)
 
 (defun move-active-buffer-cursor-end (application)
   (when (editing-active-p application)
     (move-buffer-cursor-end (application-active-text-buffer application))
-    (sync-active-buffer-structure-selection application))
+    (sync-active-buffer-structure-selection application)
+    (ensure-active-caret-visible application))
   application)
 
 (defun undo-active-buffer-edit (application)
@@ -668,7 +799,8 @@
            (old-content (text-buffer-content buffer)))
       (undo-buffer-edit buffer)
       (sync-active-buffer-to-model application
-                                   :previous-content old-content)))
+                                   :previous-content old-content)
+      (ensure-active-caret-visible application)))
   application)
 
 (defun redo-active-buffer-edit (application)
@@ -677,7 +809,8 @@
            (old-content (text-buffer-content buffer)))
       (redo-buffer-edit buffer)
       (sync-active-buffer-to-model application
-                                   :previous-content old-content)))
+                                   :previous-content old-content)
+      (ensure-active-caret-visible application)))
   application)
 
 (defun render-application (application)
@@ -688,8 +821,13 @@
   (perform-layout (application-root-cell application)
                   :width (backend-layout-width
                           (application-backend application)))
-  (draw-cell-tree (application-backend application)
-                  (application-root-cell application))
+  (clamp-application-viewport application)
+  (let ((*application* application))
+    (draw-cell-tree (application-backend application)
+                    (application-root-cell application)
+                    :viewport-y (application-viewport-y application)
+                    :viewport-height (application-viewport-height application))
+    (draw-application-scrollbar application))
   (backend-present (application-backend application))
   application)
 
@@ -778,6 +916,7 @@
           (load-workspace-from-file path :registry registry))
     (install-defined-commands application)
     (setf (application-save-path application) path)
+    (setf (application-viewport-y application) 0)
     (rebuild-root-cell application)
     (ensure-valid-focus application)
     (rebuild-root-cell application)
@@ -871,6 +1010,14 @@
 (define-command render (application)
   "Rebuild and render the current cell tree."
   (render-application application))
+
+(define-command scroll (application rows)
+  "Scroll the application viewport by ROWS logical rows."
+  (scroll-application application rows))
+
+(define-command scroll-page (application direction)
+  "Scroll the application viewport by one page in DIRECTION."
+  (scroll-application-page application direction))
 
 (define-command list-commands (application)
   "Return the installed commands."

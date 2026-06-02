@@ -60,3 +60,16 @@
                  (return)))
     (push (subseq string start) lines)
     (nreverse lines)))
+
+(defun string-line-column (string cursor)
+  (let* ((string (string string))
+         (cursor (max 0
+                      (min (or cursor 0)
+                           (length string))))
+         (line-start (or (position #\Newline
+                                   string
+                                   :end cursor
+                                   :from-end t)
+                         -1)))
+    (values (count #\Newline string :end cursor)
+            (- cursor line-start 1))))

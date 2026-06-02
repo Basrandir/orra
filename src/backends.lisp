@@ -11,6 +11,14 @@
   ((stream
     :initarg :stream
     :reader backend-stream)
+   (layout-width
+    :initarg :layout-width
+    :accessor backend-null-layout-width
+    :initform 96)
+   (layout-height
+    :initarg :layout-height
+    :accessor backend-null-layout-height
+    :initform 120)
    (frame-operations
     :initform nil
     :accessor backend-frame-operations)))
@@ -69,10 +77,14 @@
     :accessor backend-single-frame-p
     :initform nil)))
 
-(defun make-null-backend (&key (stream *standard-output*))
+(defun make-null-backend (&key (stream *standard-output*)
+                            (layout-width 96)
+                            (layout-height 120))
   (make-instance 'null-backend
                  :name :null
-                 :stream stream))
+                 :stream stream
+                 :layout-width layout-width
+                 :layout-height layout-height))
 
 (defun make-sdl2-backend (&key
                             (title "Orra")
@@ -102,13 +114,19 @@
 (defgeneric backend-draw-text (backend x y text))
 (defgeneric backend-draw-styled-text (backend x y text style-spans))
 (defgeneric backend-draw-box (backend x y width height label focusedp))
+(defgeneric backend-draw-caret (backend x y activep &key text-prefix))
+(defgeneric backend-draw-scrollbar (backend x y height thumb-y thumb-height))
 (defgeneric backend-layout-width (backend))
+(defgeneric backend-layout-height (backend))
 (defgeneric backend-grid-point (backend pixel-x pixel-y))
 (defgeneric backend-present (backend))
 (defgeneric run-backend (backend application))
 
 (defmethod backend-layout-width ((backend null-backend))
-  96)
+  (backend-null-layout-width backend))
+
+(defmethod backend-layout-height ((backend null-backend))
+  (backend-null-layout-height backend))
 
 (defmethod backend-grid-point ((backend null-backend) pixel-x pixel-y)
   (values pixel-x pixel-y))
@@ -125,6 +143,16 @@
 
 (defmethod backend-draw-box ((backend null-backend) x y width height label focusedp)
   (push (list :box x y width height label focusedp)
+        (backend-frame-operations backend)))
+
+(defmethod backend-draw-caret ((backend null-backend) x y activep
+                               &key (text-prefix ""))
+  (push (list :caret (+ x (length text-prefix)) y activep)
+        (backend-frame-operations backend)))
+
+(defmethod backend-draw-scrollbar
+    ((backend null-backend) x y height thumb-y thumb-height)
+  (push (list :scrollbar x y height thumb-y thumb-height)
         (backend-frame-operations backend)))
 
 (defmethod backend-present ((backend null-backend))
@@ -148,7 +176,19 @@
          (declare (ignore kind style-spans))
          (format (backend-stream backend)
                  "~&TEXT x=~D y=~D  ~A~%"
-                 x y text)))))
+                 x y text)))
+      (:caret
+       (destructuring-bind (kind x y activep) operation
+         (declare (ignore kind))
+         (format (backend-stream backend)
+                 "~&CARET x=~D y=~D ~:[ ~;*~]~%"
+                 x y activep)))
+      (:scrollbar
+       (destructuring-bind (kind x y height thumb-y thumb-height) operation
+         (declare (ignore kind))
+         (format (backend-stream backend)
+                 "~&SCROLLBAR x=~D y=~D h=~D thumb-y=~D thumb-h=~D~%"
+                 x y height thumb-y thumb-height)))))
   (finish-output (backend-stream backend)))
 
 (defun normalize-font-path (path)
@@ -264,6 +304,12 @@
                  (* 2 (backend-padding-x backend)))
               (backend-cell-width backend))))
 
+(defmethod backend-layout-height ((backend sdl2-backend))
+  (max 8
+       (floor (- (backend-pixel-height backend)
+                 (* 2 (backend-padding-y backend)))
+              (backend-row-height backend))))
+
 (defmethod backend-grid-point ((backend sdl2-backend) pixel-x pixel-y)
   (values (max 0
                (floor (- pixel-x (backend-padding-x backend))
@@ -310,6 +356,38 @@
           (sdl2:set-render-draw-color (backend-renderer backend) 222 231 255 255)
           (sdl2:set-render-draw-color (backend-renderer backend) 103 111 124 255))
       (sdl2:render-draw-rect (backend-renderer backend) rect))))
+
+(defmethod backend-draw-caret ((backend sdl2-backend) x y activep
+                               &key (text-prefix ""))
+  (let ((pixel-x (+ (logical-x->pixel backend x)
+                    (if (and (backend-font backend)
+                             (plusp (length text-prefix)))
+                        (nth-value 0
+                                   (sdl2-ttf:size-text (backend-font backend)
+                                                       text-prefix))
+                        0)))
+        (pixel-y (logical-y->pixel backend y))
+        (pixel-height (backend-row-height backend)))
+    (if activep
+        (sdl2:set-render-draw-color (backend-renderer backend) 245 194 102 255)
+        (sdl2:set-render-draw-color (backend-renderer backend) 222 231 255 255))
+    (sdl2:with-rects ((rect pixel-x pixel-y 2 pixel-height))
+      (sdl2:render-fill-rect (backend-renderer backend) rect))))
+
+(defmethod backend-draw-scrollbar
+    ((backend sdl2-backend) x y height thumb-y thumb-height)
+  (let ((pixel-x (logical-x->pixel backend x))
+        (pixel-y (logical-y->pixel backend y))
+        (pixel-width (backend-cell-width backend))
+        (pixel-height (logical-height->pixel backend height))
+        (thumb-pixel-y (logical-y->pixel backend (+ y thumb-y)))
+        (thumb-pixel-height (logical-height->pixel backend thumb-height)))
+    (sdl2:with-rects ((track pixel-x pixel-y pixel-width pixel-height)
+                      (thumb pixel-x thumb-pixel-y pixel-width thumb-pixel-height))
+      (sdl2:set-render-draw-color (backend-renderer backend) 41 45 54 255)
+      (sdl2:render-fill-rect (backend-renderer backend) track)
+      (sdl2:set-render-draw-color (backend-renderer backend) 133 141 157 255)
+      (sdl2:render-fill-rect (backend-renderer backend) thumb))))
 
 (defun release-ttf-surface (surface)
   ;; sdl2-ttf returns autocollected surfaces; cancel the finalizer before
@@ -409,28 +487,65 @@
         (object-id (cell-model cell))
         (application-active-editor-model-id *application*))))
 
+(defun editable-cell-text (cell)
+  (let ((model (cell-model cell)))
+    (typecase model
+      (paragraph (paragraph-text model))
+      (code-block (code-block-source model))
+      (t (cell-text cell)))))
+
+(defun focused-editable-cell-p (cell)
+  (and *application*
+       (not (editing-active-p *application*))
+       (eq (cell-role cell) :editable-content)
+       (cell-model cell)
+       (application-focused-model-id *application*)
+       (string= (object-id (cell-model cell))
+                (application-focused-model-id *application*))))
+
+(defun saved-editor-cursor-for-model (application model content)
+  (let ((state (gethash (object-id model)
+                        (application-editor-state-table application))))
+    (and state
+         (string= (getf state :content "") content)
+         (getf state :cursor))))
+
+(defun prospective-editor-cursor-for-model (application model content)
+  (or (saved-editor-cursor-for-model application model content)
+      (and (typep model 'code-block)
+           (code-block-selected-form-start-offset model))
+      (length content)))
+
+(defun cell-caret-cursor (cell)
+  (cond
+    ((active-editor-cell-p cell)
+     (text-buffer-cursor (application-active-text-buffer *application*)))
+    ((focused-editable-cell-p cell)
+     (let* ((model (cell-model cell))
+            (content (editable-cell-text cell)))
+       (prospective-editor-cursor-for-model *application* model content)))
+    (t nil)))
+
 (defun displayed-cell-text (cell)
   (let ((text (cell-text cell)))
     (if (active-editor-cell-p cell)
-        (cursor-display-string
-         (text-buffer-content (application-active-text-buffer *application*))
-         (text-buffer-cursor (application-active-text-buffer *application*)))
+        (text-buffer-content (application-active-text-buffer *application*))
         text)))
 
 (defun cell-visible-text-width (cell)
   (max 1 (- (bounds-width (cell-bounds cell)) 2)))
 
 (defun cell-visible-column-offset (cell line-index)
-  (if (active-editor-cell-p cell)
-      (multiple-value-bind (cursor-line cursor-column)
-          (buffer-cursor-line-column
-           (application-active-text-buffer *application*))
-        (if (= line-index cursor-line)
-            (max 0
-                 (- cursor-column
-                    (1- (cell-visible-text-width cell))))
-            0))
-      0))
+  (let ((cursor (cell-caret-cursor cell)))
+    (if cursor
+        (multiple-value-bind (cursor-line cursor-column)
+            (string-line-column (displayed-cell-text cell) cursor)
+          (if (= line-index cursor-line)
+              (max 0
+                   (- cursor-column
+                      (1- (cell-visible-text-width cell))))
+              0))
+        0)))
 
 (defun visible-line-text-for-cell (cell line line-index)
   (let ((start (min (length line)
@@ -506,12 +621,48 @@
 (defun visible-lines-for-cell (cell)
   (mapcar #'first (visible-lines-with-style-spans-for-cell cell)))
 
-(defun draw-cell-tree (backend cell)
+(defun row-visible-p (row viewport-y viewport-height)
+  (and (<= viewport-y row)
+       (< row (+ viewport-y viewport-height))))
+
+(defun cell-intersects-viewport-p (cell viewport-y viewport-height)
+  (let ((bounds (cell-bounds cell)))
+    (and (< (bounds-y bounds) (+ viewport-y viewport-height))
+         (< viewport-y (+ (bounds-y bounds)
+                          (bounds-height bounds))))))
+
+(defun draw-cell-caret (backend cell viewport-y viewport-height)
+  (let ((cursor (cell-caret-cursor cell)))
+    (when cursor
+      (multiple-value-bind (line column)
+          (string-line-column (displayed-cell-text cell) cursor)
+        (let* ((bounds (cell-bounds cell))
+               (row (+ (bounds-y bounds) 1 line))
+               (offset (cell-visible-column-offset cell line))
+               (text-line (nth line
+                               (split-lines (displayed-cell-text cell))))
+               (visible-column (max 0
+                                    (min (length text-line)
+                                         (- column offset))))
+               (text-prefix (subseq text-line
+                                    offset
+                                    (+ offset visible-column))))
+          (when (row-visible-p row viewport-y viewport-height)
+            (backend-draw-caret backend
+                                (+ (bounds-x bounds) 1)
+                                (- row viewport-y)
+                                (active-editor-cell-p cell)
+                                :text-prefix text-prefix)))))))
+
+(defun draw-cell-tree (backend cell &key (viewport-y 0) viewport-height)
   (let* ((bounds (cell-bounds cell))
          (x (bounds-x bounds))
          (y (bounds-y bounds))
          (width (bounds-width bounds))
          (height (bounds-height bounds))
+         (screen-y (- y viewport-y))
+         (viewport-height (or viewport-height
+                              most-positive-fixnum))
          (label (slot-value cell 'label))
          (focusedp (and *application*
                         (cell-model cell)
@@ -519,23 +670,33 @@
                         (string=
                          (object-id (cell-model cell))
                          (application-focused-model-id *application*)))))
-    (backend-draw-box backend x y width height label focusedp)
-    (when (typep cell 'text-cell)
-      (loop for (line style-spans) in (visible-lines-with-style-spans-for-cell cell)
-            for row from 0
-            do (when (plusp (length line))
-                 (if style-spans
-                     (backend-draw-styled-text backend
-                                               (+ x 1)
-                                               (+ y 1 row)
-                                               line
-                                               style-spans)
-                     (backend-draw-text backend
-                                        (+ x 1)
-                                        (+ y 1 row)
-                                        line)))))
-    (dolist (child (children-of cell))
-      (draw-cell-tree backend child))))
+    (when (cell-intersects-viewport-p cell viewport-y viewport-height)
+      (backend-draw-box backend x screen-y width height label focusedp)
+      (when (typep cell 'text-cell)
+        (loop for (line style-spans) in (visible-lines-with-style-spans-for-cell cell)
+              for row from 0
+              for logical-row = (+ y 1 row)
+              do (when (and (plusp (length line))
+                            (row-visible-p logical-row
+                                           viewport-y
+                                           viewport-height))
+                   (if style-spans
+                       (backend-draw-styled-text backend
+                                                 (+ x 1)
+                                                 (- logical-row viewport-y)
+                                                 line
+                                                 style-spans)
+                       (backend-draw-text backend
+                                          (+ x 1)
+                                          (- logical-row viewport-y)
+                                          line)))))
+      (when (typep cell 'text-cell)
+        (draw-cell-caret backend cell viewport-y viewport-height))
+      (dolist (child (children-of cell))
+        (draw-cell-tree backend
+                        child
+                        :viewport-y viewport-y
+                        :viewport-height viewport-height)))))
 
 (defmethod run-backend ((backend null-backend) application)
   (render-application application)
@@ -603,6 +764,10 @@
            (move-active-buffer-cursor-home application))
           ((sdl2:scancode= scancode :scancode-end)
            (move-active-buffer-cursor-end application))
+          ((sdl2:scancode= scancode :scancode-pageup)
+           (scroll-application-page application -1))
+          ((sdl2:scancode= scancode :scancode-pagedown)
+           (scroll-application-page application 1))
           ((sdl2:scancode= scancode :scancode-left)
            (move-active-buffer-cursor-left application))
           ((sdl2:scancode= scancode :scancode-right)
@@ -658,6 +823,10 @@
           ((or (sdl2:scancode= scancode :scancode-k)
                (sdl2:scancode= scancode :scancode-up))
            (focus-previous-model application))
+          ((sdl2:scancode= scancode :scancode-pageup)
+           (scroll-application-page application -1))
+          ((sdl2:scancode= scancode :scancode-pagedown)
+           (scroll-application-page application 1))
           ((sdl2:scancode= scancode :scancode-i)
            (begin-editing-focused-model application))
           ((and (sdl2:scancode= scancode :scancode-return)
@@ -702,6 +871,8 @@
              (sdl2:with-event-loop (:method :poll)
                (:keydown (:keysym keysym)
 			 (handle-sdl2-keydown application keysym))
+               (:mousewheel (:y y)
+                            (scroll-application application (* -3 y)))
                (:mousebuttondown (:x x :y y)
 				 (focus-model-at-pixel application x y))
                (:idle ()

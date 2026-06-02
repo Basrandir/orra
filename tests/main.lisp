@@ -43,6 +43,13 @@
                   (string= (fourth operation) text)))
            (orra::backend-frame-operations backend)))
 
+(defun find-frame-operation (backend kind &optional predicate)
+  (find-if (lambda (operation)
+             (and (eq (first operation) kind)
+                  (or (null predicate)
+                      (funcall predicate operation))))
+           (orra::backend-frame-operations backend)))
+
 (defun find-first-node-of-type (root type)
   (labels ((visit (node)
              (or (when (typep node type)
@@ -754,20 +761,100 @@
                 (orra::application-active-text-buffer application)))
           "Cursor placement should respect the clicked line and column."))))
 
+(deftest focused-editable-cell-renders-prospective-caret ()
+  (let* ((backend (make-null-backend :stream (make-string-output-stream)))
+         (application (make-application :backend backend)))
+    (render-application application)
+    (let* ((model (focused-model application))
+           (cell (find-text-cell-for-model (application-root-cell application)
+                                           (object-id model)))
+           (caret (find-frame-operation backend
+                                        :caret
+                                        (lambda (operation)
+                                          (not (fourth operation))))))
+      (is caret
+          "Focused editable cells should show the insertion caret before editing starts.")
+      (is (= (second caret)
+             (+ (orra::bounds-x (cell-bounds cell))
+                1
+                (length (paragraph-text model))))
+          "The prospective caret should render immediately after its text prefix."))))
+
 (deftest long-line-editing-keeps-cursor-visible ()
-  (let ((application (make-application :backend (make-null-backend)))
-        (content (with-output-to-string (stream)
-                   (loop for index from 0 below 80
-                         do (format stream "~2,'0D" index)))))
+  (let* ((backend (make-null-backend :stream (make-string-output-stream)))
+         (application (make-application :backend backend))
+         (content (with-output-to-string (stream)
+                    (loop for index from 0 below 80
+                          do (format stream "~2,'0D" index)))))
     (setf (paragraph-text (focused-model application)) content)
     (begin-editing-focused-model application)
     (render-application application)
     (let ((*application* application))
       (let* ((cell (find-text-cell-for-model (application-root-cell application)
                                              (object-id (focused-model application))))
-             (visible-line (first (orra::visible-lines-for-cell cell))))
-        (is (search "|" visible-line)
-            "The active cursor should stay visible even when the line is wider than the cell.")))))
+             (bounds (cell-bounds cell))
+             (visible-line (first (orra::visible-lines-for-cell cell)))
+             (caret (find-frame-operation backend
+                                          :caret
+                                          (lambda (operation)
+                                            (fourth operation)))))
+        (is (not (search "|" visible-line))
+            "Caret rendering should not mutate visible text.")
+        (is caret
+            "Editing should draw an active caret operation.")
+        (is (< (second caret)
+               (+ (orra::bounds-x bounds)
+                  (orra::bounds-width bounds)))
+            "The active caret should stay horizontally inside the cell.")))))
+
+(deftest viewport-scroll-renders-offscreen-content ()
+  (let* ((backend (make-null-backend :stream (make-string-output-stream)
+                                     :layout-height 14))
+         (application (make-application :backend backend))
+         (bottom-text "bottom marker")
+         (bottom-node nil))
+    (loop for index from 0 below 20
+          do (invoke-command application
+                             'append-paragraph
+                             (format nil "filler ~D" index)))
+    (setf bottom-node
+          (invoke-command application 'append-paragraph bottom-text))
+    (render-application application)
+    (is (find-frame-operation backend :scrollbar)
+        "Overflowing layouts should render a scrollbar.")
+    (is (null (find-frame-operation
+               backend
+               :text
+               (lambda (operation)
+                 (string= (fourth operation) bottom-text))))
+        "Offscreen content should not render before scrolling.")
+    (let ((cell (find-text-cell-for-model (application-root-cell application)
+                                          (object-id bottom-node))))
+      (scroll-application application
+                          (orra::bounds-y (cell-bounds cell))))
+    (render-application application)
+    (is (plusp (application-viewport-y application))
+        "Scrolling should update the logical viewport.")
+    (is (find-frame-operation
+         backend
+         :text
+         (lambda (operation)
+           (string= (fourth operation) bottom-text)))
+        "Scrolled content should render once it enters the viewport.")))
+
+(deftest focus-navigation-scrolls-focused-cell-into-view ()
+  (let* ((backend (make-null-backend :stream (make-string-output-stream)
+                                     :layout-height 14))
+         (application (make-application :backend backend)))
+    (loop for index from 0 below 20
+          do (invoke-command application
+                             'append-paragraph
+                             (format nil "filler ~D" index)))
+    (render-application application)
+    (loop repeat 24
+          do (focus-next-model application))
+    (is (plusp (application-viewport-y application))
+        "Focus navigation should scroll the focused cell into view.")))
 
 (deftest edit-history-persists-across-editing-sessions ()
   (let* ((application (make-application :backend (make-null-backend)))
