@@ -292,6 +292,51 @@
   (is (string= "/" (orra::printable-key-text-from-sym 47 nil nil))
       "Printable punctuation should round-trip."))
 
+(deftest application-keymap-dispatches-focus-navigation ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (initial-id (object-id (focused-model application))))
+    (dispatch-application-key application
+                              (make-key-event :key :down))
+    (is (not (string= initial-id
+                      (object-id (focused-model application))))
+        "Focus navigation should be dispatched through the application keymap.")))
+
+(deftest application-keymap-dispatches-edit-selection ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (begin-editing-focused-model application)
+    (dispatch-application-key application
+                              (make-key-event :key :home))
+    (dispatch-application-key application
+                              (make-key-event :key :right :shiftp t))
+    (dispatch-application-key application
+                              (make-key-event :key :right :shiftp t))
+    (is (string= "Th"
+                 (text-buffer-selected-text
+                  (orra::application-active-text-buffer application)))
+        "Selection movement should be driven by keymap dispatch.")))
+
+(deftest application-keymap-can-be-overridden-per-application ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (initial-id (object-id (focused-model application))))
+    (setf (gethash (orra::key-binding-descriptor :focus :j nil nil)
+                   (application-keymap application))
+          (make-instance 'orra::key-binding
+                         :context :focus
+                         :key :j
+                         :documentation "Test override."
+                         :function (lambda (application event)
+                                     (declare (ignore event))
+                                     (setf (application-viewport-y application)
+                                           3)
+                                     t)))
+    (dispatch-application-key application
+                              (make-key-event :key :j))
+    (is (= 3 (application-viewport-y application))
+        "Application keymaps should be overridable as runtime data.")
+    (is (string= initial-id
+                 (object-id (focused-model application)))
+        "Overriding a binding should replace the installed behavior.")))
+
 (deftest common-lisp-source-parse-info ()
   (let ((info (parse-common-lisp-source
                (format nil "(list :hello :orra)~%(+ 20 22)"))))

@@ -5,6 +5,7 @@
    #:application
    #:application-backend
    #:application-commands
+   #:application-keymap
    #:application-registry
    #:application-root-cell
    #:application-save-path
@@ -55,11 +56,13 @@
    #:common-lisp-source-syntax-tokens
    #:container-cell
    #:define-command
+   #:define-key-binding
    #:evaluate-code-block
    #:find-object
    #:begin-editing-focused-model
    #:delete-active-buffer-backward
    #:delete-active-buffer-forward
+   #:dispatch-application-key
    #:select-child-code-form
    #:delete-code-form
    #:editing-active-p
@@ -68,8 +71,24 @@
    #:focused-model
    #:fresh-id
    #:invoke-command
+   #:key-binding
+   #:key-binding-context
+   #:key-binding-control
+   #:key-binding-documentation
+   #:key-binding-function
+   #:key-binding-key
+   #:key-binding-shift
+   #:key-event
+   #:key-event-altp
+   #:key-event-controlp
+   #:key-event-key
+   #:key-event-metap
+   #:key-event-shiftp
+   #:key-event-text
    #:insert-into-active-buffer
    #:list-commands
+   #:list-key-bindings
+   #:make-key-event
    #:list-block
    #:list-block-items
    #:list-block-ordered-p

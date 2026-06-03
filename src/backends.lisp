@@ -788,153 +788,52 @@
   (render-application application)
   backend)
 
+(defun sdl2-scancode-key (keysym)
+  (let ((scancode (sdl2:scancode-value keysym)))
+    (cond
+      ((sdl2:scancode= scancode :scancode-escape) :escape)
+      ((sdl2:scancode= scancode :scancode-backspace) :backspace)
+      ((sdl2:scancode= scancode :scancode-delete) :delete)
+      ((sdl2:scancode= scancode :scancode-home) :home)
+      ((sdl2:scancode= scancode :scancode-end) :end)
+      ((sdl2:scancode= scancode :scancode-pageup) :pageup)
+      ((sdl2:scancode= scancode :scancode-pagedown) :pagedown)
+      ((sdl2:scancode= scancode :scancode-left) :left)
+      ((sdl2:scancode= scancode :scancode-right) :right)
+      ((sdl2:scancode= scancode :scancode-up) :up)
+      ((sdl2:scancode= scancode :scancode-down) :down)
+      ((sdl2:scancode= scancode :scancode-return) :return)
+      ((sdl2:scancode= scancode :scancode-leftbracket) :leftbracket)
+      ((sdl2:scancode= scancode :scancode-rightbracket) :rightbracket)
+      ((sdl2:scancode= scancode :scancode-q) :q)
+      ((sdl2:scancode= scancode :scancode-j) :j)
+      ((sdl2:scancode= scancode :scancode-k) :k)
+      ((sdl2:scancode= scancode :scancode-i) :i)
+      ((sdl2:scancode= scancode :scancode-e) :e)
+      ((sdl2:scancode= scancode :scancode-s) :s)
+      ((sdl2:scancode= scancode :scancode-r) :r)
+      ((sdl2:scancode= scancode :scancode-v) :v)
+      ((sdl2:scancode= scancode :scancode-x) :x)
+      ((sdl2:scancode= scancode :scancode-w) :w)
+      ((sdl2:scancode= scancode :scancode-u) :u)
+      ((sdl2:scancode= scancode :scancode-y) :y)
+      ((sdl2:scancode= scancode :scancode-z) :z)
+      (t nil))))
+
 (defun handle-sdl2-keydown (application keysym)
-  (let* ((scancode (sdl2:scancode-value keysym))
-         (modifiers (sdl2:mod-value keysym))
+  (let* ((modifiers (sdl2:mod-value keysym))
          (controlp (sdl2:mod-value-p modifiers :lctrl :rctrl))
          (shiftp (sdl2:mod-value-p modifiers :lshift :rshift))
-         (printable-text (printable-key-text keysym)))
-    (if (editing-active-p application)
-        (cond
-          ((and controlp
-                (sdl2:scancode= scancode :scancode-z)
-                shiftp)
-           (redo-active-buffer-edit application))
-          ((and controlp
-                (sdl2:scancode= scancode :scancode-z))
-           (undo-active-buffer-edit application))
-          ((and controlp
-                (sdl2:scancode= scancode :scancode-y))
-           (redo-active-buffer-edit application))
-          ((and controlp
-                (typep (active-editor-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-leftbracket))
-           (step-focused-code-form-selection application -1))
-          ((and controlp
-                (typep (active-editor-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-rightbracket))
-           (step-focused-code-form-selection application 1))
-          ((and controlp
-                (typep (active-editor-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-left))
-           (shift-focused-code-form-depth application -1))
-          ((and controlp
-                (typep (active-editor-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-right))
-           (shift-focused-code-form-depth application 1))
-          ((and controlp
-                (typep (active-editor-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-x))
-           (edit-focused-code-form-structurally
-            application
-            #'delete-selected-code-block-form))
-          ((and controlp
-                (typep (active-editor-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-w))
-           (edit-focused-code-form-structurally
-            application
-            #'wrap-selected-code-block-form))
-          ((and controlp
-                (typep (active-editor-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-u))
-           (edit-focused-code-form-structurally
-            application
-            #'splice-selected-code-block-form))
-          ((sdl2:scancode= scancode :scancode-escape)
-           (stop-editing application))
-          ((sdl2:scancode= scancode :scancode-backspace)
-           (delete-active-buffer-backward application))
-          ((sdl2:scancode= scancode :scancode-delete)
-           (delete-active-buffer-forward application))
-          ((sdl2:scancode= scancode :scancode-home)
-           (move-active-buffer-cursor-home application
-                                           :extend-selection shiftp))
-          ((sdl2:scancode= scancode :scancode-end)
-           (move-active-buffer-cursor-end application
-                                          :extend-selection shiftp))
-          ((sdl2:scancode= scancode :scancode-pageup)
-           (scroll-application-page application -1))
-          ((sdl2:scancode= scancode :scancode-pagedown)
-           (scroll-application-page application 1))
-          ((sdl2:scancode= scancode :scancode-left)
-           (move-active-buffer-cursor-left application
-                                           :extend-selection shiftp))
-          ((sdl2:scancode= scancode :scancode-right)
-           (move-active-buffer-cursor-right application
-                                            :extend-selection shiftp))
-          ((sdl2:scancode= scancode :scancode-up)
-           (move-active-buffer-cursor-up application
-                                         :extend-selection shiftp))
-          ((sdl2:scancode= scancode :scancode-down)
-           (move-active-buffer-cursor-down application
-                                           :extend-selection shiftp))
-          ((sdl2:scancode= scancode :scancode-return)
-           (insert-into-active-buffer application (string #\Newline)))
-          (printable-text
-           (insert-into-active-buffer application printable-text)))
-        (cond
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-leftbracket))
-           (step-focused-code-form-selection application -1))
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-rightbracket))
-           (step-focused-code-form-selection application 1))
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-left))
-           (shift-focused-code-form-depth application -1))
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-right))
-           (shift-focused-code-form-depth application 1))
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-x))
-           (edit-focused-code-form-structurally
-            application
-            #'delete-selected-code-block-form))
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-w))
-           (edit-focused-code-form-structurally
-            application
-            #'wrap-selected-code-block-form))
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-u))
-           (edit-focused-code-form-structurally
-            application
-            #'splice-selected-code-block-form))
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-v))
-           (toggle-focused-code-structure application))
-          ((and (typep (focused-model application) 'code-block)
-                (sdl2:scancode= scancode :scancode-e))
-           (evaluate-focused-code-block application))
-          ((or (sdl2:scancode= scancode :scancode-q)
-               (sdl2:scancode= scancode :scancode-escape))
-           (quit-application application))
-          ((or (sdl2:scancode= scancode :scancode-j)
-               (sdl2:scancode= scancode :scancode-down))
-           (focus-next-model application))
-          ((or (sdl2:scancode= scancode :scancode-k)
-               (sdl2:scancode= scancode :scancode-up))
-           (focus-previous-model application))
-          ((sdl2:scancode= scancode :scancode-pageup)
-           (scroll-application-page application -1))
-          ((sdl2:scancode= scancode :scancode-pagedown)
-           (scroll-application-page application 1))
-          ((sdl2:scancode= scancode :scancode-i)
-           (begin-editing-focused-model application))
-          ((and (sdl2:scancode= scancode :scancode-return)
-                (typep (focused-model application) 'paragraph))
-           (begin-editing-focused-model application))
-          ((or (sdl2:scancode= scancode :scancode-return)
-               (sdl2:scancode= scancode :scancode-e))
-           (evaluate-focused-code-block application))
-          ((sdl2:scancode= scancode :scancode-s)
-           (invoke-command application 'save-workspace))
-          ((sdl2:scancode= scancode :scancode-r)
-           (render-application application))
-          ((and printable-text
-                (editable-model-p (focused-model application)))
-           (begin-editing-focused-model application)
-           (insert-into-active-buffer application printable-text))))))
+         (altp (sdl2:mod-value-p modifiers :lalt :ralt))
+         (metap (sdl2:mod-value-p modifiers :lgui :rgui)))
+    (dispatch-application-key
+     application
+     (make-key-event :key (sdl2-scancode-key keysym)
+                     :text (printable-key-text keysym)
+                     :controlp controlp
+                     :shiftp shiftp
+                     :altp altp
+                     :metap metap))))
 
 (defun sync-sdl2-text-input-state (backend application)
   (let ((editingp (editing-active-p application)))

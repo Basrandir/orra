@@ -9,6 +9,9 @@
    (commands
     :initarg :commands
     :accessor application-commands)
+   (keymap
+    :initarg :keymap
+    :accessor application-keymap)
    (workspace
     :initarg :workspace
     :accessor application-workspace)
@@ -436,6 +439,35 @@
 
 (defun focus-previous-model (application)
   (focus-step application -1))
+
+(defun application-key-context (application)
+  (if (editing-active-p application) :edit :focus))
+
+(defun dispatch-application-key (application event)
+  (let* ((context (application-key-context application))
+         (binding (find-key-binding application
+                                    context
+                                    (key-event-key event)
+                                    (key-event-controlp event)
+                                    (key-event-shiftp event))))
+    (or (and binding
+             (funcall (key-binding-function binding) application event))
+        (handle-unbound-application-key application event))))
+
+(defun handle-unbound-application-key (application event)
+  (let ((text (key-event-text event)))
+    (cond
+      ((and text
+            (editing-active-p application))
+       (insert-into-active-buffer application text)
+       t)
+      ((and text
+            (not (key-event-controlp event))
+            (editable-model-p (focused-model application)))
+       (begin-editing-focused-model application)
+       (insert-into-active-buffer application text)
+       t)
+      (t nil))))
 
 (defun cell-contains-point-p (cell x y)
   (let ((bounds (cell-bounds cell)))
@@ -913,6 +945,7 @@
          (application (make-instance 'application
                                      :registry registry
                                      :commands (make-hash-table :test #'equal)
+                                     :keymap (make-hash-table :test #'equal)
                                      :editor-state-table
                                      (make-hash-table :test #'equal)
                                      :workspace workspace
@@ -920,6 +953,7 @@
                                      :save-path save-path)))
     (register-tree registry workspace)
     (install-defined-commands application)
+    (install-defined-key-bindings application)
     (rebuild-root-cell application)
     (ensure-valid-focus application)
     (rebuild-root-cell application)
@@ -1031,6 +1065,346 @@
                                 (focused-model application)
                                 operator))
 
+(define-key-binding (:edit :z :control t)
+    (application event)
+  "Undo the active text edit."
+  (declare (ignore event))
+  (undo-active-buffer-edit application)
+  t)
+
+(define-key-binding (:edit :z :control t :shift t)
+    (application event)
+  "Redo the active text edit."
+  (declare (ignore event))
+  (redo-active-buffer-edit application)
+  t)
+
+(define-key-binding (:edit :y :control t)
+    (application event)
+  "Redo the active text edit."
+  (declare (ignore event))
+  (redo-active-buffer-edit application)
+  t)
+
+(define-key-binding (:edit :leftbracket :control t)
+    (application event)
+  "Move to the previous structural code form while editing."
+  (declare (ignore event))
+  (when (typep (active-editor-model application) 'code-block)
+    (step-focused-code-form-selection application -1)
+    t))
+
+(define-key-binding (:edit :rightbracket :control t)
+    (application event)
+  "Move to the next structural code form while editing."
+  (declare (ignore event))
+  (when (typep (active-editor-model application) 'code-block)
+    (step-focused-code-form-selection application 1)
+    t))
+
+(define-key-binding (:edit :left :control t)
+    (application event)
+  "Move code structural selection to its parent while editing."
+  (declare (ignore event))
+  (when (typep (active-editor-model application) 'code-block)
+    (shift-focused-code-form-depth application -1)
+    t))
+
+(define-key-binding (:edit :right :control t)
+    (application event)
+  "Move code structural selection to its child while editing."
+  (declare (ignore event))
+  (when (typep (active-editor-model application) 'code-block)
+    (shift-focused-code-form-depth application 1)
+    t))
+
+(define-key-binding (:edit :x :control t)
+    (application event)
+  "Delete the selected structural code form while editing."
+  (declare (ignore event))
+  (when (typep (active-editor-model application) 'code-block)
+    (edit-focused-code-form-structurally
+     application
+     #'delete-selected-code-block-form)
+    t))
+
+(define-key-binding (:edit :w :control t)
+    (application event)
+  "Wrap the selected structural code form while editing."
+  (declare (ignore event))
+  (when (typep (active-editor-model application) 'code-block)
+    (edit-focused-code-form-structurally
+     application
+     #'wrap-selected-code-block-form)
+    t))
+
+(define-key-binding (:edit :u :control t)
+    (application event)
+  "Splice the selected structural code form while editing."
+  (declare (ignore event))
+  (when (typep (active-editor-model application) 'code-block)
+    (edit-focused-code-form-structurally
+     application
+     #'splice-selected-code-block-form)
+    t))
+
+(define-key-binding (:edit :escape)
+    (application event)
+  "Stop editing."
+  (declare (ignore event))
+  (stop-editing application)
+  t)
+
+(define-key-binding (:edit :backspace)
+    (application event)
+  "Delete backward in the active text buffer."
+  (declare (ignore event))
+  (delete-active-buffer-backward application)
+  t)
+
+(define-key-binding (:edit :delete)
+    (application event)
+  "Delete forward in the active text buffer."
+  (declare (ignore event))
+  (delete-active-buffer-forward application)
+  t)
+
+(define-key-binding (:edit :home :shift :any)
+    (application event)
+  "Move to the beginning of the line."
+  (move-active-buffer-cursor-home application
+                                  :extend-selection
+                                  (key-event-shiftp event))
+  t)
+
+(define-key-binding (:edit :end :shift :any)
+    (application event)
+  "Move to the end of the line."
+  (move-active-buffer-cursor-end application
+                                 :extend-selection
+                                 (key-event-shiftp event))
+  t)
+
+(define-key-binding (:edit :pageup)
+    (application event)
+  "Scroll up one page while editing."
+  (declare (ignore event))
+  (scroll-application-page application -1)
+  t)
+
+(define-key-binding (:edit :pagedown)
+    (application event)
+  "Scroll down one page while editing."
+  (declare (ignore event))
+  (scroll-application-page application 1)
+  t)
+
+(define-key-binding (:edit :left :shift :any)
+    (application event)
+  "Move the active cursor left."
+  (move-active-buffer-cursor-left application
+                                  :extend-selection
+                                  (key-event-shiftp event))
+  t)
+
+(define-key-binding (:edit :right :shift :any)
+    (application event)
+  "Move the active cursor right."
+  (move-active-buffer-cursor-right application
+                                   :extend-selection
+                                   (key-event-shiftp event))
+  t)
+
+(define-key-binding (:edit :up :shift :any)
+    (application event)
+  "Move the active cursor up."
+  (move-active-buffer-cursor-up application
+                                :extend-selection
+                                (key-event-shiftp event))
+  t)
+
+(define-key-binding (:edit :down :shift :any)
+    (application event)
+  "Move the active cursor down."
+  (move-active-buffer-cursor-down application
+                                  :extend-selection
+                                  (key-event-shiftp event))
+  t)
+
+(define-key-binding (:edit :return)
+    (application event)
+  "Insert a newline."
+  (declare (ignore event))
+  (insert-into-active-buffer application (string #\Newline))
+  t)
+
+(define-key-binding (:focus :leftbracket)
+    (application event)
+  "Move to the previous structural code form."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (step-focused-code-form-selection application -1)
+    t))
+
+(define-key-binding (:focus :rightbracket)
+    (application event)
+  "Move to the next structural code form."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (step-focused-code-form-selection application 1)
+    t))
+
+(define-key-binding (:focus :left)
+    (application event)
+  "Move code structural selection to its parent."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (shift-focused-code-form-depth application -1)
+    t))
+
+(define-key-binding (:focus :right)
+    (application event)
+  "Move code structural selection to its child."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (shift-focused-code-form-depth application 1)
+    t))
+
+(define-key-binding (:focus :x)
+    (application event)
+  "Delete the selected structural code form."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (edit-focused-code-form-structurally
+     application
+     #'delete-selected-code-block-form)
+    t))
+
+(define-key-binding (:focus :w)
+    (application event)
+  "Wrap the selected structural code form."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (edit-focused-code-form-structurally
+     application
+     #'wrap-selected-code-block-form)
+    t))
+
+(define-key-binding (:focus :u)
+    (application event)
+  "Splice the selected structural code form."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (edit-focused-code-form-structurally
+     application
+     #'splice-selected-code-block-form)
+    t))
+
+(define-key-binding (:focus :v)
+    (application event)
+  "Toggle structural code preview."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (toggle-focused-code-structure application)
+    t))
+
+(define-key-binding (:focus :e)
+    (application event)
+  "Evaluate the focused code block."
+  (declare (ignore event))
+  (when (typep (focused-model application) 'code-block)
+    (evaluate-focused-code-block application)
+    t))
+
+(define-key-binding (:focus :q)
+    (application event)
+  "Quit the application."
+  (declare (ignore event))
+  (quit-application application)
+  t)
+
+(define-key-binding (:focus :escape)
+    (application event)
+  "Quit the application."
+  (declare (ignore event))
+  (quit-application application)
+  t)
+
+(define-key-binding (:focus :j)
+    (application event)
+  "Focus the next model."
+  (declare (ignore event))
+  (focus-next-model application)
+  t)
+
+(define-key-binding (:focus :down)
+    (application event)
+  "Focus the next model."
+  (declare (ignore event))
+  (focus-next-model application)
+  t)
+
+(define-key-binding (:focus :k)
+    (application event)
+  "Focus the previous model."
+  (declare (ignore event))
+  (focus-previous-model application)
+  t)
+
+(define-key-binding (:focus :up)
+    (application event)
+  "Focus the previous model."
+  (declare (ignore event))
+  (focus-previous-model application)
+  t)
+
+(define-key-binding (:focus :pageup)
+    (application event)
+  "Scroll up one page."
+  (declare (ignore event))
+  (scroll-application-page application -1)
+  t)
+
+(define-key-binding (:focus :pagedown)
+    (application event)
+  "Scroll down one page."
+  (declare (ignore event))
+  (scroll-application-page application 1)
+  t)
+
+(define-key-binding (:focus :i)
+    (application event)
+  "Begin editing the focused model."
+  (declare (ignore event))
+  (begin-editing-focused-model application)
+  t)
+
+(define-key-binding (:focus :return)
+    (application event)
+  "Begin editing a paragraph or evaluate code."
+  (declare (ignore event))
+  (cond
+    ((typep (focused-model application) 'paragraph)
+     (begin-editing-focused-model application)
+     t)
+    ((typep (focused-model application) 'code-block)
+     (evaluate-focused-code-block application)
+     t)))
+
+(define-key-binding (:focus :s)
+    (application event)
+  "Save the current workspace."
+  (declare (ignore event))
+  (invoke-command application 'save-workspace)
+  t)
+
+(define-key-binding (:focus :r)
+    (application event)
+  "Render the application."
+  (declare (ignore event))
+  (render-application application)
+  t)
+
 (define-command render (application)
   "Rebuild and render the current cell tree."
   (render-application application))
@@ -1046,6 +1420,10 @@
 (define-command list-commands (application)
   "Return the installed commands."
   (list-commands application))
+
+(define-command list-key-bindings (application)
+  "Return the installed key bindings."
+  (list-key-bindings application))
 
 (define-command append-paragraph (application text)
   "Append a new paragraph to the default section."
