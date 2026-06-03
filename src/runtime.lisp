@@ -210,6 +210,13 @@
                                       (text-buffer-cursor buffer))
                               (format nil "edit-line: ~D" (1+ line))
                               (format nil "edit-column: ~D" (1+ column))
+                              (format nil "edit-selection: ~A"
+                                      (or (and (text-buffer-selected-text buffer)
+                                               (preview-string
+                                                (printable-string
+                                                 (text-buffer-selected-text
+                                                  buffer))))
+                                          "-"))
                               (format nil "edit-lines: ~D"
                                       (text-buffer-line-count buffer))
                               (format nil "edit-length: ~D"
@@ -243,7 +250,7 @@
   (let ((model (focused-model application)))
     (if (editing-active-p application)
         (format nil
-                "EDIT ~A ~A  |  type to edit  |  arrows move  |  PgUp/PgDn scroll  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  Esc stop"
+                "EDIT ~A ~A  |  type to edit  |  arrows move  |  Shift+arrows select  |  PgUp/PgDn scroll  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  Esc stop"
                 (if model (object-kind model) :none)
                 (or (application-active-editor-model-id application) "-")
                 (code-block-edit-status-controls model))
@@ -648,7 +655,10 @@
 
 (defun editor-state-snapshot (content cursor)
   (list content
-        (clamp-editor-cursor content cursor)))
+        (clamp-editor-cursor content cursor)
+        nil
+        nil
+        nil))
 
 (defun editor-state-from-content (content cursor undo-stack redo-stack)
   (list :content content
@@ -713,12 +723,14 @@
            (old-content (text-buffer-content buffer))
            (cursor (text-buffer-cursor buffer))
            (text (string text)))
-      (insert-buffer-text buffer text)
-      (sync-active-buffer-to-model application
-                                   :previous-content old-content
-                                   :edit-start cursor
-                                   :edit-end cursor
-                                   :replacement text)
+      (multiple-value-bind (selection-start selection-end)
+          (text-buffer-selection-range buffer)
+        (insert-buffer-text buffer text)
+        (sync-active-buffer-to-model application
+                                     :previous-content old-content
+                                     :edit-start (or selection-start cursor)
+                                     :edit-end (or selection-end cursor)
+                                     :replacement text))
       (ensure-active-caret-visible application)))
   application)
 
@@ -727,12 +739,15 @@
     (let* ((buffer (application-active-text-buffer application))
            (old-content (text-buffer-content buffer))
            (cursor (text-buffer-cursor buffer)))
-      (delete-buffer-backward buffer)
-      (sync-active-buffer-to-model application
-                                   :previous-content old-content
-                                   :edit-start (max 0 (1- cursor))
-                                   :edit-end cursor
-                                   :replacement "")
+      (multiple-value-bind (selection-start selection-end)
+          (text-buffer-selection-range buffer)
+        (delete-buffer-backward buffer)
+        (sync-active-buffer-to-model application
+                                     :previous-content old-content
+                                     :edit-start (or selection-start
+                                                     (max 0 (1- cursor)))
+                                     :edit-end (or selection-end cursor)
+                                     :replacement ""))
       (ensure-active-caret-visible application)))
   application)
 
@@ -741,54 +756,63 @@
     (let* ((buffer (application-active-text-buffer application))
            (old-content (text-buffer-content buffer))
            (cursor (text-buffer-cursor buffer)))
-      (delete-buffer-forward buffer)
-      (sync-active-buffer-to-model application
-                                   :previous-content old-content
-                                   :edit-start cursor
-                                   :edit-end (min (length old-content)
-                                                  (1+ cursor))
-                                   :replacement "")
+      (multiple-value-bind (selection-start selection-end)
+          (text-buffer-selection-range buffer)
+        (delete-buffer-forward buffer)
+        (sync-active-buffer-to-model application
+                                     :previous-content old-content
+                                     :edit-start (or selection-start cursor)
+                                     :edit-end (or selection-end
+                                                   (min (length old-content)
+                                                        (1+ cursor)))
+                                     :replacement ""))
       (ensure-active-caret-visible application)))
   application)
 
-(defun move-active-buffer-cursor-left (application)
+(defun move-active-buffer-cursor-left (application &key extend-selection)
   (when (editing-active-p application)
-    (move-buffer-cursor-left (application-active-text-buffer application))
+    (move-buffer-cursor-left (application-active-text-buffer application)
+                             :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
     (ensure-active-caret-visible application))
   application)
 
-(defun move-active-buffer-cursor-right (application)
+(defun move-active-buffer-cursor-right (application &key extend-selection)
   (when (editing-active-p application)
-    (move-buffer-cursor-right (application-active-text-buffer application))
+    (move-buffer-cursor-right (application-active-text-buffer application)
+                              :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
     (ensure-active-caret-visible application))
   application)
 
-(defun move-active-buffer-cursor-up (application)
+(defun move-active-buffer-cursor-up (application &key extend-selection)
   (when (editing-active-p application)
-    (move-buffer-cursor-up (application-active-text-buffer application))
+    (move-buffer-cursor-up (application-active-text-buffer application)
+                           :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
     (ensure-active-caret-visible application))
   application)
 
-(defun move-active-buffer-cursor-down (application)
+(defun move-active-buffer-cursor-down (application &key extend-selection)
   (when (editing-active-p application)
-    (move-buffer-cursor-down (application-active-text-buffer application))
+    (move-buffer-cursor-down (application-active-text-buffer application)
+                             :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
     (ensure-active-caret-visible application))
   application)
 
-(defun move-active-buffer-cursor-home (application)
+(defun move-active-buffer-cursor-home (application &key extend-selection)
   (when (editing-active-p application)
-    (move-buffer-cursor-home (application-active-text-buffer application))
+    (move-buffer-cursor-home (application-active-text-buffer application)
+                             :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
     (ensure-active-caret-visible application))
   application)
 
-(defun move-active-buffer-cursor-end (application)
+(defun move-active-buffer-cursor-end (application &key extend-selection)
   (when (editing-active-p application)
-    (move-buffer-cursor-end (application-active-text-buffer application))
+    (move-buffer-cursor-end (application-active-text-buffer application)
+                            :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
     (ensure-active-caret-visible application))
   application)

@@ -114,6 +114,8 @@
 (defgeneric backend-draw-text (backend x y text))
 (defgeneric backend-draw-styled-text (backend x y text style-spans))
 (defgeneric backend-draw-box (backend x y width height label focusedp))
+(defgeneric backend-draw-selection
+    (backend x y &key text-prefix selected-text trailing-cell-p))
 (defgeneric backend-draw-caret (backend x y activep &key text-prefix))
 (defgeneric backend-draw-scrollbar (backend x y height thumb-y thumb-height))
 (defgeneric backend-layout-width (backend))
@@ -143,6 +145,16 @@
 
 (defmethod backend-draw-box ((backend null-backend) x y width height label focusedp)
   (push (list :box x y width height label focusedp)
+        (backend-frame-operations backend)))
+
+(defmethod backend-draw-selection ((backend null-backend) x y
+                                   &key (text-prefix "") (selected-text "")
+                                     trailing-cell-p)
+  (push (list :selection
+              (+ x (length text-prefix))
+              y
+              (max 1 (+ (length selected-text)
+                        (if trailing-cell-p 1 0))))
         (backend-frame-operations backend)))
 
 (defmethod backend-draw-caret ((backend null-backend) x y activep
@@ -177,6 +189,12 @@
          (format (backend-stream backend)
                  "~&TEXT x=~D y=~D  ~A~%"
                  x y text)))
+      (:selection
+       (destructuring-bind (kind x y width) operation
+         (declare (ignore kind))
+         (format (backend-stream backend)
+                 "~&SELECTION x=~D y=~D w=~D~%"
+                 x y width)))
       (:caret
        (destructuring-bind (kind x y activep) operation
          (declare (ignore kind))
@@ -372,6 +390,33 @@
         (sdl2:set-render-draw-color (backend-renderer backend) 245 194 102 255)
         (sdl2:set-render-draw-color (backend-renderer backend) 222 231 255 255))
     (sdl2:with-rects ((rect pixel-x pixel-y 2 pixel-height))
+      (sdl2:render-fill-rect (backend-renderer backend) rect))))
+
+(defmethod backend-draw-selection ((backend sdl2-backend) x y
+                                   &key (text-prefix "") (selected-text "")
+                                     trailing-cell-p)
+  (let ((pixel-x (+ (logical-x->pixel backend x)
+                    (if (and (backend-font backend)
+                             (plusp (length text-prefix)))
+                        (nth-value 0
+                                   (sdl2-ttf:size-text (backend-font backend)
+                                                       text-prefix))
+                        0)))
+        (pixel-y (logical-y->pixel backend y))
+        (pixel-width (+ (if (and (backend-font backend)
+                                 (plusp (length selected-text)))
+                            (nth-value 0
+                                       (sdl2-ttf:size-text
+                                        (backend-font backend)
+                                        selected-text))
+                            0)
+                        (if (or trailing-cell-p
+                                (zerop (length selected-text)))
+                            (backend-cell-width backend)
+                            0)))
+        (pixel-height (backend-row-height backend)))
+    (sdl2:set-render-draw-color (backend-renderer backend) 67 92 135 255)
+    (sdl2:with-rects ((rect pixel-x pixel-y pixel-width pixel-height))
       (sdl2:render-fill-rect (backend-renderer backend) rect))))
 
 (defmethod backend-draw-scrollbar
@@ -654,6 +699,46 @@
                                 (active-editor-cell-p cell)
                                 :text-prefix text-prefix)))))))
 
+(defun draw-cell-selection (backend cell viewport-y viewport-height)
+  (when (active-editor-cell-p cell)
+    (let ((content (displayed-cell-text cell)))
+      (multiple-value-bind (selection-start selection-end)
+          (text-buffer-selection-range
+           (application-active-text-buffer *application*))
+        (when selection-start
+          (loop for (line line-start) in (split-lines-with-starts content)
+                for line-index from 0
+                for row = (+ (bounds-y (cell-bounds cell)) 1 line-index)
+                do (multiple-value-bind (visible-text source-start source-end)
+                       (visible-line-source-window cell line line-index)
+                     (declare (ignore visible-text))
+                     (let* ((visible-start (+ line-start source-start))
+                            (visible-end (+ line-start source-end))
+                            (start (max selection-start visible-start))
+                            (end (min selection-end visible-end))
+                            (newline-offset (+ line-start (length line)))
+                            (newline-selected-p
+                             (and (= source-end (length line))
+                                  (< newline-offset (length content))
+                                  (<= selection-start newline-offset)
+                                  (< newline-offset selection-end))))
+                       (when (and (or (< start end)
+                                      newline-selected-p)
+                                  (row-visible-p row
+                                                 viewport-y
+                                                 viewport-height))
+                         (backend-draw-selection
+                          backend
+                          (1+ (bounds-x (cell-bounds cell)))
+                          (- row viewport-y)
+                          :text-prefix (subseq line
+                                               source-start
+                                               (- start line-start))
+                          :selected-text (subseq line
+                                                 (- start line-start)
+                                                 (- end line-start))
+                          :trailing-cell-p newline-selected-p))))))))))
+
 (defun draw-cell-tree (backend cell &key (viewport-y 0) viewport-height)
   (let* ((bounds (cell-bounds cell))
          (x (bounds-x bounds))
@@ -673,6 +758,7 @@
     (when (cell-intersects-viewport-p cell viewport-y viewport-height)
       (backend-draw-box backend x screen-y width height label focusedp)
       (when (typep cell 'text-cell)
+        (draw-cell-selection backend cell viewport-y viewport-height)
         (loop for (line style-spans) in (visible-lines-with-style-spans-for-cell cell)
               for row from 0
               for logical-row = (+ y 1 row)
@@ -761,21 +847,27 @@
           ((sdl2:scancode= scancode :scancode-delete)
            (delete-active-buffer-forward application))
           ((sdl2:scancode= scancode :scancode-home)
-           (move-active-buffer-cursor-home application))
+           (move-active-buffer-cursor-home application
+                                           :extend-selection shiftp))
           ((sdl2:scancode= scancode :scancode-end)
-           (move-active-buffer-cursor-end application))
+           (move-active-buffer-cursor-end application
+                                          :extend-selection shiftp))
           ((sdl2:scancode= scancode :scancode-pageup)
            (scroll-application-page application -1))
           ((sdl2:scancode= scancode :scancode-pagedown)
            (scroll-application-page application 1))
           ((sdl2:scancode= scancode :scancode-left)
-           (move-active-buffer-cursor-left application))
+           (move-active-buffer-cursor-left application
+                                           :extend-selection shiftp))
           ((sdl2:scancode= scancode :scancode-right)
-           (move-active-buffer-cursor-right application))
+           (move-active-buffer-cursor-right application
+                                            :extend-selection shiftp))
           ((sdl2:scancode= scancode :scancode-up)
-           (move-active-buffer-cursor-up application))
+           (move-active-buffer-cursor-up application
+                                         :extend-selection shiftp))
           ((sdl2:scancode= scancode :scancode-down)
-           (move-active-buffer-cursor-down application))
+           (move-active-buffer-cursor-down application
+                                           :extend-selection shiftp))
           ((sdl2:scancode= scancode :scancode-return)
            (insert-into-active-buffer application (string #\Newline)))
           (printable-text

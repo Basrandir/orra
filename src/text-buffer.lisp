@@ -124,6 +124,10 @@
     :initarg :cursor
     :accessor text-buffer-cursor
     :initform 0)
+   (selection-anchor
+    :initarg :selection-anchor
+    :accessor text-buffer-selection-anchor
+    :initform nil)
    (undo-stack
     :accessor text-buffer-undo-stack
     :initform nil)
@@ -252,6 +256,30 @@
                              (text-buffer-cursor buffer)))
   buffer)
 
+(defun %clamp-buffer-selection (buffer)
+  (when (text-buffer-selection-anchor buffer)
+    (setf (text-buffer-selection-anchor buffer)
+          (clamp-text-position (text-buffer-content buffer)
+                               (text-buffer-selection-anchor buffer))))
+  buffer)
+
+(defun clear-text-buffer-selection (buffer)
+  (setf (text-buffer-selection-anchor buffer) nil)
+  buffer)
+
+(defun text-buffer-selection-range (buffer)
+  (let ((anchor (text-buffer-selection-anchor buffer))
+        (cursor (text-buffer-cursor buffer)))
+    (when (and anchor (/= anchor cursor))
+      (values (min anchor cursor)
+              (max anchor cursor)))))
+
+(defun text-buffer-selected-text (buffer)
+  (multiple-value-bind (start end)
+      (text-buffer-selection-range buffer)
+    (and start
+         (subseq (text-buffer-content buffer) start end))))
+
 (defun %clamp-text-marker (buffer marker)
   (setf (text-marker-position marker)
         (clamp-text-position (text-buffer-content buffer)
@@ -289,7 +317,8 @@
         (text-buffer-cursor buffer)
         (and include-markers
              (%buffer-marker-snapshot buffer))
-        (copy-tree (text-buffer-style-spans buffer))))
+        (copy-tree (text-buffer-style-spans buffer))
+        (text-buffer-selection-anchor buffer)))
 
 (defun %restore-buffer-marker-snapshot (buffer marker-snapshot)
   (dolist (entry marker-snapshot)
@@ -302,14 +331,17 @@
   (let ((content (first snapshot))
         (cursor (second snapshot))
         (marker-snapshot (third snapshot))
-        (style-spans (fourth snapshot)))
+        (style-spans (fourth snapshot))
+        (selection-anchor (fifth snapshot)))
     (setf (text-buffer-content buffer) content)
     (setf (text-buffer-cursor buffer) cursor)
+    (setf (text-buffer-selection-anchor buffer) selection-anchor)
     (setf (text-buffer-style-spans buffer)
           (copy-tree style-spans))
     (when marker-snapshot
       (%restore-buffer-marker-snapshot buffer marker-snapshot)))
   (%clamp-buffer-cursor buffer)
+  (%clamp-buffer-selection buffer)
   (%clamp-buffer-markers buffer)
   (%clamp-buffer-style-spans buffer))
 
@@ -318,9 +350,19 @@
   (setf (text-buffer-redo-stack buffer) nil)
   buffer)
 
-(defun move-buffer-cursor-to (buffer position)
+(defun prepare-buffer-cursor-move (buffer extend-selection)
+  (if extend-selection
+      (unless (text-buffer-selection-anchor buffer)
+        (setf (text-buffer-selection-anchor buffer)
+              (text-buffer-cursor buffer)))
+      (clear-text-buffer-selection buffer))
+  buffer)
+
+(defun move-buffer-cursor-to (buffer position &key extend-selection)
+  (prepare-buffer-cursor-move buffer extend-selection)
   (setf (text-buffer-cursor buffer) position)
-  (%clamp-buffer-cursor buffer))
+  (%clamp-buffer-cursor buffer)
+  (%clamp-buffer-selection buffer))
 
 (defun text-buffer-line-count (buffer)
   (length (split-lines (text-buffer-content buffer))))
@@ -362,46 +404,52 @@
     (values (count #\Newline content :end cursor)
             (- cursor line-start))))
 
-(defun move-buffer-cursor-home (buffer)
+(defun move-buffer-cursor-home (buffer &key extend-selection)
   (multiple-value-bind (line column)
       (buffer-cursor-line-column buffer)
     (declare (ignore column))
     (move-buffer-cursor-to buffer
-                           (buffer-index-for-line-column buffer line 0))))
+                           (buffer-index-for-line-column buffer line 0)
+                           :extend-selection extend-selection)))
 
-(defun move-buffer-cursor-end (buffer)
+(defun move-buffer-cursor-end (buffer &key extend-selection)
   (multiple-value-bind (line column)
       (buffer-cursor-line-column buffer)
     (declare (ignore column))
     (let* ((content (text-buffer-content buffer))
            (start (%line-start-index-for-line content line))
            (end (%line-end-index-for-start content start)))
-      (move-buffer-cursor-to buffer end))))
+      (move-buffer-cursor-to buffer end
+                             :extend-selection extend-selection))))
 
-(defun move-buffer-cursor-up (buffer)
+(defun move-buffer-cursor-up (buffer &key extend-selection)
   (multiple-value-bind (line column)
       (buffer-cursor-line-column buffer)
     (move-buffer-cursor-to buffer
                            (buffer-index-for-line-column buffer
                                                          (max 0 (1- line))
-                                                         column))))
+                                                         column)
+                           :extend-selection extend-selection)))
 
-(defun move-buffer-cursor-down (buffer)
+(defun move-buffer-cursor-down (buffer &key extend-selection)
   (multiple-value-bind (line column)
       (buffer-cursor-line-column buffer)
     (move-buffer-cursor-to buffer
                            (buffer-index-for-line-column buffer
                                                          (1+ line)
-                                                         column))))
+                                                         column)
+                           :extend-selection extend-selection)))
 
-(defun make-text-buffer (&key (content "") cursor style-spans)
+(defun make-text-buffer (&key (content "") cursor selection-anchor style-spans)
   (let ((buffer (make-instance 'text-buffer
                                :id (fresh-id "buffer")
                                :content content
                                :cursor (or cursor (length content))
+                               :selection-anchor selection-anchor
                                :style-spans style-spans)))
     (%clamp-buffer-style-spans buffer)
-    (%clamp-buffer-cursor buffer)))
+    (%clamp-buffer-cursor buffer)
+    (%clamp-buffer-selection buffer)))
 
 (defun adjusted-position-for-replacement (position start end replacement-length gravity)
   (let ((delta (- replacement-length (- end start))))
@@ -495,43 +543,58 @@
       (adjust-buffer-style-spans-for-replacement buffer
                                                  start
                                                  end
-                                                 (length replacement))))
+                                                 (length replacement))
+      (clear-text-buffer-selection buffer)))
   (%clamp-buffer-cursor buffer))
 
 (defun insert-buffer-text (buffer text)
-  (let ((cursor (text-buffer-cursor buffer)))
-    (replace-buffer-range buffer
-                          cursor
-                          cursor
-                          text
-                          :cursor (+ cursor (length (string text))))))
+  (multiple-value-bind (selection-start selection-end)
+      (text-buffer-selection-range buffer)
+    (let ((cursor (text-buffer-cursor buffer)))
+      (replace-buffer-range buffer
+                            (or selection-start cursor)
+                            (or selection-end cursor)
+                            text
+                            :cursor (+ (or selection-start cursor)
+                                       (length (string text)))))))
+
+(defun delete-buffer-selection (buffer)
+  (multiple-value-bind (start end)
+      (text-buffer-selection-range buffer)
+    (when start
+      (replace-buffer-range buffer start end "" :cursor start)
+      t)))
 
 (defun delete-buffer-backward (buffer)
-  (let ((cursor (text-buffer-cursor buffer)))
-    (when (plusp cursor)
-      (replace-buffer-range buffer
-                            (1- cursor)
-                            cursor
-                            ""
-                            :cursor (1- cursor))))
+  (unless (delete-buffer-selection buffer)
+    (let ((cursor (text-buffer-cursor buffer)))
+      (when (plusp cursor)
+        (replace-buffer-range buffer
+                              (1- cursor)
+                              cursor
+                              ""
+                              :cursor (1- cursor)))))
   buffer)
 
 (defun delete-buffer-forward (buffer)
-  (let* ((content (text-buffer-content buffer))
-         (cursor (text-buffer-cursor buffer)))
-    (when (< cursor (length content))
-      (replace-buffer-range buffer
-                            cursor
-                            (1+ cursor)
-                            ""
-                            :cursor cursor)))
+  (unless (delete-buffer-selection buffer)
+    (let* ((content (text-buffer-content buffer))
+           (cursor (text-buffer-cursor buffer)))
+      (when (< cursor (length content))
+        (replace-buffer-range buffer
+                              cursor
+                              (1+ cursor)
+                              ""
+                              :cursor cursor))))
   buffer)
 
-(defun move-buffer-cursor-left (buffer)
+(defun move-buffer-cursor-left (buffer &key extend-selection)
+  (prepare-buffer-cursor-move buffer extend-selection)
   (decf (text-buffer-cursor buffer))
   (%clamp-buffer-cursor buffer))
 
-(defun move-buffer-cursor-right (buffer)
+(defun move-buffer-cursor-right (buffer &key extend-selection)
+  (prepare-buffer-cursor-move buffer extend-selection)
   (incf (text-buffer-cursor buffer))
   (%clamp-buffer-cursor buffer))
 
@@ -565,11 +628,15 @@
 
 (defun %buffer-state-snapshot (snapshot)
   (list (first snapshot)
-        (second snapshot)))
+        (second snapshot)
+        nil
+        nil
+        (fifth snapshot)))
 
 (defun text-buffer-state (buffer)
   (list :content (text-buffer-content buffer)
         :cursor (text-buffer-cursor buffer)
+        :selection-anchor (text-buffer-selection-anchor buffer)
         :undo-stack (mapcar (lambda (snapshot)
                               (%buffer-state-snapshot snapshot))
                             (text-buffer-undo-stack buffer))
@@ -580,9 +647,11 @@
 (defun make-text-buffer-from-state (state)
   (let ((buffer (make-text-buffer
                  :content (getf state :content "")
-                 :cursor (getf state :cursor 0))))
+                 :cursor (getf state :cursor 0)
+                 :selection-anchor (getf state :selection-anchor))))
     (setf (text-buffer-undo-stack buffer)
           (copy-tree (getf state :undo-stack)))
     (setf (text-buffer-redo-stack buffer)
           (copy-tree (getf state :redo-stack)))
-    (%clamp-buffer-cursor buffer)))
+    (%clamp-buffer-cursor buffer)
+    (%clamp-buffer-selection buffer)))

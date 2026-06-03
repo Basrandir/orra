@@ -28,6 +28,7 @@
    #:cell-model
    #:cell-style-spans
    #:children-of
+   #:clear-text-buffer-selection
    #:clear-text-buffer-style-spans
    #:code-block
    #:code-block-language
@@ -177,6 +178,9 @@
    #:text-buffer-gap-size
    #:text-buffer-line-count
    #:text-buffer-markers
+   #:text-buffer-selected-text
+   #:text-buffer-selection-anchor
+   #:text-buffer-selection-range
    #:text-buffer-style-spans
    #:text-buffer-style-spans-for-range
    #:text-buffer-content
