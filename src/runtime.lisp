@@ -42,10 +42,49 @@
     :initarg :editor-state-table
     :accessor application-editor-state-table
     :initform (make-hash-table :test #'equal))
+   (event-log
+    :initarg :event-log
+    :accessor application-event-log
+    :initform nil)
+   (event-log-limit
+    :initarg :event-log-limit
+    :accessor application-event-log-limit
+    :initform 64)
+   (debug-visible-p
+    :initarg :debug-visible-p
+    :accessor application-debug-visible-p
+    :initform nil)
    (save-path
     :initarg :save-path
     :accessor application-save-path
     :initform nil)))
+
+(defun record-application-event (application kind message &key details)
+  (let ((entry (list :kind kind
+                     :message (string message)
+                     :details details)))
+    (push entry (application-event-log application))
+    (when (> (length (application-event-log application))
+             (application-event-log-limit application))
+      (setf (application-event-log application)
+            (subseq (application-event-log application)
+                    0
+                    (application-event-log-limit application))))
+    entry))
+
+(defun clear-application-event-log (application)
+  (setf (application-event-log application) nil)
+  application)
+
+(defun toggle-application-debug-panel (application)
+  (setf (application-debug-visible-p application)
+        (not (application-debug-visible-p application)))
+  (record-application-event
+   application
+   :debug
+   (format nil "debug panel ~:[hidden~;visible~]"
+           (application-debug-visible-p application)))
+  application)
 
 (defun register-tree (registry object &optional seen)
   (let ((seen (or seen (make-hash-table :test #'equal))))
@@ -234,12 +273,47 @@
       (append-child inspector
                     (make-text-cell :text line)))))
 
+(defun event-log-line (entry)
+  (format nil "~A: ~A~@[ | ~A~]"
+          (getf entry :kind)
+          (getf entry :message)
+          (getf entry :details)))
+
+(defun debug-lines-for-application (application)
+  (append
+   (list "Debug"
+         (format nil "focus-owner: ~A"
+                 (object-summary-string (focused-model application)))
+         (format nil "edit-owner: ~A"
+                 (or (application-active-editor-model-id application) "-"))
+         (format nil "viewport: ~D/~D"
+                 (application-viewport-y application)
+                 (application-max-viewport-y application))
+         (format nil "previous-root-height: ~D"
+                 (application-content-height application))
+         "Event Trace")
+   (let ((entries (subseq (application-event-log application)
+                          0
+                          (min 10
+                               (length (application-event-log application))))))
+     (if entries
+         (mapcar #'event-log-line entries)
+         (list "-")))))
+
+(defun build-debug-cell (application)
+  (let ((debug (make-container-cell :label "Debug")))
+    (dolist (line (debug-lines-for-application application) debug)
+      (append-child debug
+                    (make-text-cell :text line)))))
+
 (defun build-application-shell-cell (application)
   (let ((root (make-container-cell :label "Orra")))
     (append-child root
                   (build-workspace-cell-tree
                    (application-workspace application)))
     (append-child root (build-inspector-cell application))
+    (when (application-debug-visible-p application)
+      (append-child root (build-debug-cell application)))
     (append-child root
                   (make-text-cell
                    :text (application-status-line application)))
@@ -253,12 +327,12 @@
   (let ((model (focused-model application)))
     (if (editing-active-p application)
         (format nil
-                "EDIT ~A ~A  |  type to edit  |  arrows move  |  Shift+arrows select  |  PgUp/PgDn scroll  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  Esc stop"
+                "EDIT ~A ~A  |  type to edit  |  arrows move  |  Shift+arrows select  |  PgUp/PgDn scroll  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  F12 debug  |  Esc stop"
                 (if model (object-kind model) :none)
                 (or (application-active-editor-model-id application) "-")
                 (code-block-edit-status-controls model))
         (format nil
-                "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move  |  PgUp/PgDn scroll~A  |  q quit"
+                "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move  |  PgUp/PgDn scroll~A  |  F12 debug  |  q quit"
                 (if model (object-kind model) :none)
                 (if model (object-id model) "-")
                 (code-block-status-controls model)))))
@@ -450,9 +524,28 @@
                                     (key-event-key event)
                                     (key-event-controlp event)
                                     (key-event-shiftp event))))
-    (or (and binding
-             (funcall (key-binding-function binding) application event))
-        (handle-unbound-application-key application event))))
+    (cond
+      (binding
+       (record-application-event
+        application
+        :key
+        (format nil "~A ~A -> ~A"
+                context
+                (key-event-key event)
+                (key-binding-documentation binding)))
+       (funcall (key-binding-function binding) application event))
+      (t
+       (let ((handledp (handle-unbound-application-key application event)))
+         (record-application-event
+          application
+          :key
+          (format nil "~A ~A ~:[unhandled~;handled as text~]"
+                  context
+                  (or (key-event-key event)
+                      (key-event-text event)
+                      "-")
+                  handledp))
+         handledp)))))
 
 (defun handle-unbound-application-key (application event)
   (let ((text (key-event-text event)))
@@ -1238,6 +1331,13 @@
   (insert-into-active-buffer application (string #\Newline))
   t)
 
+(define-key-binding (:edit :f12)
+    (application event)
+  "Toggle debug panel."
+  (declare (ignore event))
+  (toggle-application-debug-panel application)
+  t)
+
 (define-key-binding (:focus :leftbracket)
     (application event)
   "Move to the previous structural code form."
@@ -1405,6 +1505,13 @@
   (render-application application)
   t)
 
+(define-key-binding (:focus :f12)
+    (application event)
+  "Toggle debug panel."
+  (declare (ignore event))
+  (toggle-application-debug-panel application)
+  t)
+
 (define-command render (application)
   "Rebuild and render the current cell tree."
   (render-application application))
@@ -1424,6 +1531,14 @@
 (define-command list-key-bindings (application)
   "Return the installed key bindings."
   (list-key-bindings application))
+
+(define-command toggle-debug-panel (application)
+  "Toggle the in-application debug panel."
+  (toggle-application-debug-panel application))
+
+(define-command clear-event-log (application)
+  "Clear the in-application event log."
+  (clear-application-event-log application))
 
 (define-command append-paragraph (application text)
   "Append a new paragraph to the default section."

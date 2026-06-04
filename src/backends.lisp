@@ -803,6 +803,7 @@
       ((sdl2:scancode= scancode :scancode-up) :up)
       ((sdl2:scancode= scancode :scancode-down) :down)
       ((sdl2:scancode= scancode :scancode-return) :return)
+      ((sdl2:scancode= scancode :scancode-f12) :f12)
       ((sdl2:scancode= scancode :scancode-leftbracket) :leftbracket)
       ((sdl2:scancode= scancode :scancode-rightbracket) :rightbracket)
       ((sdl2:scancode= scancode :scancode-q) :q)

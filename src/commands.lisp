@@ -135,4 +135,9 @@
   (let ((command (gethash name (application-commands application))))
     (unless command
       (error "Unknown command ~S." name))
+    (when (fboundp 'record-application-event)
+      (funcall (symbol-function 'record-application-event)
+               application
+               :command
+               (symbol-name name)))
     (apply (command-function command) application arguments)))

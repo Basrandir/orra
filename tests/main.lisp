@@ -337,6 +337,34 @@
                  (object-id (focused-model application)))
         "Overriding a binding should replace the installed behavior.")))
 
+(deftest debug-panel-renders-event-trace ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (dispatch-application-key application
+                              (make-key-event :key :f12))
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Debug" texts :test #'string=)
+          "Toggling the debug panel should render a debug cell.")
+      (is (find "Event Trace" texts :test #'string=)
+          "The debug panel should include an event trace.")
+      (is (find-if (lambda (text)
+                     (search "KEY: FOCUS F12 -> Toggle debug panel."
+                             text))
+                   texts)
+          "The event trace should include dispatched key bindings."))))
+
+(deftest command-invocation-records-debug-event ()
+  (let ((application (make-application :backend (make-null-backend))))
+    (invoke-command application 'append-paragraph "event log marker")
+    (let ((entry (first (application-event-log application))))
+      (is (eq :command (getf entry :kind))
+          "Command invocation should record a command event.")
+      (is (string= "APPEND-PARAGRAPH" (getf entry :message))
+          "Command events should include the command name."))
+    (invoke-command application 'clear-event-log)
+    (is (null (application-event-log application))
+        "The event log should be clearable from a command.")))
+
 (deftest common-lisp-source-parse-info ()
   (let ((info (parse-common-lisp-source
                (format nil "(list :hello :orra)~%(+ 20 22)"))))

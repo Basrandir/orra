@@ -5,6 +5,9 @@
    #:application
    #:application-backend
    #:application-commands
+   #:application-debug-visible-p
+   #:application-event-log
+   #:application-event-log-limit
    #:application-keymap
    #:application-registry
    #:application-root-cell
@@ -30,6 +33,8 @@
    #:cell-style-spans
    #:children-of
    #:clear-text-buffer-selection
+   #:clear-application-event-log
+   #:clear-event-log
    #:clear-text-buffer-style-spans
    #:code-block
    #:code-block-language
@@ -153,6 +158,7 @@
    #:registry-objects-list
    #:render
    #:render-application
+   #:record-application-event
    #:result-block
    #:result-block-presentation
    #:result-block-status
@@ -192,6 +198,8 @@
    #:select-previous-code-block-form
    #:toggle-code-block-structure
    #:toggle-code-structure
+   #:toggle-application-debug-panel
+   #:toggle-debug-panel
    #:text-cell
    #:text-buffer
    #:text-buffer-gap-size
