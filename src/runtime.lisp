@@ -279,6 +279,52 @@
           (getf entry :message)
           (getf entry :details)))
 
+(defun debug-bounds-string (bounds)
+  (format nil "x=~D y=~D w=~D h=~D"
+          (bounds-x bounds)
+          (bounds-y bounds)
+          (bounds-width bounds)
+          (bounds-height bounds)))
+
+(defun debug-cell-summary-line (cell depth)
+  (let ((indent (make-string (* 2 depth) :initial-element #\Space))
+        (model (cell-model cell)))
+    (format nil "~A~A label=~S model=~A bounds=(~A) children=~D"
+            indent
+            (object-kind cell)
+            (preview-string (cell-label cell) :limit 32)
+            (object-summary-string model)
+            (debug-bounds-string (cell-bounds cell))
+            (length (children-of cell)))))
+
+(defun debug-cell-tree-lines (root &key (limit 16))
+  (if root
+      (let ((lines nil)
+            (emitted 0)
+            (visited 0))
+        (labels ((visit (cell depth)
+                   (incf visited)
+                   (when (< emitted limit)
+                     (push (debug-cell-summary-line cell depth) lines)
+                     (incf emitted))
+                   (dolist (child (children-of cell))
+                     (visit child (1+ depth)))))
+          (visit root 0)
+          (when (> visited emitted)
+            (push (format nil "... ~D more cells" (- visited emitted))
+                  lines))
+          (nreverse lines)))
+      (list "-")))
+
+(defun focused-cell-bounds-line (application)
+  (let ((cell (cell-for-model-id (application-root-cell application)
+                                 (application-focused-model-id application))))
+    (if cell
+        (format nil "focused-cell-bounds: ~A bounds=(~A)"
+                (object-summary-string (cell-model cell))
+                (debug-bounds-string (cell-bounds cell)))
+        "focused-cell-bounds: -")))
+
 (defun debug-lines-for-application (application)
   (append
    (list "Debug"
@@ -291,7 +337,11 @@
                  (application-max-viewport-y application))
          (format nil "previous-root-height: ~D"
                  (application-content-height application))
-         "Event Trace")
+         (focused-cell-bounds-line application)
+         "Cell Tree")
+   (debug-cell-tree-lines (application-root-cell application))
+   (list
+    "Event Trace")
    (let ((entries (subseq (application-event-log application)
                           0
                           (min 10
