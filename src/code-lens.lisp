@@ -1015,6 +1015,33 @@
            (values sequence (list selected-index)))))
    info))
 
+(defun replace-selected-code-block-form-source
+    (block replacement-source &optional info)
+  (let* ((info (or info (code-block-parse-info block)))
+         (selected-path (code-block-selected-form-path block info))
+         (span (and selected-path
+                    (code-block-selected-form-span block info))))
+    (when span
+      (destructuring-bind (start end) span
+        (let* ((source (code-block-source block))
+               (replacement-source (string replacement-source))
+               (new-source (concatenate 'string
+                                        (subseq source 0 start)
+                                        replacement-source
+                                        (subseq source end))))
+          (replace-code-block-source-incrementally
+           block
+           new-source
+           start
+           end
+           :replacement replacement-source
+           :previous-info info)
+          (set-code-block-selected-form-path
+           block
+           selected-path
+           (code-block-parse-info block)))))
+    block))
+
 (defun code-block-parse-status-line (block &optional info)
   (let* ((info (or info (code-block-parse-info block)))
          (unsupported-language (getf info :unsupported-language))

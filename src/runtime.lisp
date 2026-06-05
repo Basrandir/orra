@@ -1264,6 +1264,8 @@
 						 block
 						 previous-source
 						 :previous-cursor previous-cursor))
+        (unless (string= previous-source (code-block-source block))
+          (mark-application-dirty application))
 	(rebuild-root-cell application)
 	block))))
 
@@ -1839,6 +1841,17 @@
     (edit-code-block-structurally application
                                   block
                                   #'splice-selected-code-block-form)))
+
+(define-command replace-code-form-source (application block-id replacement-source)
+  "Replace the selected structural form with source text."
+  (let ((block (find-object (application-registry application) block-id)))
+    (unless (typep block 'code-block)
+      (error "Object ~A is not a code block." block-id))
+    (edit-code-block-structurally
+     application
+     block
+     (lambda (block)
+       (replace-selected-code-block-form-source block replacement-source)))))
 
 (define-command save-workspace (application &optional path)
   "Persist the current workspace to disk."

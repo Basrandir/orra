@@ -1386,6 +1386,38 @@
     (is (equal '(0 1) (code-block-selected-form-path block))
         "Selection should stay on the nested form after wrap/splice.")))
 
+(deftest replace-selected-code-form-source-rewrites-span ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application
+                                'append-code-block
+                                "(list (+ 1 2) (* 3 4))")))
+    (invoke-command application 'select-child-code-form (object-id block))
+    (invoke-command application 'select-next-code-form (object-id block))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (begin-editing-focused-model application)
+    (render-application application)
+    (invoke-command application
+                    'replace-code-form-source
+                    (object-id block)
+                    "(- 9 4)")
+    (is (string= "(list (- 9 4) (* 3 4))"
+                 (code-block-source block))
+        "Replacing a selected structural form should rewrite only that source span.")
+    (is (equal '(0 1) (code-block-selected-form-path block))
+        "Replacing a selected form should keep structural selection at the replacement path.")
+    (is (string= (code-block-source block)
+                 (text-buffer-content
+                  (orra::application-active-text-buffer application)))
+        "The active edit buffer should mirror structural source replacement.")
+    (is (application-dirty-p application)
+        "Structural source replacement should schedule a redraw.")
+    (undo-active-buffer-edit application)
+    (is (string= "(list (+ 1 2) (* 3 4))"
+                 (code-block-source block))
+        "Undo should restore source replaced through the structural lens.")
+    (stop-editing application)))
+
 (deftest structural-code-edit-invalidates-existing-result ()
   (let* ((application (make-application :backend (make-null-backend)))
          (block (invoke-command application 'append-code-block "(+ 20 22)"))
