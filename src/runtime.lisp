@@ -22,6 +22,14 @@
     :initarg :root-cell
     :accessor application-root-cell
     :initform nil)
+   (dirty-p
+    :initarg :dirty-p
+    :accessor application-dirty-p
+    :initform t)
+   (damage-regions
+    :initarg :damage-regions
+    :accessor application-damage-regions
+    :initform (list :full))
    (viewport-y
     :initarg :viewport-y
     :accessor application-viewport-y
@@ -59,6 +67,23 @@
     :accessor application-save-path
     :initform nil)))
 
+(defun mark-application-dirty (application &key (region :full))
+  (setf (application-dirty-p application) t)
+  (when region
+    (pushnew region
+             (application-damage-regions application)
+             :test #'equal))
+  application)
+
+(defun clear-application-dirty (application)
+  (setf (application-dirty-p application) nil)
+  (setf (application-damage-regions application) nil)
+  application)
+
+(defun render-application-if-needed (application)
+  (when (application-dirty-p application)
+    (render-application application)))
+
 (defun record-application-event (application kind message &key details)
   (let ((entry (list :kind kind
                      :message (string message)
@@ -70,10 +95,13 @@
             (subseq (application-event-log application)
                     0
                     (application-event-log-limit application))))
+    (when (application-debug-visible-p application)
+      (mark-application-dirty application))
     entry))
 
 (defun clear-application-event-log (application)
   (setf (application-event-log application) nil)
+  (mark-application-dirty application)
   application)
 
 (defun toggle-application-debug-panel (application)
@@ -84,6 +112,7 @@
    :debug
    (format nil "debug panel ~:[hidden~;visible~]"
            (application-debug-visible-p application)))
+  (mark-application-dirty application)
   application)
 
 (defun register-tree (registry object &optional seen)
@@ -337,6 +366,10 @@
                  (application-max-viewport-y application))
          (format nil "previous-root-height: ~D"
                  (application-content-height application))
+         (format nil "dirty: ~:[no~;yes~]"
+                 (application-dirty-p application))
+         (format nil "damage: ~A"
+                 (or (application-damage-regions application) "-"))
          (focused-cell-bounds-line application)
          "Cell Tree")
    (debug-cell-tree-lines (application-root-cell application))
@@ -408,8 +441,12 @@
   application)
 
 (defun scroll-application (application rows)
-  (incf (application-viewport-y application) rows)
-  (clamp-application-viewport application))
+  (let ((old-viewport-y (application-viewport-y application)))
+    (incf (application-viewport-y application) rows)
+    (clamp-application-viewport application)
+    (unless (= old-viewport-y (application-viewport-y application))
+      (mark-application-dirty application)))
+  application)
 
 (defun scroll-application-page (application direction)
   (scroll-application
@@ -544,7 +581,8 @@
 
 (defun focus-step (application direction)
   (let* ((models (visible-focusable-models application))
-         (current-id (application-focused-model-id application)))
+         (current-id (application-focused-model-id application))
+         (old-viewport-y (application-viewport-y application)))
     (when models
       (stop-editing application)
       (let* ((position (or (position current-id
@@ -555,7 +593,12 @@
              (next-index (mod (+ position direction) (length models))))
         (setf (application-focused-model-id application)
               (object-id (nth next-index models)))
-        (ensure-focused-model-visible application))))
+        (ensure-focused-model-visible application)
+        (unless (and (equal current-id
+                            (application-focused-model-id application))
+                     (= old-viewport-y
+                        (application-viewport-y application)))
+          (mark-application-dirty application)))))
   application)
 
 (defun focus-next-model (application)
@@ -645,13 +688,15 @@
                               (application-active-text-buffer application)
                               line
                               column))
-      (sync-active-buffer-structure-selection application)))
+      (sync-active-buffer-structure-selection application)
+      (mark-application-dirty application)))
   application)
 
 (defun focus-model-at-pixel (application pixel-x pixel-y)
   (multiple-value-bind (grid-x grid-y)
       (backend-grid-point (application-backend application) pixel-x pixel-y)
     (let* ((logical-y (+ grid-y (application-viewport-y application)))
+           (old-focused-id (application-focused-model-id application))
            (cell (and (application-root-cell application)
                       (find-cell-at-point
                        (application-root-cell application)
@@ -679,7 +724,10 @@
            (ensure-active-caret-visible application))
           ((focusable-model-object-p model)
            (setf (application-focused-model-id application)
-                 (object-id model))))))
+                 (object-id model))
+           (unless (equal old-focused-id
+                          (application-focused-model-id application))
+             (mark-application-dirty application))))))
     application))
 
 (defun editable-model-p (model)
@@ -810,7 +858,8 @@
       (setf (application-active-text-buffer application) buffer)
       (when (typep model 'code-block)
         (sync-active-buffer-structure-selection application))
-      (ensure-active-caret-visible application)))
+      (ensure-active-caret-visible application)
+      (mark-application-dirty application)))
   application)
 
 (defun begin-editing-focused-model (application)
@@ -886,10 +935,13 @@
   block)
 
 (defun stop-editing (application)
-  (sync-active-buffer-to-model application)
-  (remember-active-editor-state application)
-  (setf (application-active-editor-model-id application) nil)
-  (setf (application-active-text-buffer application) nil)
+  (let ((was-editing-p (editing-active-p application)))
+    (sync-active-buffer-to-model application)
+    (remember-active-editor-state application)
+    (setf (application-active-editor-model-id application) nil)
+    (setf (application-active-text-buffer application) nil)
+    (when was-editing-p
+      (mark-application-dirty application)))
   application)
 
 (defun insert-into-active-buffer (application text)
@@ -906,7 +958,8 @@
                                      :edit-start (or selection-start cursor)
                                      :edit-end (or selection-end cursor)
                                      :replacement text))
-      (ensure-active-caret-visible application)))
+      (ensure-active-caret-visible application)
+      (mark-application-dirty application)))
   application)
 
 (defun delete-active-buffer-backward (application)
@@ -923,7 +976,8 @@
                                                      (max 0 (1- cursor)))
                                      :edit-end (or selection-end cursor)
                                      :replacement ""))
-      (ensure-active-caret-visible application)))
+      (ensure-active-caret-visible application)
+      (mark-application-dirty application)))
   application)
 
 (defun delete-active-buffer-forward (application)
@@ -941,7 +995,8 @@
                                                    (min (length old-content)
                                                         (1+ cursor)))
                                      :replacement ""))
-      (ensure-active-caret-visible application)))
+      (ensure-active-caret-visible application)
+      (mark-application-dirty application)))
   application)
 
 (defun move-active-buffer-cursor-left (application &key extend-selection)
@@ -949,7 +1004,8 @@
     (move-buffer-cursor-left (application-active-text-buffer application)
                              :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
-    (ensure-active-caret-visible application))
+    (ensure-active-caret-visible application)
+    (mark-application-dirty application))
   application)
 
 (defun move-active-buffer-cursor-right (application &key extend-selection)
@@ -957,7 +1013,8 @@
     (move-buffer-cursor-right (application-active-text-buffer application)
                               :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
-    (ensure-active-caret-visible application))
+    (ensure-active-caret-visible application)
+    (mark-application-dirty application))
   application)
 
 (defun move-active-buffer-cursor-up (application &key extend-selection)
@@ -965,7 +1022,8 @@
     (move-buffer-cursor-up (application-active-text-buffer application)
                            :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
-    (ensure-active-caret-visible application))
+    (ensure-active-caret-visible application)
+    (mark-application-dirty application))
   application)
 
 (defun move-active-buffer-cursor-down (application &key extend-selection)
@@ -973,7 +1031,8 @@
     (move-buffer-cursor-down (application-active-text-buffer application)
                              :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
-    (ensure-active-caret-visible application))
+    (ensure-active-caret-visible application)
+    (mark-application-dirty application))
   application)
 
 (defun move-active-buffer-cursor-home (application &key extend-selection)
@@ -981,7 +1040,8 @@
     (move-buffer-cursor-home (application-active-text-buffer application)
                              :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
-    (ensure-active-caret-visible application))
+    (ensure-active-caret-visible application)
+    (mark-application-dirty application))
   application)
 
 (defun move-active-buffer-cursor-end (application &key extend-selection)
@@ -989,7 +1049,8 @@
     (move-buffer-cursor-end (application-active-text-buffer application)
                             :extend-selection extend-selection)
     (sync-active-buffer-structure-selection application)
-    (ensure-active-caret-visible application))
+    (ensure-active-caret-visible application)
+    (mark-application-dirty application))
   application)
 
 (defun undo-active-buffer-edit (application)
@@ -999,7 +1060,8 @@
       (undo-buffer-edit buffer)
       (sync-active-buffer-to-model application
                                    :previous-content old-content)
-      (ensure-active-caret-visible application)))
+      (ensure-active-caret-visible application)
+      (mark-application-dirty application)))
   application)
 
 (defun redo-active-buffer-edit (application)
@@ -1009,7 +1071,8 @@
       (redo-buffer-edit buffer)
       (sync-active-buffer-to-model application
                                    :previous-content old-content)
-      (ensure-active-caret-visible application)))
+      (ensure-active-caret-visible application)
+      (mark-application-dirty application)))
   application)
 
 (defun render-application (application)
@@ -1028,6 +1091,7 @@
                     :viewport-height (application-viewport-height application))
     (draw-application-scrollbar application))
   (backend-present (application-backend application))
+  (clear-application-dirty application)
   application)
 
 (defun ensure-code-block-result (application block)

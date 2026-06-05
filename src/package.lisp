@@ -6,6 +6,8 @@
    #:application-backend
    #:application-commands
    #:application-debug-visible-p
+   #:application-damage-regions
+   #:application-dirty-p
    #:application-event-log
    #:application-event-log-limit
    #:application-keymap
@@ -34,6 +36,7 @@
    #:children-of
    #:clear-text-buffer-selection
    #:clear-application-event-log
+   #:clear-application-dirty
    #:clear-event-log
    #:clear-text-buffer-style-spans
    #:code-block
@@ -119,6 +122,7 @@
    #:make-text-cell
    #:make-text-buffer
    #:make-workspace
+   #:mark-application-dirty
    #:model-object
    #:move-active-buffer-cursor-down
    #:move-active-buffer-cursor-end
@@ -158,6 +162,7 @@
    #:registry-objects-list
    #:render
    #:render-application
+   #:render-application-if-needed
    #:record-application-event
    #:result-block
    #:result-block-presentation
