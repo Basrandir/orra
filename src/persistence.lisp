@@ -9,6 +9,8 @@
 (defmethod persistable-object-p ((object section)) t)
 (defmethod persistable-object-p ((object paragraph)) t)
 (defmethod persistable-object-p ((object code-block)) t)
+(defmethod persistable-object-p ((object repl-block)) t)
+(defmethod persistable-object-p ((object repl-entry)) t)
 (defmethod persistable-object-p ((object quote-block)) t)
 (defmethod persistable-object-p ((object reference-block)) t)
 (defmethod persistable-object-p ((object inspector-block)) t)
@@ -83,6 +85,8 @@
                    (visit child))
                  (when (typep object 'code-block)
                    (visit (code-block-result object)))
+                 (when (typep object 'repl-entry)
+                   (visit (repl-entry-result object)))
                  (when (and (typep object 'reference-block)
                             (typep (reference-block-target object)
                                    'model-object))
@@ -131,6 +135,18 @@
                 :source (code-block-source object)
                 :result (and (code-block-result object)
                              (object-id (code-block-result object))))))
+
+(defmethod serialize-object-record ((object repl-block))
+  (append (base-record object :repl-block)
+          (list :title (repl-block-title object)
+                :package-name (repl-block-package object)
+                :children (mapcar #'object-id (children-of object)))))
+
+(defmethod serialize-object-record ((object repl-entry))
+  (append (base-record object :repl-entry)
+          (list :input-source (repl-entry-input-source object)
+                :result (and (repl-entry-result object)
+                             (object-id (repl-entry-result object))))))
 
 (defmethod serialize-object-record ((object quote-block))
   (append (base-record object :quote-block)
@@ -187,6 +203,10 @@
        (make-instance 'paragraph :id id :kind :paragraph))
       (:code-block
        (make-instance 'code-block :id id :kind :code-block))
+      (:repl-block
+       (make-instance 'repl-block :id id :kind :repl-block))
+      (:repl-entry
+       (make-instance 'repl-entry :id id :kind :repl-entry))
       (:quote-block
        (make-instance 'quote-block :id id :kind :quote-block))
       (:reference-block
@@ -240,6 +260,25 @@
      (setf (code-block-result object)
            (and (getf record :result)
                 (gethash (getf record :result) object-table))))
+    (repl-block
+     (setf (repl-block-title object)
+           (normalize-display-string (getf record :title)))
+     (setf (repl-block-package object)
+           (normalize-display-string (getf record :package-name)))
+     (setf (children-of object)
+           (mapcar (lambda (id)
+                     (gethash id object-table))
+                   (getf record :children)))
+     (dolist (child (children-of object))
+       (setf (parent-of child) object)))
+    (repl-entry
+     (setf (repl-entry-input-source object)
+           (normalize-display-string (getf record :input-source)))
+     (setf (repl-entry-result object)
+           (and (getf record :result)
+                (gethash (getf record :result) object-table)))
+     (when (repl-entry-result object)
+       (setf (parent-of (repl-entry-result object)) object)))
     (quote-block
      (setf (quote-block-text object)
            (normalize-display-string (getf record :text)))

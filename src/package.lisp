@@ -24,6 +24,7 @@
    #:append-paragraph
    #:append-quote-block
    #:append-reference-block
+   #:append-repl-block
    #:append-table-block
    #:append-task-list
    #:backend
@@ -67,6 +68,7 @@
    #:define-command
    #:define-key-binding
    #:evaluate-code-block
+   #:evaluate-repl-entry
    #:find-object
    #:begin-editing-focused-model
    #:delete-active-buffer-backward
@@ -119,6 +121,8 @@
    #:make-quote-block
    #:make-reference-block
    #:make-result-block
+   #:make-repl-block
+   #:make-repl-entry
    #:make-section
    #:make-sdl2-backend
    #:make-table-block
@@ -179,6 +183,12 @@
    #:result-block-presentation
    #:result-block-status
    #:result-block-value
+   #:repl-block
+   #:repl-block-package
+   #:repl-block-title
+   #:repl-entry
+   #:repl-entry-input-source
+   #:repl-entry-result
    #:root-notebook
    #:run-backend
    #:save-runtime-image
@@ -195,6 +205,7 @@
    #:scroll-page
    #:set-object-metadata
    #:set-object-property
+   #:set-result-block-status
    #:sdl2-backend
    #:start-application
    #:start-demo

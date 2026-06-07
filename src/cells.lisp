@@ -205,6 +205,27 @@
                                   (result-block-status
                                    (code-block-result model))
                                   "-"))))
+               (repl-block
+                (list (format nil "title: ~A" (repl-block-title model))
+                      (format nil "package: ~A" (repl-block-package model))
+                      (format nil "entries: ~D"
+                              (length (children-of model)))))
+               (repl-entry
+                (list (format nil "input-len: ~D"
+                              (length (repl-entry-input-source model)))
+                      (format nil "input: ~A"
+                              (preview-string
+                               (repl-entry-input-source model)))
+                      (format nil "result: ~A"
+                              (if (repl-entry-result model)
+                                  (object-summary-string
+                                   (repl-entry-result model))
+                                  "-"))
+                      (format nil "result-status: ~A"
+                              (if (repl-entry-result model)
+                                  (result-block-status
+                                   (repl-entry-result model))
+                                  "-"))))
                (quote-block
                 (list (format nil "text-len: ~D"
                               (length (quote-block-text model)))
@@ -283,6 +304,17 @@
               "-"
               (result-block-package node))
           (or (result-block-evaluated-at node) "-")))
+
+(defun repl-entry-package-name (entry)
+  (let ((result (repl-entry-result entry)))
+    (cond
+      ((and result
+            (not (string= "" (result-block-package result))))
+       (result-block-package result))
+      ((typep (parent-of entry) 'repl-block)
+       (repl-block-package (parent-of entry)))
+      (t
+       "-"))))
 
 (defun quote-block-lines (node)
   (let ((lines (mapcar (lambda (line)
@@ -404,6 +436,38 @@
        (when (code-block-result node)
          (append-child cell
                        (build-node-cell (code-block-result node) registry)))
+       cell))
+    (repl-block
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label (format nil "REPL: ~A [~A]"
+                                 (repl-block-title node)
+                                 (repl-block-package node)))))
+       (append-heading-cell cell
+                            registry
+                            node
+                            (format nil "REPL: ~A [~A]"
+                                    (repl-block-title node)
+                                    (repl-block-package node)))
+       (dolist (entry (children-of node) cell)
+         (append-child cell (build-node-cell entry registry)))))
+    (repl-entry
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label "REPL Entry")))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (format nil "~A> ~A"
+                                    (repl-entry-package-name node)
+                                    (repl-entry-input-source node))
+                      :role :content))
+       (when (repl-entry-result node)
+         (append-child cell
+                       (build-node-cell (repl-entry-result node) registry)))
        cell))
     (quote-block
      (make-text-cell

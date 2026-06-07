@@ -118,6 +118,26 @@
     :accessor code-block-result
     :initform nil)))
 
+(defclass repl-block (composite-node)
+  ((title
+    :initarg :title
+    :accessor repl-block-title
+    :initform "REPL")
+   (package-name
+    :initarg :package-name
+    :accessor repl-block-package
+    :initform "COMMON-LISP-USER")))
+
+(defclass repl-entry (node)
+  ((input-source
+    :initarg :input-source
+    :accessor repl-entry-input-source
+    :initform "")
+   (result
+    :initarg :result
+    :accessor repl-entry-result
+    :initform nil)))
+
 (defclass quote-block (node)
   ((text
     :initarg :text
@@ -334,6 +354,26 @@
                   :package-name (normalize-display-string package-name)
                   :evaluated-at evaluated-at
                   :environment environment)))
+
+(defun make-repl-block (&key (title "REPL")
+                          (package-name (package-name *package*))
+                          registry)
+  (%register-if-present
+   registry
+   (make-instance 'repl-block
+                  :id (fresh-id "repl")
+                  :kind :repl-block
+                  :title (normalize-display-string title)
+                  :package-name (normalize-display-string package-name))))
+
+(defun make-repl-entry (&key (input-source "") result registry)
+  (%register-if-present
+   registry
+   (make-instance 'repl-entry
+                  :id (fresh-id "repl-entry")
+                  :kind :repl-entry
+                  :input-source (normalize-display-string input-source)
+                  :result result)))
 
 (defgeneric append-child (parent child))
 

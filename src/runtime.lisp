@@ -126,6 +126,8 @@
         (register-tree registry child seen))
       (when (typep object 'code-block)
         (register-tree registry (code-block-result object) seen))
+      (when (typep object 'repl-entry)
+        (register-tree registry (repl-entry-result object) seen))
       (when (and (typep object 'reference-block)
                  (typep (reference-block-target object) 'model-object))
         (register-tree registry (reference-block-target object) seen))
@@ -424,7 +426,7 @@
   (typep object
          '(or notebook section paragraph code-block quote-block
            reference-block inspector-block list-block table-block
-           task-list result-block)))
+           task-list result-block repl-block repl-entry)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -988,17 +990,87 @@
                                 &key value input-source input-forms
                                   package-name evaluated-at environment)
   (let ((result (ensure-code-block-result application block)))
-    (setf (result-block-value result) value)
-    (setf (result-block-presentation result) presentation)
-    (setf (result-block-input-source result)
-          (normalize-display-string input-source))
-    (setf (result-block-input-forms result) input-forms)
-    (setf (result-block-package result)
-          (normalize-display-string package-name))
-    (setf (result-block-evaluated-at result) evaluated-at)
-    (setf (result-block-environment result) environment)
-    (set-result-block-status result status)
-    result))
+    (store-result-block result
+                        status
+                        presentation
+                        :value value
+                        :input-source input-source
+                        :input-forms input-forms
+                        :package-name package-name
+                        :evaluated-at evaluated-at
+                        :environment environment)))
+
+(defun store-result-block (result status presentation
+                           &key value input-source input-forms
+                             package-name evaluated-at environment)
+  (setf (result-block-value result) value)
+  (setf (result-block-presentation result) presentation)
+  (setf (result-block-input-source result)
+        (normalize-display-string input-source))
+  (setf (result-block-input-forms result) input-forms)
+  (setf (result-block-package result)
+        (normalize-display-string package-name))
+  (setf (result-block-evaluated-at result) evaluated-at)
+  (setf (result-block-environment result) environment)
+  (set-result-block-status result status)
+  result)
+
+(defun evaluate-source-into-result (application source result
+                                    &key (language :common-lisp))
+  (declare (ignore application))
+  (let* ((block (make-code-block :language language :source source))
+         (parse-info (code-block-parse-info block))
+         (package-name (package-name *package*))
+         (evaluated-at (get-universal-time))
+         (environment (list :package package-name
+                            :language language)))
+    (cond
+      ((getf parse-info :unsupported-language)
+       (store-result-block
+        result
+        :error
+        (format nil "No evaluator for ~A."
+                (getf parse-info :unsupported-language))
+        :input-source source
+        :input-forms (getf parse-info :forms)
+        :package-name package-name
+        :evaluated-at evaluated-at
+        :environment environment))
+      ((getf parse-info :error)
+       (store-result-block
+        result
+        :error
+        (code-block-parse-status-line block parse-info)
+        :input-source source
+        :input-forms (getf parse-info :forms)
+        :package-name package-name
+        :evaluated-at evaluated-at
+        :environment environment))
+      (t
+       (handler-case
+           (let* ((values (evaluate-forms (getf parse-info :forms)))
+                  (value (if values (car (last values)) nil))
+                  (presentation (printable-string value)))
+             (store-result-block
+              result
+              :ok
+              presentation
+              :value value
+              :input-source source
+              :input-forms (getf parse-info :forms)
+              :package-name package-name
+              :evaluated-at evaluated-at
+              :environment environment))
+         (error (condition)
+           (store-result-block
+            result
+            :error
+            (format nil "Evaluation error: ~A" condition)
+            :input-source source
+            :input-forms (getf parse-info :forms)
+            :package-name package-name
+            :evaluated-at evaluated-at
+            :environment environment)))))))
 
 (defun evaluate-forms (forms)
   (loop for form in forms
@@ -1596,6 +1668,45 @@
     (append-child section block)
     (rebuild-root-cell application)
     block))
+
+(define-command append-repl-block
+    (application &optional (title "REPL") (package-name (package-name *package*)))
+  "Append a notebook-local REPL transcript."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (block (make-repl-block
+                 :title title
+                 :package-name package-name
+                 :registry registry)))
+    (append-child section block)
+    (rebuild-root-cell application)
+    block))
+
+(define-command evaluate-repl-entry (application repl-id source)
+  "Evaluate SOURCE and append it to a REPL transcript."
+  (let* ((registry (application-registry application))
+         (repl (find-object registry repl-id)))
+    (unless (typep repl 'repl-block)
+      (error "Object ~A is not a REPL block." repl-id))
+    (let ((package (or (find-package (repl-block-package repl))
+                       (error "Unknown REPL package ~A."
+                              (repl-block-package repl)))))
+      (let* ((entry (make-repl-entry
+                     :input-source source
+                     :registry registry))
+             (result (make-result-block :registry registry)))
+        (setf (repl-entry-result entry) result)
+        (setf (parent-of result) entry)
+        (append-child repl entry)
+        (let ((*package* package))
+          (evaluate-source-into-result application
+                                       source
+                                       result
+                                       :language :common-lisp))
+        (rebuild-root-cell application)
+        entry))))
 
 (define-command append-quote-block (application text &optional (attribution ""))
   "Append a quote block to the default section."

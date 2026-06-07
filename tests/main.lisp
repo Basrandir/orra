@@ -757,6 +757,90 @@
       (is (find "text-len: 50" texts :test #'string=)
           "Embedded inspector blocks should render target-specific inspection lines."))))
 
+(deftest repl-block-evaluates-and-renders-transcript ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (repl (invoke-command application 'append-repl-block "Image REPL"))
+         (entry (invoke-command application
+                                'evaluate-repl-entry
+                                (object-id repl)
+                                "(+ 1 2)"))
+         (result (repl-entry-result entry)))
+    (is (typep repl 'repl-block)
+        "Appending a REPL should create a notebook-local REPL block.")
+    (is (eq entry (first (children-of repl)))
+        "Evaluated REPL entries should be appended to the transcript.")
+    (is (string= "(+ 1 2)" (repl-entry-input-source entry))
+        "REPL entries should retain the submitted source.")
+    (is (typep result 'result-block)
+        "REPL entries should own normal result blocks.")
+    (is (eq :ok (result-block-status result))
+        "Successful REPL evaluation should produce an OK result.")
+    (is (string= "3" (result-block-presentation result))
+        "REPL evaluation should render the final value.")
+    (is (string= (package-name *package*) (result-block-package result))
+        "REPL results should record the evaluation package.")
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "REPL: Image REPL [COMMON-LISP-USER]" texts :test #'string=)
+          "REPL blocks should render a transcript heading.")
+      (is (find "COMMON-LISP-USER> (+ 1 2)" texts :test #'string=)
+          "REPL entries should render their prompt and input.")
+      (is (find "=> 3" texts :test #'string=)
+          "REPL entries should render through the shared result lens."))))
+
+(deftest repl-block-persists-transcript ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (repl (make-repl-block :title "Saved REPL"
+                                :package-name "COMMON-LISP-USER"
+                                :registry registry))
+         (entry (make-repl-entry :input-source "(+ 2 3)"
+                                 :registry registry))
+         (result (make-result-block :value 5
+                                    :presentation "5"
+                                    :input-source "(+ 2 3)"
+                                    :input-forms '((+ 2 3))
+                                    :package-name "COMMON-LISP-USER"
+                                    :evaluated-at 123
+                                    :registry registry)))
+    (setf (repl-entry-result entry) result)
+    (set-result-block-status result :ok)
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section repl)
+    (append-child repl entry)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-repl
+                     (find-if (lambda (object)
+                                (typep object 'repl-block))
+                              (children-of loaded-section)))
+                    (loaded-entry (first (children-of loaded-repl)))
+                    (loaded-result (repl-entry-result loaded-entry)))
+               (is (string= "Saved REPL" (repl-block-title loaded-repl))
+                   "REPL titles should survive persistence.")
+               (is (string= "(+ 2 3)"
+                            (repl-entry-input-source loaded-entry))
+                   "REPL entry source should survive persistence.")
+               (is (string= "5"
+                            (result-block-presentation loaded-result))
+                   "REPL result presentation should survive persistence.")
+               (is (equal '((+ 2 3))
+                          (result-block-input-forms loaded-result))
+                   "REPL result metadata should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
 (deftest rich-notebook-nodes-persist ()
   (let* ((registry (make-object-registry))
          (workspace (make-workspace :registry registry))
