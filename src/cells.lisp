@@ -122,6 +122,141 @@
     (t
      (normalize-display-string object))))
 
+(defun object-summary-string (object)
+  (if object
+      (format nil "~A ~A"
+              (object-kind object)
+              (object-id object))
+      "-"))
+
+(defun object-parent-summary-string (object)
+  (if (and object (parent-of object))
+      (object-summary-string (parent-of object))
+      "-"))
+
+(defun object-prototype-summary-string (object)
+  (if (and object (object-prototype object))
+      (object-summary-string (object-prototype object))
+      "-"))
+
+(defun model-inspector-lines (model &key (subject-label "object"))
+  (let ((lines (list (format nil "~A: ~A"
+                             subject-label
+                             (object-summary-string model))
+                     (format nil "parent: ~A"
+                             (object-parent-summary-string model))
+                     (format nil "prototype: ~A"
+                             (object-prototype-summary-string model))
+                     (format nil "children: ~D"
+                             (length (if model
+                                         (children-of model)
+                                         nil))))))
+    (when model
+      (setf lines
+            (append
+             lines
+             (typecase model
+               (workspace
+                (list (format nil "title: ~A" (workspace-title model))
+                      (format nil "notebooks: ~D"
+                              (length (workspace-notebooks model)))))
+               (notebook
+                (list (format nil "title: ~A" (notebook-title model))))
+               (section
+                (list (format nil "title: ~A" (section-title model))))
+               (paragraph
+                (list (format nil "text-len: ~D"
+                              (length (paragraph-text model)))
+                      (format nil "text: ~A"
+                              (preview-string (paragraph-text model)))))
+               (code-block
+                (list (format nil "language: ~A"
+                              (code-block-language model))
+                      (format nil "source-len: ~D"
+                              (length (code-block-source model)))
+                      (format nil "source: ~A"
+                              (preview-string (code-block-source model)))
+                      (format nil "syntax: ~A"
+                              (code-block-syntax-summary-line model))
+                      (format nil "parse: ~A"
+                              (code-block-parse-status-line model))
+                      (format nil "selection: ~A"
+                              (code-block-selection-status-line model))
+                      (format nil "selected-form-index: ~A"
+                              (or (code-block-selected-form-index model)
+                                  "-"))
+                      (format nil "selected-form-path: ~A"
+                              (or (code-block-selected-form-path model)
+                                  "-"))
+                      (format nil "selected-form: ~A"
+                              (if (code-block-selected-form model)
+                                  (simple-form-summary
+                                   (code-block-selected-form model))
+                                  "-"))
+                      (format nil "structure: ~:[hidden~;visible~]"
+                              (code-block-structure-visible-p model))
+                      (format nil "result: ~A"
+                              (if (code-block-result model)
+                                  (object-summary-string
+                                   (code-block-result model))
+                                  "-"))
+                      (format nil "result-status: ~A"
+                              (if (code-block-result model)
+                                  (result-block-status
+                                   (code-block-result model))
+                                  "-"))))
+               (quote-block
+                (list (format nil "text-len: ~D"
+                              (length (quote-block-text model)))
+                      (format nil "attribution: ~A"
+                              (if (string= "" (quote-block-attribution model))
+                                  "-"
+                                  (quote-block-attribution model)))))
+               (reference-block
+                (list (format nil "target: ~A"
+                              (object-reference-summary-string
+                               (reference-block-target model)))
+                      (format nil "label: ~A"
+                              (if (string= "" (reference-block-label model))
+                                  "-"
+                                  (reference-block-label model)))
+                      (format nil "note: ~A"
+                              (if (string= "" (reference-block-note model))
+                                  "-"
+                                  (reference-block-note model)))))
+               (inspector-block
+                (list (format nil "target: ~A"
+                              (object-reference-summary-string
+                               (inspector-block-target model)))
+                      (format nil "label: ~A"
+                              (if (string= "" (inspector-block-label model))
+                                  "-"
+                                  (inspector-block-label model)))))
+               (list-block
+                (list (format nil "items: ~D"
+                              (length (list-block-items model)))
+                      (format nil "ordered: ~:[no~;yes~]"
+                              (list-block-ordered-p model))))
+               (table-block
+                (list (format nil "columns: ~D"
+                              (length (table-block-columns model)))
+                      (format nil "rows: ~D"
+                              (length (table-block-rows model)))))
+               (task-list
+                (list (format nil "tasks: ~D"
+                              (length (task-list-items model)))
+                      (format nil "done: ~D"
+                              (count-if #'task-item-done-p
+                                        (task-list-items model)))))
+               (result-block
+                (list (format nil "status: ~A"
+                              (result-block-status model))
+                      (format nil "presentation: ~A"
+                              (preview-string
+                               (result-block-presentation model)))))
+               (t nil)))))
+    lines))
+
 (defun quote-block-lines (node)
   (let ((lines (mapcar (lambda (line)
                          (format nil "> ~A" line))
@@ -262,6 +397,26 @@
                     (and (not (string= "" (reference-block-note node)))
                          (reference-block-note node)))
       :role :reference))
+    (inspector-block
+     (let* ((target (inspector-block-target node))
+            (label (if (string= "" (inspector-block-label node))
+                       (object-reference-summary-string target)
+                       (inspector-block-label node)))
+            (cell (make-container-cell
+                   :registry registry
+                   :model node
+                   :label (format nil "Inspector: ~A" label))))
+       (append-heading-cell cell
+                            registry
+                            node
+                            (format nil "Inspector: ~A" label))
+       (append-text-lines cell
+                          registry
+                          node
+                          (model-inspector-lines target
+                                                 :subject-label "object")
+                          :role :metadata)
+       cell))
     (list-block
      (let ((cell (make-container-cell
                   :registry registry

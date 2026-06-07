@@ -128,24 +128,10 @@
         (register-tree registry (code-block-result object) seen))
       (when (and (typep object 'reference-block)
                  (typep (reference-block-target object) 'model-object))
-        (register-tree registry (reference-block-target object) seen)))))
-
-(defun object-summary-string (object)
-  (if object
-      (format nil "~A ~A"
-              (object-kind object)
-              (object-id object))
-      "-"))
-
-(defun object-parent-summary-string (object)
-  (if (and object (parent-of object))
-      (object-summary-string (parent-of object))
-      "-"))
-
-(defun object-prototype-summary-string (object)
-  (if (and object (object-prototype object))
-      (object-summary-string (object-prototype object))
-      "-"))
+        (register-tree registry (reference-block-target object) seen))
+      (when (and (typep object 'inspector-block)
+                 (typep (inspector-block-target object) 'model-object))
+        (register-tree registry (inspector-block-target object) seen)))))
 
 (defun code-block-status-controls (model)
   (if (typep model 'code-block)
@@ -162,112 +148,9 @@
       ""))
 
 (defun inspector-lines-for-model (application model)
-  (let ((lines (list "Inspector"
-                     (format nil "focused: ~A" (object-summary-string model))
-                     (format nil "parent: ~A"
-                             (object-parent-summary-string model))
-                     (format nil "prototype: ~A"
-                             (object-prototype-summary-string model))
-                     (format nil "children: ~D"
-                             (length (if model
-                                         (children-of model)
-                                         nil))))))
-    (when model
-      (setf lines
-            (append
-             lines
-             (typecase model
-               (workspace
-                (list (format nil "title: ~A" (workspace-title model))
-                      (format nil "notebooks: ~D"
-                              (length (workspace-notebooks model)))))
-               (notebook
-                (list (format nil "title: ~A" (notebook-title model))))
-               (section
-                (list (format nil "title: ~A" (section-title model))))
-               (paragraph
-                (list (format nil "text-len: ~D"
-                              (length (paragraph-text model)))
-                      (format nil "text: ~A"
-                              (preview-string (paragraph-text model)))))
-               (code-block
-                (list (format nil "language: ~A"
-                              (code-block-language model))
-                      (format nil "source-len: ~D"
-                              (length (code-block-source model)))
-                      (format nil "source: ~A"
-                              (preview-string (code-block-source model)))
-                      (format nil "syntax: ~A"
-                              (code-block-syntax-summary-line model))
-                      (format nil "parse: ~A"
-                              (code-block-parse-status-line model))
-                      (format nil "selection: ~A"
-                              (code-block-selection-status-line model))
-                      (format nil "selected-form-index: ~A"
-                              (or (code-block-selected-form-index model)
-                                  "-"))
-                      (format nil "selected-form-path: ~A"
-                              (or (code-block-selected-form-path model)
-                                  "-"))
-                      (format nil "selected-form: ~A"
-                              (if (code-block-selected-form model)
-                                  (simple-form-summary
-                                   (code-block-selected-form model))
-                                  "-"))
-                      (format nil "structure: ~:[hidden~;visible~]"
-                              (code-block-structure-visible-p model))
-                      (format nil "result: ~A"
-                              (if (code-block-result model)
-                                  (object-summary-string
-                                   (code-block-result model))
-                                  "-"))
-                      (format nil "result-status: ~A"
-                              (if (code-block-result model)
-                                  (result-block-status
-                                   (code-block-result model))
-                                  "-"))))
-               (quote-block
-                (list (format nil "text-len: ~D"
-                              (length (quote-block-text model)))
-                      (format nil "attribution: ~A"
-                              (if (string= "" (quote-block-attribution model))
-                                  "-"
-                                  (quote-block-attribution model)))))
-               (reference-block
-                (list (format nil "target: ~A"
-                              (object-reference-summary-string
-                               (reference-block-target model)))
-                      (format nil "label: ~A"
-                              (if (string= "" (reference-block-label model))
-                                  "-"
-                                  (reference-block-label model)))
-                      (format nil "note: ~A"
-                              (if (string= "" (reference-block-note model))
-                                  "-"
-                                  (reference-block-note model)))))
-               (list-block
-                (list (format nil "items: ~D"
-                              (length (list-block-items model)))
-                      (format nil "ordered: ~:[no~;yes~]"
-                              (list-block-ordered-p model))))
-               (table-block
-                (list (format nil "columns: ~D"
-                              (length (table-block-columns model)))
-                      (format nil "rows: ~D"
-                              (length (table-block-rows model)))))
-               (task-list
-                (list (format nil "tasks: ~D"
-                              (length (task-list-items model)))
-                      (format nil "done: ~D"
-                              (count-if #'task-item-done-p
-                                        (task-list-items model)))))
-               (result-block
-                (list (format nil "status: ~A"
-                              (result-block-status model))
-                      (format nil "presentation: ~A"
-                              (preview-string
-                               (result-block-presentation model)))))
-               (t nil)))))
+  (let ((lines (cons "Inspector"
+                     (model-inspector-lines model
+                                            :subject-label "focused"))))
     (when (and model
                (editing-active-p application)
                (string= (application-active-editor-model-id application)
@@ -540,7 +423,8 @@
 (defun focusable-model-object-p (object)
   (typep object
          '(or notebook section paragraph code-block quote-block
-           reference-block list-block table-block task-list result-block)))
+           reference-block inspector-block list-block table-block
+           task-list result-block)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -1709,6 +1593,24 @@
                    :target target
                    :label label
                    :note note
+                   :registry registry)))
+      (append-child section block)
+      (rebuild-root-cell application)
+      block)))
+
+(define-command append-inspector-block
+    (application target-id &optional (label ""))
+  "Append an inspector lens block for an object."
+  (let* ((registry (application-registry application))
+         (target (find-object registry target-id)))
+    (unless target
+      (error "Unknown inspector target ~A." target-id))
+    (let* ((section (ensure-default-section
+                     (application-workspace application)
+                     registry))
+           (block (make-inspector-block
+                   :target target
+                   :label label
                    :registry registry)))
       (append-child section block)
       (rebuild-root-cell application)

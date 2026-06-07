@@ -122,6 +122,16 @@
     :accessor reference-block-note
     :initform "")))
 
+(defclass inspector-block (node)
+  ((target
+    :initarg :target
+    :accessor inspector-block-target
+    :initform nil)
+   (label
+    :initarg :label
+    :accessor inspector-block-label
+    :initform "")))
+
 (defclass list-block (node)
   ((items
     :initarg :items
@@ -253,6 +263,15 @@
                   :target target
                   :label (normalize-display-string label)
                   :note (normalize-display-string note))))
+
+(defun make-inspector-block (&key target (label "") registry)
+  (%register-if-present
+   registry
+   (make-instance 'inspector-block
+                  :id (fresh-id "inspect")
+                  :kind :inspector-block
+                  :target target
+                  :label (normalize-display-string label))))
 
 (defun make-list-block (&key items ordered-p registry)
   (%register-if-present

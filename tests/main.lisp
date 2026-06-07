@@ -739,6 +739,24 @@
                   texts)
             "Reference blocks should render their target object and note.")))))
 
+(deftest inspector-block-renders-target-object-details ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (target (focused-model application)))
+    (invoke-command application
+                    'append-inspector-block
+                    (object-id target)
+                    "focused object")
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Inspector: focused object" texts :test #'string=)
+          "Embedded inspector blocks should render a notebook-local heading.")
+      (is (find (format nil "object: ~A" (object-summary-string target))
+                texts
+                :test #'string=)
+          "Embedded inspector blocks should describe the target object.")
+      (is (find "text-len: 50" texts :test #'string=)
+          "Embedded inspector blocks should render target-specific inspection lines."))))
+
 (deftest rich-notebook-nodes-persist ()
   (let* ((registry (make-object-registry))
          (workspace (make-workspace :registry registry))
@@ -750,6 +768,9 @@
          (reference (make-reference-block :target paragraph
                                           :label "target paragraph"
                                           :note "same workspace"
+                                          :registry registry))
+         (inspector (make-inspector-block :target paragraph
+                                          :label "inspect target"
                                           :registry registry))
          (list-block (make-list-block :items '("alpha" "beta")
                                       :ordered-p t
@@ -763,7 +784,7 @@
                  :registry registry)))
     (append-child workspace notebook)
     (append-child notebook section)
-    (dolist (node (list paragraph quote reference list-block table tasks))
+    (dolist (node (list paragraph quote reference inspector list-block table tasks))
       (append-child section node))
     (uiop:with-temporary-file (:pathname path :keep t)
       (unwind-protect
@@ -780,6 +801,10 @@
                      (find-if (lambda (object)
                                 (typep object 'reference-block))
                               children))
+                    (loaded-inspector
+                     (find-if (lambda (object)
+                                (typep object 'inspector-block))
+                              children))
                     (loaded-tasks
                      (find-if (lambda (object)
                                 (typep object 'task-list))
@@ -793,6 +818,12 @@
                (is (typep (reference-block-target loaded-reference)
                           'paragraph)
                    "Reference block targets should reload as objects.")
+               (is (typep (inspector-block-target loaded-inspector)
+                          'paragraph)
+                   "Inspector block targets should reload as objects.")
+               (is (string= "inspect target"
+                            (inspector-block-label loaded-inspector))
+                   "Inspector block labels should survive persistence.")
                (is (equal '("alpha" "beta")
                           (list-block-items
                            (find-if (lambda (object)

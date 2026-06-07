@@ -11,6 +11,7 @@
 (defmethod persistable-object-p ((object code-block)) t)
 (defmethod persistable-object-p ((object quote-block)) t)
 (defmethod persistable-object-p ((object reference-block)) t)
+(defmethod persistable-object-p ((object inspector-block)) t)
 (defmethod persistable-object-p ((object list-block)) t)
 (defmethod persistable-object-p ((object table-block)) t)
 (defmethod persistable-object-p ((object task-list)) t)
@@ -85,7 +86,11 @@
                  (when (and (typep object 'reference-block)
                             (typep (reference-block-target object)
                                    'model-object))
-                   (visit (reference-block-target object))))))
+                   (visit (reference-block-target object)))
+                 (when (and (typep object 'inspector-block)
+                            (typep (inspector-block-target object)
+                                   'model-object))
+                   (visit (inspector-block-target object))))))
       (visit workspace))
     (nreverse objects)))
 
@@ -138,6 +143,11 @@
                 :label (reference-block-label object)
                 :note (reference-block-note object))))
 
+(defmethod serialize-object-record ((object inspector-block))
+  (append (base-record object :inspector-block)
+          (list :target (encode-value (inspector-block-target object))
+                :label (inspector-block-label object))))
+
 (defmethod serialize-object-record ((object list-block))
   (append (base-record object :list-block)
           (list :items (list-block-items object)
@@ -175,6 +185,8 @@
        (make-instance 'quote-block :id id :kind :quote-block))
       (:reference-block
        (make-instance 'reference-block :id id :kind :reference-block))
+      (:inspector-block
+       (make-instance 'inspector-block :id id :kind :inspector-block))
       (:list-block
        (make-instance 'list-block :id id :kind :list-block))
       (:table-block
@@ -234,6 +246,11 @@
            (normalize-display-string (getf record :label)))
      (setf (reference-block-note object)
            (normalize-display-string (getf record :note))))
+    (inspector-block
+     (setf (inspector-block-target object)
+           (decode-value (getf record :target) object-table))
+     (setf (inspector-block-label object)
+           (normalize-display-string (getf record :label))))
     (list-block
      (setf (list-block-items object)
            (normalize-display-strings (getf record :items)))

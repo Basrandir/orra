@@ -19,6 +19,7 @@
    #:add-text-buffer-style-span
    #:append-code-block
    #:append-child
+   #:append-inspector-block
    #:append-list-block
    #:append-paragraph
    #:append-quote-block
@@ -94,6 +95,9 @@
    #:key-event-shiftp
    #:key-event-text
    #:insert-into-active-buffer
+   #:inspector-block
+   #:inspector-block-label
+   #:inspector-block-target
    #:list-commands
    #:list-key-bindings
    #:make-key-event
@@ -106,6 +110,7 @@
    #:make-application
    #:make-code-block
    #:make-container-cell
+   #:make-inspector-block
    #:make-list-block
    #:make-notebook
    #:make-null-backend
@@ -142,6 +147,7 @@
    #:object-properties
    #:object-property
    #:object-prototype
+   #:object-summary-string
    #:paragraph
    #:paragraph-text
    #:parse-common-lisp-source
