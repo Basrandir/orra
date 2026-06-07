@@ -1536,6 +1536,40 @@
     (is (search "Parse error@" (result-block-presentation result))
         "Malformed source should reuse the parse error message as the result.")))
 
+(deftest evaluation-records-reproducible-result-metadata ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application 'append-code-block "(+ 20 22)"))
+         (before (get-universal-time))
+         (result (invoke-command application 'evaluate-code-block
+                                 (object-id block)))
+         (after (get-universal-time)))
+    (is (string= "(+ 20 22)" (result-block-input-source result))
+        "Evaluation results should retain the source they evaluated.")
+    (is (equal '((+ 20 22)) (result-block-input-forms result))
+        "Evaluation results should retain the parsed input forms.")
+    (is (string= (package-name *package*)
+                 (result-block-package result))
+        "Evaluation results should record the package used for evaluation.")
+    (is (<= before (result-block-evaluated-at result) after)
+        "Evaluation results should record a universal-time timestamp.")
+    (is (eq :ok (result-block-status result))
+        "Successful evaluation should retain its status metadata.")))
+
+(deftest evaluation-metadata-renders-in-result-block ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application 'append-code-block "(+ 20 22)")))
+    (invoke-command application 'evaluate-code-block (object-id block))
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "=> 42" texts :test #'string=)
+          "Result value should still render.")
+      (is (find-if (lambda (text)
+                     (and (search "input: (+ 20 22)" text)
+                          (search "package:" text)
+                          (search "evaluated-at:" text)))
+                   texts)
+          "Rendered results should expose reproducible evaluation metadata."))))
+
 (deftest editing-focused-model ()
   (let ((application (make-application :backend (make-null-backend))))
     (render-application application)
@@ -1590,7 +1624,19 @@
                (is (eq :ok
                        (result-block-status
                         (code-block-result loaded-block)))
-                   "Expected persisted evaluation status.")))
+                   "Expected persisted evaluation status.")
+               (is (string= "(+ 20 220)"
+                            (result-block-input-source
+                             (code-block-result loaded-block)))
+                   "Expected persisted evaluation input source.")
+               (is (string= (package-name *package*)
+                            (result-block-package
+                             (code-block-result loaded-block)))
+                   "Expected persisted evaluation package metadata.")
+               (is (integerp
+                    (result-block-evaluated-at
+                     (code-block-result loaded-block)))
+                   "Expected persisted evaluation timestamp.")))
         (when (probe-file path)
           (delete-file path))))))
 

@@ -253,9 +253,36 @@
                               (result-block-status model))
                       (format nil "presentation: ~A"
                               (preview-string
-                               (result-block-presentation model)))))
+                               (result-block-presentation model)))
+                      (format nil "input: ~A"
+                              (preview-string
+                               (result-block-input-source model)))
+                      (format nil "package: ~A"
+                              (if (string= "" (result-block-package model))
+                                  "-"
+                                  (result-block-package model)))
+                      (format nil "evaluated-at: ~A"
+                              (or (result-block-evaluated-at model)
+                                  "-"))))
                (t nil)))))
     lines))
+
+(defun result-block-value-line (node)
+  (cond
+    ((eq (result-block-status node) :error)
+     (format nil "!! ~A" (result-block-presentation node)))
+    ((eq (result-block-status node) :stale)
+     (format nil ".. ~A" (result-block-presentation node)))
+    (t
+     (format nil "=> ~A" (result-block-presentation node)))))
+
+(defun result-block-metadata-line (node)
+  (format nil "input: ~A  |  package: ~A  |  evaluated-at: ~A"
+          (preview-string (result-block-input-source node))
+          (if (string= "" (result-block-package node))
+              "-"
+              (result-block-package node))
+          (or (result-block-evaluated-at node) "-")))
 
 (defun quote-block-lines (node)
   (let ((lines (mapcar (lambda (line)
@@ -465,17 +492,23 @@
                                   (task-list-items node)))
        cell))
     (result-block
-     (make-text-cell
-      :registry registry
-      :model node
-      :text (cond
-              ((eq (result-block-status node) :error)
-               (format nil "!! ~A" (result-block-presentation node)))
-              ((eq (result-block-status node) :stale)
-               (format nil ".. ~A" (result-block-presentation node)))
-              (t
-               (format nil "=> ~A" (result-block-presentation node))))
-      :role :result))
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label "Result")))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (result-block-value-line node)
+                      :role :result))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (result-block-metadata-line node)
+                      :role :metadata))
+       cell))
     (t
      (make-text-cell
       :registry registry

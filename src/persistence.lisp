@@ -165,7 +165,13 @@
 (defmethod serialize-object-record ((object result-block))
   (append (base-record object :result-block)
           (list :value (encode-value (result-block-value object))
-                :presentation (result-block-presentation object))))
+                :presentation (result-block-presentation object)
+                :input-source (result-block-input-source object)
+                :input-forms (encode-value (result-block-input-forms object))
+                :package-name (result-block-package object)
+                :evaluated-at (result-block-evaluated-at object)
+                :environment (encode-value
+                              (result-block-environment object)))))
 
 (defun make-object-from-record (record)
   (let ((id (getf record :id))
@@ -267,7 +273,17 @@
     (result-block
      (setf (result-block-value object)
            (decode-value (getf record :value) object-table))
-     (setf (result-block-presentation object) (getf record :presentation))))
+     (setf (result-block-presentation object) (getf record :presentation))
+     (setf (result-block-input-source object)
+           (normalize-display-string (getf record :input-source)))
+     (setf (result-block-input-forms object)
+           (decode-value (getf record :input-forms) object-table))
+     (setf (result-block-package object)
+           (normalize-display-string (getf record :package-name)))
+     (setf (result-block-evaluated-at object)
+           (getf record :evaluated-at))
+     (setf (result-block-environment object)
+           (decode-value (getf record :environment) object-table))))
   object)
 
 (defun save-workspace-to-file (workspace path &key registry)

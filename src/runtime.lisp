@@ -985,10 +985,18 @@
              :registry (application-registry application)))))
 
 (defun store-code-block-result (application block status presentation
-                                &key value)
+                                &key value input-source input-forms
+                                  package-name evaluated-at environment)
   (let ((result (ensure-code-block-result application block)))
     (setf (result-block-value result) value)
     (setf (result-block-presentation result) presentation)
+    (setf (result-block-input-source result)
+          (normalize-display-string input-source))
+    (setf (result-block-input-forms result) input-forms)
+    (setf (result-block-package result)
+          (normalize-display-string package-name))
+    (setf (result-block-evaluated-at result) evaluated-at)
+    (setf (result-block-environment result) environment)
     (set-result-block-status result status)
     result))
 
@@ -997,7 +1005,11 @@
         collect (eval form)))
 
 (defun evaluate-code-block (application block)
-  (let ((parse-info (code-block-parse-info block)))
+  (let* ((parse-info (code-block-parse-info block))
+         (package-name (package-name *package*))
+         (evaluated-at (get-universal-time))
+         (environment (list :package package-name
+                            :language (code-block-language block))))
     (cond
       ((getf parse-info :unsupported-language)
        (store-code-block-result
@@ -1005,13 +1017,23 @@
         block
         :error
         (format nil "No evaluator for ~A."
-                (getf parse-info :unsupported-language))))
+                (getf parse-info :unsupported-language))
+        :input-source (code-block-source block)
+        :input-forms (getf parse-info :forms)
+        :package-name package-name
+        :evaluated-at evaluated-at
+        :environment environment))
       ((getf parse-info :error)
        (store-code-block-result
         application
         block
         :error
-        (code-block-parse-status-line block parse-info)))
+        (code-block-parse-status-line block parse-info)
+        :input-source (code-block-source block)
+        :input-forms (getf parse-info :forms)
+        :package-name package-name
+        :evaluated-at evaluated-at
+        :environment environment))
       (t
        (handler-case
            (let* ((values (evaluate-forms (getf parse-info :forms)))
@@ -1022,13 +1044,23 @@
               block
               :ok
               presentation
-              :value value))
+              :value value
+              :input-source (code-block-source block)
+              :input-forms (getf parse-info :forms)
+              :package-name package-name
+              :evaluated-at evaluated-at
+              :environment environment))
          (error (condition)
            (store-code-block-result
             application
             block
             :error
-            (format nil "Evaluation error: ~A" condition))))))))
+            (format nil "Evaluation error: ~A" condition)
+            :input-source (code-block-source block)
+            :input-forms (getf parse-info :forms)
+            :package-name package-name
+            :evaluated-at evaluated-at
+            :environment environment)))))))
 
 (defun make-application (&key backend workspace save-path)
   (let* ((registry (make-object-registry))

@@ -55,7 +55,27 @@
    (presentation
     :initarg :presentation
     :accessor result-block-presentation
-    :initform "")))
+    :initform "")
+   (input-source
+    :initarg :input-source
+    :accessor result-block-input-source
+    :initform "")
+   (input-forms
+    :initarg :input-forms
+    :accessor result-block-input-forms
+    :initform nil)
+   (package-name
+    :initarg :package-name
+    :accessor result-block-package
+    :initform "")
+   (evaluated-at
+    :initarg :evaluated-at
+    :accessor result-block-evaluated-at
+    :initform nil)
+   (environment
+    :initarg :environment
+    :accessor result-block-environment
+    :initform nil)))
 
 (defun result-block-status (result-block)
   (object-property result-block :status :default :ok :inherit nil))
@@ -299,14 +319,21 @@
                   :kind :task-list
                   :items (normalize-task-items items))))
 
-(defun make-result-block (&key value (presentation "") registry)
+(defun make-result-block (&key value (presentation "") (input-source "")
+                            input-forms (package-name "") evaluated-at
+                            environment registry)
   (%register-if-present
    registry
    (make-instance 'result-block
                   :id (fresh-id "result")
                   :kind :result-block
                   :value value
-                  :presentation presentation)))
+                  :presentation presentation
+                  :input-source (normalize-display-string input-source)
+                  :input-forms input-forms
+                  :package-name (normalize-display-string package-name)
+                  :evaluated-at evaluated-at
+                  :environment environment)))
 
 (defgeneric append-child (parent child))
 

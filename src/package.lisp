@@ -171,6 +171,11 @@
    #:render-application-if-needed
    #:record-application-event
    #:result-block
+   #:result-block-environment
+   #:result-block-evaluated-at
+   #:result-block-input-forms
+   #:result-block-input-source
+   #:result-block-package
    #:result-block-presentation
    #:result-block-status
    #:result-block-value
