@@ -25,6 +25,7 @@
    #:append-quote-block
    #:append-reference-block
    #:append-repl-block
+   #:append-source-browser-block
    #:append-table-block
    #:append-task-list
    #:backend
@@ -124,6 +125,7 @@
    #:make-repl-block
    #:make-repl-entry
    #:make-section
+   #:make-source-browser-block
    #:make-sdl2-backend
    #:make-table-block
    #:make-task-item
@@ -207,6 +209,10 @@
    #:set-object-property
    #:set-result-block-status
    #:sdl2-backend
+   #:source-browser-block
+   #:source-browser-block-label
+   #:source-browser-block-package
+   #:source-browser-block-symbol
    #:start-application
    #:start-demo
    #:stop-editing

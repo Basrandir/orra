@@ -172,6 +172,20 @@
     :accessor inspector-block-label
     :initform "")))
 
+(defclass source-browser-block (node)
+  ((package-name
+    :initarg :package-name
+    :accessor source-browser-block-package
+    :initform "COMMON-LISP-USER")
+   (symbol-name
+    :initarg :symbol-name
+    :accessor source-browser-block-symbol
+    :initform "")
+   (label
+    :initarg :label
+    :accessor source-browser-block-label
+    :initform "")))
+
 (defclass list-block (node)
   ((items
     :initarg :items
@@ -311,6 +325,19 @@
                   :id (fresh-id "inspect")
                   :kind :inspector-block
                   :target target
+                  :label (normalize-display-string label))))
+
+(defun make-source-browser-block (&key (package-name (package-name *package*))
+                                    (symbol-name "")
+                                    (label "")
+                                    registry)
+  (%register-if-present
+   registry
+   (make-instance 'source-browser-block
+                  :id (fresh-id "source")
+                  :kind :source-browser-block
+                  :package-name (normalize-display-string package-name)
+                  :symbol-name (normalize-display-string symbol-name)
                   :label (normalize-display-string label))))
 
 (defun make-list-block (&key items ordered-p registry)

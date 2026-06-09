@@ -757,6 +757,82 @@
       (is (find "text-len: 50" texts :test #'string=)
           "Embedded inspector blocks should render target-specific inspection lines."))))
 
+(defun source-browser-test-target (value)
+  "Documentation for source browser tests."
+  (+ value 10))
+
+(deftest source-browser-block-renders-live-symbol-details ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (browser (invoke-command application
+                                  'append-source-browser-block
+                                  "ORRA.TESTS"
+                                  "SOURCE-BROWSER-TEST-TARGET"
+                                  "test source")))
+    (is (typep browser 'source-browser-block)
+        "Appending a source browser should create a source browser block.")
+    (is (string= "ORRA.TESTS" (source-browser-block-package browser))
+        "Source browsers should retain the target package name.")
+    (is (string= "SOURCE-BROWSER-TEST-TARGET"
+                 (source-browser-block-symbol browser))
+        "Source browsers should retain the target symbol name.")
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Source: test source" texts :test #'string=)
+          "Source browsers should render their notebook-local heading.")
+      (is (find "symbol: ORRA.TESTS::SOURCE-BROWSER-TEST-TARGET"
+                texts
+                :test #'string=)
+          "Source browsers should resolve and render their target symbol.")
+      (is (find "function: yes" texts :test #'string=)
+          "Source browsers should report function bindings.")
+      (is (find "documentation: Documentation for source browser tests."
+                texts
+                :test #'string=)
+          "Source browsers should render function documentation.")
+      (is (some (lambda (text)
+                  (search "source:" text))
+                texts)
+          "Source browsers should expose source availability information."))))
+
+(deftest source-browser-block-persists-target ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (browser (make-source-browser-block
+                   :package-name "ORRA.TESTS"
+                   :symbol-name "SOURCE-BROWSER-TEST-TARGET"
+                   :label "saved source"
+                   :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section browser)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-browser
+                     (find-if (lambda (object)
+                                (typep object 'source-browser-block))
+                              (children-of loaded-section))))
+               (is (string= "ORRA.TESTS"
+                            (source-browser-block-package loaded-browser))
+                   "Source browser package names should survive persistence.")
+               (is (string= "SOURCE-BROWSER-TEST-TARGET"
+                            (source-browser-block-symbol loaded-browser))
+                   "Source browser symbol names should survive persistence.")
+               (is (string= "saved source"
+                            (source-browser-block-label loaded-browser))
+                   "Source browser labels should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
 (deftest repl-block-evaluates-and-renders-transcript ()
   (let* ((application (make-application :backend (make-null-backend)))
          (repl (invoke-command application 'append-repl-block "Image REPL"))

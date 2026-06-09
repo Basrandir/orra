@@ -139,6 +139,94 @@
       (object-summary-string (object-prototype object))
       "-"))
 
+(defun source-browser-resolve-symbol (browser)
+  (let ((package (find-package (source-browser-block-package browser))))
+    (when package
+      (multiple-value-bind (symbol status)
+          (find-symbol (source-browser-block-symbol browser) package)
+        (values symbol status package)))))
+
+(defun source-browser-qualified-symbol-name (symbol status package)
+  (format nil "~A~A~A"
+          (package-name package)
+          (if (eq status :external) ":" "::")
+          (symbol-name symbol)))
+
+(defun source-browser-symbol-line (browser)
+  (multiple-value-bind (symbol status package)
+      (source-browser-resolve-symbol browser)
+    (cond
+      (symbol
+       (format nil "symbol: ~A"
+               (source-browser-qualified-symbol-name symbol status package)))
+      (package
+       (format nil "symbol: ~A::~A (not found)"
+               (package-name package)
+               (source-browser-block-symbol browser)))
+      (t
+       (format nil "symbol: ~A::~A (package not found)"
+               (source-browser-block-package browser)
+               (source-browser-block-symbol browser))))))
+
+(defun source-browser-symbol-status-line (browser)
+  (multiple-value-bind (symbol status package)
+      (source-browser-resolve-symbol browser)
+    (declare (ignore symbol package))
+    (format nil "status: ~A"
+            (case status
+              (:internal "internal")
+              (:external "external")
+              (:inherited "inherited")
+              (otherwise "-")))))
+
+(defun source-browser-documentation-string (symbol)
+  (or (documentation symbol 'function)
+      (documentation symbol 'type)
+      (documentation symbol 'variable)
+      (documentation symbol 'setf)
+      "-"))
+
+(defun source-browser-function-object (symbol)
+  (or (macro-function symbol)
+      (ignore-errors
+        (and (fboundp symbol)
+             (symbol-function symbol)))))
+
+(defun source-browser-source-line (symbol)
+  (let ((function (and symbol
+                       (source-browser-function-object symbol))))
+    (if function
+        (multiple-value-bind (lambda-expression closure-p name)
+            (function-lambda-expression function)
+          (declare (ignore closure-p name))
+          (format nil "source: ~A"
+                  (if lambda-expression
+                      (preview-string (printable-string lambda-expression))
+                      "unavailable")))
+        "source: unavailable")))
+
+(defun source-browser-lines (browser)
+  (multiple-value-bind (symbol status package)
+      (source-browser-resolve-symbol browser)
+    (declare (ignore status))
+    (list (source-browser-symbol-line browser)
+          (format nil "package: ~A"
+                  (if package
+                      (package-name package)
+                      (source-browser-block-package browser)))
+          (source-browser-symbol-status-line browser)
+          (format nil "function: ~:[no~;yes~]"
+                  (and symbol (fboundp symbol)))
+          (format nil "macro: ~:[no~;yes~]"
+                  (and symbol (macro-function symbol)))
+          (format nil "class: ~:[no~;yes~]"
+                  (and symbol (find-class symbol nil)))
+          (format nil "documentation: ~A"
+                  (if symbol
+                      (source-browser-documentation-string symbol)
+                      "-"))
+          (source-browser-source-line symbol))))
+
 (defun model-inspector-lines (model &key (subject-label "object"))
   (let ((lines (list (format nil "~A: ~A"
                              subject-label
@@ -253,6 +341,16 @@
                               (if (string= "" (inspector-block-label model))
                                   "-"
                                   (inspector-block-label model)))))
+               (source-browser-block
+                (list (format nil "package: ~A"
+                              (source-browser-block-package model))
+                      (format nil "symbol: ~A"
+                              (source-browser-block-symbol model))
+                      (format nil "label: ~A"
+                              (if (string= ""
+                                           (source-browser-block-label model))
+                                  "-"
+                                  (source-browser-block-label model)))))
                (list-block
                 (list (format nil "items: ~D"
                               (length (list-block-items model)))
@@ -506,6 +604,26 @@
                           node
                           (model-inspector-lines target
                                                  :subject-label "object")
+                          :role :metadata)
+       cell))
+    (source-browser-block
+     (let* ((label (if (string= "" (source-browser-block-label node))
+                       (format nil "~A::~A"
+                               (source-browser-block-package node)
+                               (source-browser-block-symbol node))
+                       (source-browser-block-label node)))
+            (cell (make-container-cell
+                   :registry registry
+                   :model node
+                   :label (format nil "Source: ~A" label))))
+       (append-heading-cell cell
+                            registry
+                            node
+                            (format nil "Source: ~A" label))
+       (append-text-lines cell
+                          registry
+                          node
+                          (source-browser-lines node)
                           :role :metadata)
        cell))
     (list-block

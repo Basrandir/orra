@@ -14,6 +14,7 @@
 (defmethod persistable-object-p ((object quote-block)) t)
 (defmethod persistable-object-p ((object reference-block)) t)
 (defmethod persistable-object-p ((object inspector-block)) t)
+(defmethod persistable-object-p ((object source-browser-block)) t)
 (defmethod persistable-object-p ((object list-block)) t)
 (defmethod persistable-object-p ((object table-block)) t)
 (defmethod persistable-object-p ((object task-list)) t)
@@ -164,6 +165,12 @@
           (list :target (encode-value (inspector-block-target object))
                 :label (inspector-block-label object))))
 
+(defmethod serialize-object-record ((object source-browser-block))
+  (append (base-record object :source-browser-block)
+          (list :package-name (source-browser-block-package object)
+                :symbol-name (source-browser-block-symbol object)
+                :label (source-browser-block-label object))))
+
 (defmethod serialize-object-record ((object list-block))
   (append (base-record object :list-block)
           (list :items (list-block-items object)
@@ -213,6 +220,10 @@
        (make-instance 'reference-block :id id :kind :reference-block))
       (:inspector-block
        (make-instance 'inspector-block :id id :kind :inspector-block))
+      (:source-browser-block
+       (make-instance 'source-browser-block
+                      :id id
+                      :kind :source-browser-block))
       (:list-block
        (make-instance 'list-block :id id :kind :list-block))
       (:table-block
@@ -295,6 +306,13 @@
      (setf (inspector-block-target object)
            (decode-value (getf record :target) object-table))
      (setf (inspector-block-label object)
+           (normalize-display-string (getf record :label))))
+    (source-browser-block
+     (setf (source-browser-block-package object)
+           (normalize-display-string (getf record :package-name)))
+     (setf (source-browser-block-symbol object)
+           (normalize-display-string (getf record :symbol-name)))
+     (setf (source-browser-block-label object)
            (normalize-display-string (getf record :label))))
     (list-block
      (setf (list-block-items object)
