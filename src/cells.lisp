@@ -227,6 +227,93 @@
                       "-"))
           (source-browser-source-line symbol))))
 
+(defun model-root-workspace (model)
+  (loop for current = model then (parent-of current)
+        while current
+        when (typep current 'workspace)
+        return current))
+
+(defun collect-code-blocks-under (object)
+  (let (blocks)
+    (labels ((visit (node)
+               (when node
+                 (when (typep node 'code-block)
+                   (push node blocks))
+                 (dolist (child (children-of node))
+                   (visit child)))))
+      (visit object))
+    (nreverse blocks)))
+
+(defun cross-reference-target-line (browser)
+  (format nil "target: ~A::~A"
+          (cross-reference-browser-block-package browser)
+          (cross-reference-browser-block-symbol browser)))
+
+(defun cross-reference-symbol-match-p (symbol browser)
+  (and (symbolp symbol)
+       (symbol-package symbol)
+       (string-equal (package-name (symbol-package symbol))
+                     (cross-reference-browser-block-package browser))
+       (string-equal (symbol-name symbol)
+                     (cross-reference-browser-block-symbol browser))))
+
+(defun cross-reference-form-paths (form browser)
+  (let (paths)
+    (labels ((visit (value path)
+               (cond
+                 ((cross-reference-symbol-match-p value browser)
+                  (push (nreverse path) paths))
+                 ((consp value)
+                  (loop for child in value
+                        for index from 1
+                        do (visit child (cons index path)))))))
+      (visit form nil))
+    (nreverse paths)))
+
+(defun cross-reference-path-string (form-index path)
+  (if path
+      (format nil "~D.~{~D~^.~}" form-index path)
+      (format nil "~D" form-index)))
+
+(defun cross-reference-records-for-code-block (block browser)
+  (when (code-block-common-lisp-p block)
+    (let* ((info (code-block-parse-info block))
+           (records (common-lisp-parse-info-records
+                     (code-block-source block)
+                     info)))
+      (loop for record in records
+            for form-index from 1
+            append
+            (loop for path in (cross-reference-form-paths
+                               (getf record :form)
+                               browser)
+                  collect (list :block block
+                                :form-index form-index
+                                :path path
+                                :source (getf record :text)))))))
+
+(defun cross-reference-browser-records (browser)
+  (let ((workspace (model-root-workspace browser)))
+    (when workspace
+      (mapcan (lambda (block)
+                (cross-reference-records-for-code-block block browser))
+              (collect-code-blocks-under workspace)))))
+
+(defun cross-reference-record-line (record)
+  (format nil "reference: ~A form ~A | ~A"
+          (object-summary-string (getf record :block))
+          (cross-reference-path-string (getf record :form-index)
+                                       (getf record :path))
+          (preview-string (getf record :source))))
+
+(defun cross-reference-browser-lines (browser)
+  (let ((records (cross-reference-browser-records browser)))
+    (append (list (cross-reference-target-line browser)
+                  (format nil "references: ~D" (length records)))
+            (if records
+                (mapcar #'cross-reference-record-line records)
+                (list "reference: -")))))
+
 (defun model-inspector-lines (model &key (subject-label "object"))
   (let ((lines (list (format nil "~A: ~A"
                              subject-label
@@ -351,6 +438,18 @@
                                            (source-browser-block-label model))
                                   "-"
                                   (source-browser-block-label model)))))
+               (cross-reference-browser-block
+                (list (format nil "package: ~A"
+                              (cross-reference-browser-block-package model))
+                      (format nil "symbol: ~A"
+                              (cross-reference-browser-block-symbol model))
+                      (format nil "label: ~A"
+                              (if (string= ""
+                                           (cross-reference-browser-block-label
+                                            model))
+                                  "-"
+                                  (cross-reference-browser-block-label
+                                   model)))))
                (list-block
                 (list (format nil "items: ~D"
                               (length (list-block-items model)))
@@ -624,6 +723,27 @@
                           registry
                           node
                           (source-browser-lines node)
+                          :role :metadata)
+       cell))
+    (cross-reference-browser-block
+     (let* ((label (if (string= ""
+                                (cross-reference-browser-block-label node))
+                       (format nil "~A::~A"
+                               (cross-reference-browser-block-package node)
+                               (cross-reference-browser-block-symbol node))
+                       (cross-reference-browser-block-label node)))
+            (cell (make-container-cell
+                   :registry registry
+                   :model node
+                   :label (format nil "XRef: ~A" label))))
+       (append-heading-cell cell
+                            registry
+                            node
+                            (format nil "XRef: ~A" label))
+       (append-text-lines cell
+                          registry
+                          node
+                          (cross-reference-browser-lines node)
                           :role :metadata)
        cell))
     (list-block

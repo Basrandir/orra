@@ -426,8 +426,8 @@
   (typep object
          '(or notebook section paragraph code-block quote-block
            reference-block inspector-block source-browser-block
-           list-block table-block task-list result-block repl-block
-           repl-entry)))
+           cross-reference-browser-block list-block table-block
+           task-list result-block repl-block repl-entry)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -1768,6 +1768,22 @@
                    (application-workspace application)
                    registry))
          (block (make-source-browser-block
+                 :package-name package-name
+                 :symbol-name symbol-name
+                 :label label
+                 :registry registry)))
+    (append-child section block)
+    (rebuild-root-cell application)
+    block))
+
+(define-command append-cross-reference-browser-block
+    (application package-name symbol-name &optional (label ""))
+  "Append a cross-reference browser lens block for a Lisp symbol."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (block (make-cross-reference-browser-block
                  :package-name package-name
                  :symbol-name symbol-name
                  :label label

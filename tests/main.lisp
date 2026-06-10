@@ -833,6 +833,96 @@
         (when (probe-file path)
           (delete-file path))))))
 
+(deftest cross-reference-browser-block-renders-workspace-references ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (first-reference
+          (invoke-command
+           application
+           'append-code-block
+           "(orra.tests::source-browser-test-target 41)"))
+         (second-reference
+          (invoke-command
+           application
+           'append-code-block
+           "(mapcar #'orra.tests::source-browser-test-target '(1 2))"))
+         (browser
+          (invoke-command application
+                          'append-cross-reference-browser-block
+                          "ORRA.TESTS"
+                          "SOURCE-BROWSER-TEST-TARGET"
+                          "test xrefs")))
+    (is (typep browser 'cross-reference-browser-block)
+        "Appending a cross-reference browser should create a browser block.")
+    (is (string= "ORRA.TESTS"
+                 (cross-reference-browser-block-package browser))
+        "Cross-reference browsers should retain the target package name.")
+    (is (string= "SOURCE-BROWSER-TEST-TARGET"
+                 (cross-reference-browser-block-symbol browser))
+        "Cross-reference browsers should retain the target symbol name.")
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "XRef: test xrefs" texts :test #'string=)
+          "Cross-reference browsers should render their notebook-local heading.")
+      (is (find "target: ORRA.TESTS::SOURCE-BROWSER-TEST-TARGET"
+                texts
+                :test #'string=)
+          "Cross-reference browsers should render the target symbol.")
+      (is (find "references: 2" texts :test #'string=)
+          "Cross-reference browsers should count matching code references.")
+      (is (some (lambda (text)
+                  (and (search (object-id first-reference) text)
+                       (search "orra.tests::source-browser-test-target"
+                               text)))
+                texts)
+          "Cross-reference browsers should list the first referencing block.")
+      (is (some (lambda (text)
+                  (and (search (object-id second-reference) text)
+                       (search "mapcar" text)))
+                texts)
+          "Cross-reference browsers should list the second referencing block."))))
+
+(deftest cross-reference-browser-block-persists-target ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (browser (make-cross-reference-browser-block
+                   :package-name "ORRA.TESTS"
+                   :symbol-name "SOURCE-BROWSER-TEST-TARGET"
+                   :label "saved xrefs"
+                   :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section browser)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-browser
+                     (find-if (lambda (object)
+                                (typep object 'cross-reference-browser-block))
+                              (children-of loaded-section))))
+               (is (string= "ORRA.TESTS"
+                            (cross-reference-browser-block-package
+                             loaded-browser))
+                   "Cross-reference browser package names should survive persistence.")
+               (is (string= "SOURCE-BROWSER-TEST-TARGET"
+                            (cross-reference-browser-block-symbol
+                             loaded-browser))
+                   "Cross-reference browser symbol names should survive persistence.")
+               (is (string= "saved xrefs"
+                            (cross-reference-browser-block-label
+                             loaded-browser))
+                   "Cross-reference browser labels should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
 (deftest repl-block-evaluates-and-renders-transcript ()
   (let* ((application (make-application :backend (make-null-backend)))
          (repl (invoke-command application 'append-repl-block "Image REPL"))

@@ -186,6 +186,20 @@
     :accessor source-browser-block-label
     :initform "")))
 
+(defclass cross-reference-browser-block (node)
+  ((package-name
+    :initarg :package-name
+    :accessor cross-reference-browser-block-package
+    :initform "COMMON-LISP-USER")
+   (symbol-name
+    :initarg :symbol-name
+    :accessor cross-reference-browser-block-symbol
+    :initform "")
+   (label
+    :initarg :label
+    :accessor cross-reference-browser-block-label
+    :initform "")))
+
 (defclass list-block (node)
   ((items
     :initarg :items
@@ -336,6 +350,20 @@
    (make-instance 'source-browser-block
                   :id (fresh-id "source")
                   :kind :source-browser-block
+                  :package-name (normalize-display-string package-name)
+                  :symbol-name (normalize-display-string symbol-name)
+                  :label (normalize-display-string label))))
+
+(defun make-cross-reference-browser-block
+    (&key (package-name (package-name *package*))
+       (symbol-name "")
+       (label "")
+       registry)
+  (%register-if-present
+   registry
+   (make-instance 'cross-reference-browser-block
+                  :id (fresh-id "xref")
+                  :kind :cross-reference-browser-block
                   :package-name (normalize-display-string package-name)
                   :symbol-name (normalize-display-string symbol-name)
                   :label (normalize-display-string label))))

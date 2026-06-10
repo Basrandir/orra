@@ -19,6 +19,7 @@
    #:add-text-buffer-style-span
    #:append-code-block
    #:append-child
+   #:append-cross-reference-browser-block
    #:append-inspector-block
    #:append-list-block
    #:append-paragraph
@@ -66,6 +67,10 @@
    #:common-lisp-incremental-parse-info
    #:common-lisp-source-syntax-tokens
    #:container-cell
+   #:cross-reference-browser-block
+   #:cross-reference-browser-block-label
+   #:cross-reference-browser-block-package
+   #:cross-reference-browser-block-symbol
    #:define-command
    #:define-key-binding
    #:evaluate-code-block
@@ -113,6 +118,7 @@
    #:make-application
    #:make-code-block
    #:make-container-cell
+   #:make-cross-reference-browser-block
    #:make-inspector-block
    #:make-list-block
    #:make-notebook

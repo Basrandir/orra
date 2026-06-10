@@ -15,6 +15,7 @@
 (defmethod persistable-object-p ((object reference-block)) t)
 (defmethod persistable-object-p ((object inspector-block)) t)
 (defmethod persistable-object-p ((object source-browser-block)) t)
+(defmethod persistable-object-p ((object cross-reference-browser-block)) t)
 (defmethod persistable-object-p ((object list-block)) t)
 (defmethod persistable-object-p ((object table-block)) t)
 (defmethod persistable-object-p ((object task-list)) t)
@@ -171,6 +172,12 @@
                 :symbol-name (source-browser-block-symbol object)
                 :label (source-browser-block-label object))))
 
+(defmethod serialize-object-record ((object cross-reference-browser-block))
+  (append (base-record object :cross-reference-browser-block)
+          (list :package-name (cross-reference-browser-block-package object)
+                :symbol-name (cross-reference-browser-block-symbol object)
+                :label (cross-reference-browser-block-label object))))
+
 (defmethod serialize-object-record ((object list-block))
   (append (base-record object :list-block)
           (list :items (list-block-items object)
@@ -224,6 +231,10 @@
        (make-instance 'source-browser-block
                       :id id
                       :kind :source-browser-block))
+      (:cross-reference-browser-block
+       (make-instance 'cross-reference-browser-block
+                      :id id
+                      :kind :cross-reference-browser-block))
       (:list-block
        (make-instance 'list-block :id id :kind :list-block))
       (:table-block
@@ -313,6 +324,13 @@
      (setf (source-browser-block-symbol object)
            (normalize-display-string (getf record :symbol-name)))
      (setf (source-browser-block-label object)
+           (normalize-display-string (getf record :label))))
+    (cross-reference-browser-block
+     (setf (cross-reference-browser-block-package object)
+           (normalize-display-string (getf record :package-name)))
+     (setf (cross-reference-browser-block-symbol object)
+           (normalize-display-string (getf record :symbol-name)))
+     (setf (cross-reference-browser-block-label object)
            (normalize-display-string (getf record :label))))
     (list-block
      (setf (list-block-items object)
