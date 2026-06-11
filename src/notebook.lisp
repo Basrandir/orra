@@ -200,6 +200,16 @@
     :accessor cross-reference-browser-block-label
     :initform "")))
 
+(defclass stack-frame-browser-block (node)
+  ((target
+    :initarg :target
+    :accessor stack-frame-browser-block-target
+    :initform nil)
+   (label
+    :initarg :label
+    :accessor stack-frame-browser-block-label
+    :initform "")))
+
 (defclass list-block (node)
   ((items
     :initarg :items
@@ -366,6 +376,15 @@
                   :kind :cross-reference-browser-block
                   :package-name (normalize-display-string package-name)
                   :symbol-name (normalize-display-string symbol-name)
+                  :label (normalize-display-string label))))
+
+(defun make-stack-frame-browser-block (&key target (label "") registry)
+  (%register-if-present
+   registry
+   (make-instance 'stack-frame-browser-block
+                  :id (fresh-id "stack")
+                  :kind :stack-frame-browser-block
+                  :target target
                   :label (normalize-display-string label))))
 
 (defun make-list-block (&key items ordered-p registry)

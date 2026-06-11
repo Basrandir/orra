@@ -314,6 +314,48 @@
                 (mapcar #'cross-reference-record-line records)
                 (list "reference: -")))))
 
+(defun stack-frame-browser-target (browser)
+  (stack-frame-browser-block-target browser))
+
+(defun stack-frame-browser-environment (browser)
+  (let ((target (stack-frame-browser-target browser)))
+    (and (typep target 'result-block)
+         (result-block-environment target))))
+
+(defun stack-frame-browser-frames (browser)
+  (getf (stack-frame-browser-environment browser) :stack-frames))
+
+(defun stack-frame-browser-condition-line (browser)
+  (let* ((environment (stack-frame-browser-environment browser))
+         (condition-type (getf environment :condition-type))
+         (condition-message (getf environment :condition-message)))
+    (format nil "condition: ~A~@[ | ~A~]"
+            (or condition-type "-")
+            condition-message)))
+
+(defun stack-frame-browser-frame-line (frame)
+  (format nil "frame ~A: ~A~@[ | ~A~]~@[ | source: ~A~]"
+          (or (getf frame :index) "-")
+          (or (getf frame :function) "-")
+          (getf frame :summary)
+          (getf frame :source)))
+
+(defun stack-frame-browser-lines (browser)
+  (let* ((target (stack-frame-browser-target browser))
+         (frames (stack-frame-browser-frames browser)))
+    (append
+     (list (format nil "target: ~A"
+                   (object-reference-summary-string target))
+           (format nil "status: ~A"
+                   (if (typep target 'result-block)
+                       (result-block-status target)
+                       "-"))
+           (stack-frame-browser-condition-line browser)
+           (format nil "frames: ~D" (length frames)))
+     (if frames
+         (mapcar #'stack-frame-browser-frame-line frames)
+         (list "frame: -")))))
+
 (defun model-inspector-lines (model &key (subject-label "object"))
   (let ((lines (list (format nil "~A: ~A"
                              subject-label
@@ -445,10 +487,21 @@
                               (cross-reference-browser-block-symbol model))
                       (format nil "label: ~A"
                               (if (string= ""
-                                           (cross-reference-browser-block-label
+					   (cross-reference-browser-block-label
                                             model))
                                   "-"
                                   (cross-reference-browser-block-label
+                                   model)))))
+               (stack-frame-browser-block
+                (list (format nil "target: ~A"
+                              (object-reference-summary-string
+                               (stack-frame-browser-block-target model)))
+                      (format nil "label: ~A"
+                              (if (string= ""
+                                           (stack-frame-browser-block-label
+                                            model))
+                                  "-"
+                                  (stack-frame-browser-block-label
                                    model)))))
                (list-block
                 (list (format nil "items: ~D"
@@ -744,6 +797,25 @@
                           registry
                           node
                           (cross-reference-browser-lines node)
+                          :role :metadata)
+       cell))
+    (stack-frame-browser-block
+     (let* ((target (stack-frame-browser-block-target node))
+            (label (if (string= "" (stack-frame-browser-block-label node))
+                       (object-reference-summary-string target)
+                       (stack-frame-browser-block-label node)))
+            (cell (make-container-cell
+                   :registry registry
+                   :model node
+                   :label (format nil "Stack: ~A" label))))
+       (append-heading-cell cell
+                            registry
+                            node
+                            (format nil "Stack: ~A" label))
+       (append-text-lines cell
+                          registry
+                          node
+                          (stack-frame-browser-lines node)
                           :role :metadata)
        cell))
     (list-block

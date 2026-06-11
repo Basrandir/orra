@@ -27,6 +27,7 @@
    #:append-reference-block
    #:append-repl-block
    #:append-source-browser-block
+   #:append-stack-frame-browser-block
    #:append-table-block
    #:append-task-list
    #:backend
@@ -132,6 +133,7 @@
    #:make-repl-entry
    #:make-section
    #:make-source-browser-block
+   #:make-stack-frame-browser-block
    #:make-sdl2-backend
    #:make-table-block
    #:make-task-item
@@ -219,6 +221,9 @@
    #:source-browser-block-label
    #:source-browser-block-package
    #:source-browser-block-symbol
+   #:stack-frame-browser-block
+   #:stack-frame-browser-block-label
+   #:stack-frame-browser-block-target
    #:start-application
    #:start-demo
    #:stop-editing

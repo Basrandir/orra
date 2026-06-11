@@ -923,6 +923,101 @@
         (when (probe-file path)
           (delete-file path))))))
 
+(deftest stack-frame-browser-block-renders-error-result-frames ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application 'append-code-block "de"))
+         (result (invoke-command application 'evaluate-code-block
+                                 (object-id block)))
+         (browser (invoke-command application
+                                  'append-stack-frame-browser-block
+                                  (object-id result)
+                                  "last error")))
+    (is (typep browser 'stack-frame-browser-block)
+        "Appending a stack frame browser should create a browser block.")
+    (is (eq result (stack-frame-browser-block-target browser))
+        "Stack frame browsers should retain the target result block.")
+    (is (string= "last error" (stack-frame-browser-block-label browser))
+        "Stack frame browsers should retain their notebook-local label.")
+    (is (getf (result-block-environment result) :stack-frames)
+        "Error results should record stack frame metadata.")
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Stack: last error" texts :test #'string=)
+          "Stack frame browsers should render their heading.")
+      (is (find (format nil "target: ~A" (object-summary-string result))
+                texts
+                :test #'string=)
+          "Stack frame browsers should render the target result.")
+      (is (find "status: ERROR" texts :test #'string=)
+          "Stack frame browsers should render the target result status.")
+      (is (some (lambda (text)
+                  (search "condition:" text))
+                texts)
+          "Stack frame browsers should render the captured condition.")
+      (is (some (lambda (text)
+                  (search "frame 0:" text))
+                texts)
+          "Stack frame browsers should render at least one frame line."))))
+
+(deftest stack-frame-browser-block-persists-target ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (result (make-result-block
+                  :presentation "Evaluation error: boom"
+                  :input-source "(error \"boom\")"
+                  :input-forms '((error "boom"))
+                  :package-name "ORRA.TESTS"
+                  :evaluated-at 123
+                  :environment
+                  (list :condition-type "SIMPLE-ERROR"
+                        :condition-message "boom"
+                        :stack-frames
+                        (list (list :index 0
+                                    :function "EVALUATE-FORMS"
+                                    :summary "boom")))
+                  :registry registry))
+         (browser (make-stack-frame-browser-block
+                   :target result
+                   :label "saved stack"
+                   :registry registry)))
+    (set-result-block-status result :error)
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section browser)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-browser
+                     (find-if (lambda (object)
+                                (typep object 'stack-frame-browser-block))
+                              (children-of loaded-section)))
+                    (loaded-result
+                     (stack-frame-browser-block-target loaded-browser)))
+               (is (typep loaded-result 'result-block)
+                   "Stack frame browser targets should reload as result blocks.")
+               (is (string= "saved stack"
+                            (stack-frame-browser-block-label loaded-browser))
+                   "Stack frame browser labels should survive persistence.")
+               (is (eq :error (result-block-status loaded-result))
+                   "Target result status should survive persistence.")
+               (is (equal (list (list :index 0
+                                      :function "EVALUATE-FORMS"
+                                      :summary "boom"))
+                          (getf (result-block-environment loaded-result)
+                                :stack-frames))
+                   "Stack frame metadata should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
 (deftest repl-block-evaluates-and-renders-transcript ()
   (let* ((application (make-application :backend (make-null-backend)))
          (repl (invoke-command application 'append-repl-block "Image REPL"))

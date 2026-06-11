@@ -16,6 +16,7 @@
 (defmethod persistable-object-p ((object inspector-block)) t)
 (defmethod persistable-object-p ((object source-browser-block)) t)
 (defmethod persistable-object-p ((object cross-reference-browser-block)) t)
+(defmethod persistable-object-p ((object stack-frame-browser-block)) t)
 (defmethod persistable-object-p ((object list-block)) t)
 (defmethod persistable-object-p ((object table-block)) t)
 (defmethod persistable-object-p ((object task-list)) t)
@@ -96,7 +97,11 @@
                  (when (and (typep object 'inspector-block)
                             (typep (inspector-block-target object)
                                    'model-object))
-                   (visit (inspector-block-target object))))))
+                   (visit (inspector-block-target object)))
+                 (when (and (typep object 'stack-frame-browser-block)
+                            (typep (stack-frame-browser-block-target object)
+                                   'model-object))
+                   (visit (stack-frame-browser-block-target object))))))
       (visit workspace))
     (nreverse objects)))
 
@@ -178,6 +183,11 @@
                 :symbol-name (cross-reference-browser-block-symbol object)
                 :label (cross-reference-browser-block-label object))))
 
+(defmethod serialize-object-record ((object stack-frame-browser-block))
+  (append (base-record object :stack-frame-browser-block)
+          (list :target (encode-value (stack-frame-browser-block-target object))
+                :label (stack-frame-browser-block-label object))))
+
 (defmethod serialize-object-record ((object list-block))
   (append (base-record object :list-block)
           (list :items (list-block-items object)
@@ -235,6 +245,10 @@
        (make-instance 'cross-reference-browser-block
                       :id id
                       :kind :cross-reference-browser-block))
+      (:stack-frame-browser-block
+       (make-instance 'stack-frame-browser-block
+                      :id id
+                      :kind :stack-frame-browser-block))
       (:list-block
        (make-instance 'list-block :id id :kind :list-block))
       (:table-block
@@ -331,6 +345,11 @@
      (setf (cross-reference-browser-block-symbol object)
            (normalize-display-string (getf record :symbol-name)))
      (setf (cross-reference-browser-block-label object)
+           (normalize-display-string (getf record :label))))
+    (stack-frame-browser-block
+     (setf (stack-frame-browser-block-target object)
+           (decode-value (getf record :target) object-table))
+     (setf (stack-frame-browser-block-label object)
            (normalize-display-string (getf record :label))))
     (list-block
      (setf (list-block-items object)

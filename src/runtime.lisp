@@ -133,7 +133,13 @@
         (register-tree registry (reference-block-target object) seen))
       (when (and (typep object 'inspector-block)
                  (typep (inspector-block-target object) 'model-object))
-        (register-tree registry (inspector-block-target object) seen)))))
+        (register-tree registry (inspector-block-target object) seen))
+      (when (and (typep object 'stack-frame-browser-block)
+                 (typep (stack-frame-browser-block-target object)
+                        'model-object))
+        (register-tree registry
+                       (stack-frame-browser-block-target object)
+                       seen)))))
 
 (defun code-block-status-controls (model)
   (if (typep model 'code-block)
@@ -426,8 +432,9 @@
   (typep object
          '(or notebook section paragraph code-block quote-block
            reference-block inspector-block source-browser-block
-           cross-reference-browser-block list-block table-block
-           task-list result-block repl-block repl-entry)))
+           cross-reference-browser-block stack-frame-browser-block
+           list-block table-block task-list result-block repl-block
+           repl-entry)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -1016,6 +1023,38 @@
   (set-result-block-status result status)
   result)
 
+(defun condition-type-string (condition)
+  (let ((type (type-of condition)))
+    (if (symbolp type)
+        (symbol-name type)
+        (printable-string type))))
+
+(defun make-stack-frame-entry (&key index function summary source)
+  (append (list :index index
+                :function (normalize-display-string function)
+                :summary (normalize-display-string summary))
+          (when source
+            (list :source (preview-string
+                           (normalize-display-string source))))))
+
+(defun condition-stack-frame-entries (condition source context)
+  (list (make-stack-frame-entry
+         :index 0
+         :function "EVALUATE-FORMS"
+         :summary condition)
+        (make-stack-frame-entry
+         :index 1
+         :function context
+         :summary "Evaluation request boundary"
+         :source source)))
+
+(defun condition-result-environment (environment condition source context)
+  (append environment
+          (list :condition-type (condition-type-string condition)
+                :condition-message (normalize-display-string condition)
+                :stack-frames
+                (condition-stack-frame-entries condition source context))))
+
 (defun evaluate-source-into-result (application source result
                                     &key (language :common-lisp))
   (declare (ignore application))
@@ -1071,7 +1110,11 @@
             :input-forms (getf parse-info :forms)
             :package-name package-name
             :evaluated-at evaluated-at
-            :environment environment)))))))
+            :environment (condition-result-environment
+                          environment
+                          condition
+                          source
+                          "REPL-ENTRY"))))))))
 
 (defun evaluate-forms (forms)
   (loop for form in forms
@@ -1133,7 +1176,11 @@
             :input-forms (getf parse-info :forms)
             :package-name package-name
             :evaluated-at evaluated-at
-            :environment environment)))))))
+            :environment (condition-result-environment
+                          environment
+                          condition
+                          (code-block-source block)
+                          "CODE-BLOCK"))))))))
 
 (defun make-application (&key backend workspace save-path)
   (let* ((registry (make-object-registry))
@@ -1791,6 +1838,24 @@
     (append-child section block)
     (rebuild-root-cell application)
     block))
+
+(define-command append-stack-frame-browser-block
+    (application result-id &optional (label ""))
+  "Append a stack frame browser lens block for an evaluation result."
+  (let* ((registry (application-registry application))
+         (target (find-object registry result-id)))
+    (unless (typep target 'result-block)
+      (error "Object ~A is not a result block." result-id))
+    (let* ((section (ensure-default-section
+                     (application-workspace application)
+                     registry))
+           (block (make-stack-frame-browser-block
+                   :target target
+                   :label label
+                   :registry registry)))
+      (append-child section block)
+      (rebuild-root-cell application)
+      block)))
 
 (define-command append-list-block (application items &optional ordered-p)
   "Append a list block to the default section."
