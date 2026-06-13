@@ -685,6 +685,75 @@
     (is (eql :serif (object-property child :font))
         "Prototype property lookup failed.")))
 
+(defun slot-metadata-test-summary-default (object slot)
+  (declare (ignore slot))
+  (format nil "summary: ~A" (paragraph-text object)))
+
+(deftest slot-metadata-defaults-participate-in-property-lookup ()
+  (let* ((registry (make-object-registry))
+         (prototype (make-paragraph :text "proto" :registry registry))
+         (child (make-paragraph :text "child" :registry registry)))
+    (setf (object-prototype child) prototype)
+    (set-object-slot-metadata prototype :font :default :serif)
+    (set-object-slot-metadata child :font :label "Font")
+    (set-object-slot-metadata child
+                              :summary
+                              :default-function
+                              'slot-metadata-test-summary-default)
+    (is (string= "Font" (object-slot-metadata child :font :label))
+        "Local slot metadata should be visible on the child object.")
+    (is (eql :serif (object-property child :font))
+        "Inherited slot defaults should remain visible when the child has other metadata for the same slot.")
+    (is (string= "summary: child" (object-property child :summary))
+        "Dynamic slot defaults should be computed against the requesting object.")
+    (set-object-property prototype :font :mono)
+    (is (eql :mono (object-property child :font))
+        "Inherited explicit properties should override inherited slot defaults.")
+    (set-object-property child :font :sans)
+    (is (eql :sans (object-property child :font))
+        "Local explicit properties should override all defaults.")
+    (is (eql :fallback (object-property child :missing :default :fallback))
+        "Explicit lookup defaults should still work when no slot default exists.")))
+
+(deftest slot-metadata-persists-through-workspace-save ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (paragraph (make-paragraph :text "metadata target"
+                                    :registry registry)))
+    (set-object-slot-metadata paragraph :title :label "Title")
+    (set-object-slot-metadata paragraph :title :default "Untitled")
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section paragraph)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-paragraph
+                     (find-if (lambda (object)
+                                (and (typep object 'paragraph)
+                                     (string= "metadata target"
+                                              (paragraph-text object))))
+                              (children-of loaded-section))))
+               (is (string= "Title"
+                            (object-slot-metadata loaded-paragraph
+                                                  :title
+                                                  :label))
+                   "Slot metadata should survive persistence.")
+               (is (string= "Untitled"
+                            (object-property loaded-paragraph :title))
+                   "Persisted slot defaults should participate in property lookup.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
 (deftest notebook-to-cell-tree ()
   (let* ((registry (make-object-registry))
          (workspace (make-workspace :registry registry))

@@ -166,6 +166,9 @@
    #:object-properties
    #:object-property
    #:object-prototype
+   #:object-slot-default
+   #:object-slot-metadata
+   #:object-slot-metadata-entries
    #:object-summary-string
    #:paragraph
    #:paragraph-text
@@ -220,6 +223,7 @@
    #:scroll-page
    #:set-object-metadata
    #:set-object-property
+   #:set-object-slot-metadata
    #:set-result-block-status
    #:sdl2-backend
    #:source-browser-block
