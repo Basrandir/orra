@@ -1018,6 +1018,110 @@
         (when (probe-file path)
           (delete-file path))))))
 
+(deftest condition-browser-block-renders-error-restarts ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (block (invoke-command application 'append-code-block "de"))
+         (result (invoke-command application 'evaluate-code-block
+                                 (object-id block)))
+         (browser (invoke-command application
+                                  'append-condition-browser-block
+                                  (object-id result)
+                                  "last condition"))
+         (restarts (getf (result-block-environment result) :restart-options)))
+    (is (typep browser 'condition-browser-block)
+        "Appending a condition browser should create a browser block.")
+    (is (eq result (condition-browser-block-target browser))
+        "Condition browsers should retain the target result block.")
+    (is (string= "last condition" (condition-browser-block-label browser))
+        "Condition browsers should retain their notebook-local label.")
+    (is restarts
+        "Error results should record restart metadata.")
+    (is (find "ABORT-EVALUATION" restarts
+              :key (lambda (restart)
+                     (getf restart :name))
+              :test #'string=)
+        "Evaluation errors should expose the Orra abort-evaluation restart.")
+    (render-application application)
+    (let ((texts (collect-text-cells (application-root-cell application))))
+      (is (find "Condition: last condition" texts :test #'string=)
+          "Condition browsers should render their heading.")
+      (is (find (format nil "target: ~A" (object-summary-string result))
+                texts
+                :test #'string=)
+          "Condition browsers should render the target result.")
+      (is (find "status: ERROR" texts :test #'string=)
+          "Condition browsers should render the target result status.")
+      (is (some (lambda (text)
+                  (search "condition: UNBOUND-VARIABLE" text))
+                texts)
+          "Condition browsers should render the captured condition.")
+      (is (some (lambda (text)
+                  (and (search "restart " text)
+                       (search "ABORT-EVALUATION" text)))
+                texts)
+          "Condition browsers should render captured restart options."))))
+
+(deftest condition-browser-block-persists-target ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (result (make-result-block
+                  :presentation "Evaluation error: boom"
+                  :input-source "(error \"boom\")"
+                  :input-forms '((error "boom"))
+                  :package-name "ORRA.TESTS"
+                  :evaluated-at 123
+                  :environment
+                  (list :condition-type "SIMPLE-ERROR"
+                        :condition-message "boom"
+                        :restart-options
+                        (list (list :index 0
+                                    :name "ABORT-EVALUATION"
+                                    :description
+                                    "Abort evaluation and store an error result.")))
+                  :registry registry))
+         (browser (make-condition-browser-block
+                   :target result
+                   :label "saved condition"
+                   :registry registry)))
+    (set-result-block-status result :error)
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section browser)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-browser
+                     (find-if (lambda (object)
+                                (typep object 'condition-browser-block))
+                              (children-of loaded-section)))
+                    (loaded-result
+                     (condition-browser-block-target loaded-browser)))
+               (is (typep loaded-result 'result-block)
+                   "Condition browser targets should reload as result blocks.")
+               (is (string= "saved condition"
+                            (condition-browser-block-label loaded-browser))
+                   "Condition browser labels should survive persistence.")
+               (is (eq :error (result-block-status loaded-result))
+                   "Target result status should survive persistence.")
+               (is (equal (list (list :index 0
+                                      :name "ABORT-EVALUATION"
+                                      :description
+                                      "Abort evaluation and store an error result."))
+                          (getf (result-block-environment loaded-result)
+                                :restart-options))
+                   "Restart metadata should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
 (deftest repl-block-evaluates-and-renders-transcript ()
   (let* ((application (make-application :backend (make-null-backend)))
          (repl (invoke-command application 'append-repl-block "Image REPL"))

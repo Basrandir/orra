@@ -139,6 +139,12 @@
                         'model-object))
         (register-tree registry
                        (stack-frame-browser-block-target object)
+                       seen))
+      (when (and (typep object 'condition-browser-block)
+                 (typep (condition-browser-block-target object)
+                        'model-object))
+        (register-tree registry
+                       (condition-browser-block-target object)
                        seen)))))
 
 (defun code-block-status-controls (model)
@@ -433,8 +439,8 @@
          '(or notebook section paragraph code-block quote-block
            reference-block inspector-block source-browser-block
            cross-reference-browser-block stack-frame-browser-block
-           list-block table-block task-list result-block repl-block
-           repl-entry)))
+           condition-browser-block list-block table-block task-list
+           result-block repl-block repl-entry)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -1048,12 +1054,75 @@
          :summary "Evaluation request boundary"
          :source source)))
 
+(defun restart-name-string (restart)
+  (let ((name (restart-name restart)))
+    (if name
+        (symbol-name name)
+        "-")))
+
+(defun restart-description-string (restart)
+  (case (restart-name restart)
+    (abort-evaluation
+     "Abort evaluation and store an error result.")
+    (continue
+     "Continue from the condition.")
+    (use-value
+     "Supply a replacement value.")
+    (store-value
+     "Store a replacement value and continue.")
+    (otherwise
+     (preview-string
+      (handler-case
+          (write-to-string restart :readably nil :escape nil)
+        (error ()
+          "-"))))))
+
+(defun make-restart-option-entry (restart index)
+  (list :index index
+        :name (restart-name-string restart)
+        :description (restart-description-string restart)))
+
+(defun condition-restart-option-entries (condition)
+  (loop for restart in (compute-restarts condition)
+        for index from 0
+        collect (make-restart-option-entry restart index)))
+
 (defun condition-result-environment (environment condition source context)
   (append environment
           (list :condition-type (condition-type-string condition)
                 :condition-message (normalize-display-string condition)
                 :stack-frames
-                (condition-stack-frame-entries condition source context))))
+                (condition-stack-frame-entries condition source context)
+                :restart-options
+                (condition-restart-option-entries condition))))
+
+(defun evaluate-forms-with-condition-capture (forms environment source context)
+  (let (captured-environment)
+    (handler-case
+        (let ((values
+               (handler-bind
+                   ((error (lambda (condition)
+                             (setf captured-environment
+                                   (condition-result-environment
+                                    environment
+                                    condition
+                                    source
+                                    context)))))
+                 (restart-case
+                     (evaluate-forms forms)
+                   (abort-evaluation ()
+                     :report "Abort evaluation and store an error result."
+                     (error "Evaluation aborted."))))))
+          (values :ok values nil))
+      (error (condition)
+        (values :error
+                condition
+                (or captured-environment
+                    (condition-result-environment
+                     environment
+                     condition
+                     source
+                     context)))))))
 
 (defun evaluate-source-into-result (application source result
                                     &key (language :common-lisp))
@@ -1087,34 +1156,35 @@
         :evaluated-at evaluated-at
         :environment environment))
       (t
-       (handler-case
-           (let* ((values (evaluate-forms (getf parse-info :forms)))
-                  (value (if values (car (last values)) nil))
-                  (presentation (printable-string value)))
+       (multiple-value-bind (status payload condition-environment)
+           (evaluate-forms-with-condition-capture
+            (getf parse-info :forms)
+            environment
+            source
+            "REPL-ENTRY")
+         (if (eq status :ok)
+             (let* ((values payload)
+                    (value (if values (car (last values)) nil))
+                    (presentation (printable-string value)))
+               (store-result-block
+                result
+                :ok
+                presentation
+                :value value
+                :input-source source
+                :input-forms (getf parse-info :forms)
+                :package-name package-name
+                :evaluated-at evaluated-at
+                :environment environment))
              (store-result-block
               result
-              :ok
-              presentation
-              :value value
+              :error
+              (format nil "Evaluation error: ~A" payload)
               :input-source source
               :input-forms (getf parse-info :forms)
               :package-name package-name
               :evaluated-at evaluated-at
-              :environment environment))
-         (error (condition)
-           (store-result-block
-            result
-            :error
-            (format nil "Evaluation error: ~A" condition)
-            :input-source source
-            :input-forms (getf parse-info :forms)
-            :package-name package-name
-            :evaluated-at evaluated-at
-            :environment (condition-result-environment
-                          environment
-                          condition
-                          source
-                          "REPL-ENTRY"))))))))
+              :environment condition-environment)))))))
 
 (defun evaluate-forms (forms)
   (loop for form in forms
@@ -1151,36 +1221,37 @@
         :evaluated-at evaluated-at
         :environment environment))
       (t
-       (handler-case
-           (let* ((values (evaluate-forms (getf parse-info :forms)))
-                  (value (if values (car (last values)) nil))
-                  (presentation (printable-string value)))
+       (multiple-value-bind (status payload condition-environment)
+           (evaluate-forms-with-condition-capture
+            (getf parse-info :forms)
+            environment
+            (code-block-source block)
+            "CODE-BLOCK")
+         (if (eq status :ok)
+             (let* ((values payload)
+                    (value (if values (car (last values)) nil))
+                    (presentation (printable-string value)))
+               (store-code-block-result
+                application
+                block
+                :ok
+                presentation
+                :value value
+                :input-source (code-block-source block)
+                :input-forms (getf parse-info :forms)
+                :package-name package-name
+                :evaluated-at evaluated-at
+                :environment environment))
              (store-code-block-result
               application
               block
-              :ok
-              presentation
-              :value value
+              :error
+              (format nil "Evaluation error: ~A" payload)
               :input-source (code-block-source block)
               :input-forms (getf parse-info :forms)
               :package-name package-name
               :evaluated-at evaluated-at
-              :environment environment))
-         (error (condition)
-           (store-code-block-result
-            application
-            block
-            :error
-            (format nil "Evaluation error: ~A" condition)
-            :input-source (code-block-source block)
-            :input-forms (getf parse-info :forms)
-            :package-name package-name
-            :evaluated-at evaluated-at
-            :environment (condition-result-environment
-                          environment
-                          condition
-                          (code-block-source block)
-                          "CODE-BLOCK"))))))))
+              :environment condition-environment)))))))
 
 (defun make-application (&key backend workspace save-path)
   (let* ((registry (make-object-registry))
@@ -1850,6 +1921,24 @@
                      (application-workspace application)
                      registry))
            (block (make-stack-frame-browser-block
+                   :target target
+                   :label label
+                   :registry registry)))
+      (append-child section block)
+      (rebuild-root-cell application)
+      block)))
+
+(define-command append-condition-browser-block
+    (application result-id &optional (label ""))
+  "Append a condition/restart browser lens block for an evaluation result."
+  (let* ((registry (application-registry application))
+         (target (find-object registry result-id)))
+    (unless (typep target 'result-block)
+      (error "Object ~A is not a result block." result-id))
+    (let* ((section (ensure-default-section
+                     (application-workspace application)
+                     registry))
+           (block (make-condition-browser-block
                    :target target
                    :label label
                    :registry registry)))

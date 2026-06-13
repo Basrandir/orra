@@ -356,6 +356,47 @@
          (mapcar #'stack-frame-browser-frame-line frames)
          (list "frame: -")))))
 
+(defun condition-browser-target (browser)
+  (condition-browser-block-target browser))
+
+(defun condition-browser-environment (browser)
+  (let ((target (condition-browser-target browser)))
+    (and (typep target 'result-block)
+         (result-block-environment target))))
+
+(defun condition-browser-restarts (browser)
+  (getf (condition-browser-environment browser) :restart-options))
+
+(defun condition-browser-condition-line (browser)
+  (let* ((environment (condition-browser-environment browser))
+         (condition-type (getf environment :condition-type))
+         (condition-message (getf environment :condition-message)))
+    (format nil "condition: ~A~@[ | ~A~]"
+            (or condition-type "-")
+            condition-message)))
+
+(defun condition-browser-restart-line (restart)
+  (format nil "restart ~A: ~A~@[ | ~A~]"
+          (or (getf restart :index) "-")
+          (or (getf restart :name) "-")
+          (getf restart :description)))
+
+(defun condition-browser-lines (browser)
+  (let* ((target (condition-browser-target browser))
+         (restarts (condition-browser-restarts browser)))
+    (append
+     (list (format nil "target: ~A"
+                   (object-reference-summary-string target))
+           (format nil "status: ~A"
+                   (if (typep target 'result-block)
+                       (result-block-status target)
+                       "-"))
+           (condition-browser-condition-line browser)
+           (format nil "restarts: ~D" (length restarts)))
+     (if restarts
+         (mapcar #'condition-browser-restart-line restarts)
+         (list "restart: -")))))
+
 (defun model-inspector-lines (model &key (subject-label "object"))
   (let ((lines (list (format nil "~A: ~A"
                              subject-label
@@ -502,6 +543,17 @@
                                             model))
                                   "-"
                                   (stack-frame-browser-block-label
+                                   model)))))
+               (condition-browser-block
+                (list (format nil "target: ~A"
+                              (object-reference-summary-string
+                               (condition-browser-block-target model)))
+                      (format nil "label: ~A"
+                              (if (string= ""
+                                           (condition-browser-block-label
+                                            model))
+                                  "-"
+                                  (condition-browser-block-label
                                    model)))))
                (list-block
                 (list (format nil "items: ~D"
@@ -816,6 +868,25 @@
                           registry
                           node
                           (stack-frame-browser-lines node)
+                          :role :metadata)
+       cell))
+    (condition-browser-block
+     (let* ((target (condition-browser-block-target node))
+            (label (if (string= "" (condition-browser-block-label node))
+                       (object-reference-summary-string target)
+                       (condition-browser-block-label node)))
+            (cell (make-container-cell
+                   :registry registry
+                   :model node
+                   :label (format nil "Condition: ~A" label))))
+       (append-heading-cell cell
+                            registry
+                            node
+                            (format nil "Condition: ~A" label))
+       (append-text-lines cell
+                          registry
+                          node
+                          (condition-browser-lines node)
                           :role :metadata)
        cell))
     (list-block

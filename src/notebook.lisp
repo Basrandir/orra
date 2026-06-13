@@ -210,6 +210,16 @@
     :accessor stack-frame-browser-block-label
     :initform "")))
 
+(defclass condition-browser-block (node)
+  ((target
+    :initarg :target
+    :accessor condition-browser-block-target
+    :initform nil)
+   (label
+    :initarg :label
+    :accessor condition-browser-block-label
+    :initform "")))
+
 (defclass list-block (node)
   ((items
     :initarg :items
@@ -384,6 +394,15 @@
    (make-instance 'stack-frame-browser-block
                   :id (fresh-id "stack")
                   :kind :stack-frame-browser-block
+                  :target target
+                  :label (normalize-display-string label))))
+
+(defun make-condition-browser-block (&key target (label "") registry)
+  (%register-if-present
+   registry
+   (make-instance 'condition-browser-block
+                  :id (fresh-id "condition")
+                  :kind :condition-browser-block
                   :target target
                   :label (normalize-display-string label))))
 

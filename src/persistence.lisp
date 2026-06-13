@@ -17,6 +17,7 @@
 (defmethod persistable-object-p ((object source-browser-block)) t)
 (defmethod persistable-object-p ((object cross-reference-browser-block)) t)
 (defmethod persistable-object-p ((object stack-frame-browser-block)) t)
+(defmethod persistable-object-p ((object condition-browser-block)) t)
 (defmethod persistable-object-p ((object list-block)) t)
 (defmethod persistable-object-p ((object table-block)) t)
 (defmethod persistable-object-p ((object task-list)) t)
@@ -101,7 +102,11 @@
                  (when (and (typep object 'stack-frame-browser-block)
                             (typep (stack-frame-browser-block-target object)
                                    'model-object))
-                   (visit (stack-frame-browser-block-target object))))))
+                   (visit (stack-frame-browser-block-target object)))
+                 (when (and (typep object 'condition-browser-block)
+                            (typep (condition-browser-block-target object)
+                                   'model-object))
+                   (visit (condition-browser-block-target object))))))
       (visit workspace))
     (nreverse objects)))
 
@@ -188,6 +193,11 @@
           (list :target (encode-value (stack-frame-browser-block-target object))
                 :label (stack-frame-browser-block-label object))))
 
+(defmethod serialize-object-record ((object condition-browser-block))
+  (append (base-record object :condition-browser-block)
+          (list :target (encode-value (condition-browser-block-target object))
+                :label (condition-browser-block-label object))))
+
 (defmethod serialize-object-record ((object list-block))
   (append (base-record object :list-block)
           (list :items (list-block-items object)
@@ -249,6 +259,10 @@
        (make-instance 'stack-frame-browser-block
                       :id id
                       :kind :stack-frame-browser-block))
+      (:condition-browser-block
+       (make-instance 'condition-browser-block
+                      :id id
+                      :kind :condition-browser-block))
       (:list-block
        (make-instance 'list-block :id id :kind :list-block))
       (:table-block
@@ -350,6 +364,11 @@
      (setf (stack-frame-browser-block-target object)
            (decode-value (getf record :target) object-table))
      (setf (stack-frame-browser-block-label object)
+           (normalize-display-string (getf record :label))))
+    (condition-browser-block
+     (setf (condition-browser-block-target object)
+           (decode-value (getf record :target) object-table))
+     (setf (condition-browser-block-label object)
            (normalize-display-string (getf record :label))))
     (list-block
      (setf (list-block-items object)
