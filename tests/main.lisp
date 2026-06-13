@@ -689,6 +689,12 @@
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))
 
+(defun slot-metadata-test-display-name (object slot)
+  (declare (ignore slot))
+  (format nil "~A ~A"
+          (object-property object :first-name :default "")
+          (object-property object :last-name :default "")))
+
 (deftest slot-metadata-defaults-participate-in-property-lookup ()
   (let* ((registry (make-object-registry))
          (prototype (make-paragraph :text "proto" :registry registry))
@@ -751,6 +757,85 @@
                (is (string= "Untitled"
                             (object-property loaded-paragraph :title))
                    "Persisted slot defaults should participate in property lookup.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest computed-slots-participate-in-property-lookup ()
+  (let* ((registry (make-object-registry))
+         (prototype (make-paragraph :text "proto" :registry registry))
+         (child (make-paragraph :text "child" :registry registry)))
+    (setf (object-prototype child) prototype)
+    (set-object-property child :first-name "Ada")
+    (set-object-property child :last-name "Lovelace")
+    (set-object-computed-slot prototype
+                              :display-name
+                              'slot-metadata-test-display-name
+                              :depends-on '(:first-name :last-name))
+    (is (string= "Ada Lovelace"
+                 (object-property child :display-name))
+        "Inherited computed slots should run against the requesting object.")
+    (set-object-property child :last-name "Byron")
+    (is (string= "Ada Byron"
+                 (object-property child :display-name))
+        "Computed slots should reflect dependency changes without stale values.")
+    (is (equal '(:first-name :last-name)
+               (object-slot-metadata child
+                                     :display-name
+                                     :depends-on))
+        "Computed slot dependency metadata should be queryable.")
+    (set-object-slot-metadata prototype
+                              :display-name
+                              :default
+                              "Unnamed")
+    (is (string= "Ada Byron"
+                 (object-property child :display-name))
+        "Computed slots should take precedence over slot defaults.")
+    (set-object-property child :display-name "Countess")
+    (is (string= "Countess"
+                 (object-property child :display-name))
+        "Explicit properties should override computed slots.")))
+
+(deftest computed-slots-persist-through-workspace-save ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (paragraph (make-paragraph :text "metadata target"
+                                    :registry registry)))
+    (set-object-property paragraph :first-name "Grace")
+    (set-object-property paragraph :last-name "Hopper")
+    (set-object-computed-slot paragraph
+                              :display-name
+                              'slot-metadata-test-display-name
+                              :depends-on '(:first-name :last-name))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section paragraph)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-paragraph
+                     (find-if (lambda (object)
+                                (and (typep object 'paragraph)
+                                     (string= "metadata target"
+                                              (paragraph-text object))))
+                              (children-of loaded-section))))
+               (is (string= "Grace Hopper"
+                            (object-property loaded-paragraph
+                                             :display-name))
+                   "Persisted computed slots should participate in property lookup.")
+               (is (equal '(:first-name :last-name)
+                          (object-slot-metadata loaded-paragraph
+                                                :display-name
+                                                :depends-on))
+                   "Computed slot dependency metadata should survive persistence.")))
         (when (probe-file path)
           (delete-file path))))))
 

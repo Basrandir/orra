@@ -121,14 +121,24 @@
              (values nil nil))))
       (t (values nil nil)))))
 
-(defun call-slot-default-function (function object key)
+(defun call-slot-function (function object key role)
   (cond
     ((functionp function)
      (funcall function object key))
     ((and (symbolp function) (fboundp function))
      (funcall (symbol-function function) object key))
     (t
-     (error "Slot default function ~S is not callable." function))))
+     (error "Slot ~A function ~S is not callable." role function))))
+
+(defun object-computed-slot-value (object key &key default (inherit t))
+  (multiple-value-bind (function presentp)
+      (object-slot-metadata object
+                            key
+                            :computed-function
+                            :inherit inherit)
+    (if presentp
+        (values (call-slot-function function object key :computed) t)
+        (values default nil))))
 
 (defun object-slot-default (object key &key default (inherit t))
   (multiple-value-bind (function presentp)
@@ -138,7 +148,7 @@
                             :inherit inherit)
     (when presentp
       (return-from object-slot-default
-        (values (call-slot-default-function function object key) t))))
+        (values (call-slot-function function object key :default) t))))
   (multiple-value-bind (value presentp)
       (object-slot-metadata object
                             key
@@ -153,14 +163,25 @@
       (explicit-object-property object key :inherit inherit)
     (if presentp
         value
-        (multiple-value-bind (slot-default slot-default-presentp)
-            (object-slot-default object key :inherit inherit)
-          (if slot-default-presentp
-              slot-default
-              default)))))
+        (multiple-value-bind (computed-value computed-presentp)
+            (object-computed-slot-value object key :inherit inherit)
+          (if computed-presentp
+              computed-value
+              (multiple-value-bind (slot-default slot-default-presentp)
+                  (object-slot-default object key :inherit inherit)
+                (if slot-default-presentp
+                    slot-default
+                    default)))))))
 
 (defun set-object-property (object key value)
   (setf (gethash key (object-properties object)) value))
+
+(defun set-object-computed-slot (object slot function
+                                 &key (depends-on nil depends-on-p))
+  (set-object-slot-metadata object slot :computed-function function)
+  (when depends-on-p
+    (set-object-slot-metadata object slot :depends-on depends-on))
+  object)
 
 (defun set-object-metadata (object key value)
   (setf (gethash key (object-metadata object)) value))

@@ -160,6 +160,7 @@
    #:notebook
    #:notebook-title
    #:null-backend
+   #:object-computed-slot-value
    #:object-id
    #:object-kind
    #:object-metadata
@@ -222,6 +223,7 @@
    #:scroll-application-page
    #:scroll-page
    #:set-object-metadata
+   #:set-object-computed-slot
    #:set-object-property
    #:set-object-slot-metadata
    #:set-result-block-status
