@@ -111,6 +111,8 @@
    #:inspector-block
    #:inspector-block-label
    #:inspector-block-target
+   #:invalidate-dependent-computed-slots
+   #:invalidate-object-computed-slot
    #:list-commands
    #:list-key-bindings
    #:make-key-event
@@ -160,6 +162,7 @@
    #:notebook
    #:notebook-title
    #:null-backend
+   #:object-computed-slot-cached-p
    #:object-computed-slot-value
    #:object-id
    #:object-kind
@@ -170,6 +173,7 @@
    #:object-slot-default
    #:object-slot-metadata
    #:object-slot-metadata-entries
+   #:object-slot-names
    #:object-summary-string
    #:paragraph
    #:paragraph-text

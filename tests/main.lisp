@@ -695,6 +695,20 @@
           (object-property object :first-name :default "")
           (object-property object :last-name :default "")))
 
+(defvar *slot-metadata-test-display-name-computations* 0)
+(defvar *slot-metadata-test-initials-computations* 0)
+
+(defun slot-metadata-test-counted-display-name (object slot)
+  (incf *slot-metadata-test-display-name-computations*)
+  (slot-metadata-test-display-name object slot))
+
+(defun slot-metadata-test-counted-initials (object slot)
+  (declare (ignore slot))
+  (incf *slot-metadata-test-initials-computations*)
+  (format nil "~A~A"
+          (char (object-property object :first-name :default "?") 0)
+          (char (object-property object :last-name :default "?") 0)))
+
 (deftest slot-metadata-defaults-participate-in-property-lookup ()
   (let* ((registry (make-object-registry))
          (prototype (make-paragraph :text "proto" :registry registry))
@@ -836,6 +850,101 @@
                                                 :display-name
                                                 :depends-on))
                    "Computed slot dependency metadata should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest cached-computed-slots-invalidate-selectively ()
+  (let* ((registry (make-object-registry))
+         (paragraph (make-paragraph :text "target" :registry registry)))
+    (setf *slot-metadata-test-display-name-computations* 0)
+    (setf *slot-metadata-test-initials-computations* 0)
+    (set-object-property paragraph :first-name "Ada")
+    (set-object-property paragraph :last-name "Lovelace")
+    (set-object-computed-slot paragraph
+                              :display-name
+                              'slot-metadata-test-counted-display-name
+                              :depends-on '(:first-name :last-name)
+                              :cached t)
+    (set-object-computed-slot paragraph
+                              :initials
+                              'slot-metadata-test-counted-initials
+                              :depends-on '(:first-name :last-name)
+                              :cached t)
+    (is (string= "Ada Lovelace"
+                 (object-property paragraph :display-name))
+        "Cached computed slots should compute on first read.")
+    (is (string= "Ada Lovelace"
+                 (object-property paragraph :display-name))
+        "Cached computed slots should reuse the cached value on repeated reads.")
+    (is (= 1 *slot-metadata-test-display-name-computations*)
+        "Repeated reads should not recompute an unchanged cached slot.")
+    (is (string= "AL" (object-property paragraph :initials))
+        "A second cached computed slot should compute independently.")
+    (set-object-property paragraph :unrelated t)
+    (is (string= "Ada Lovelace"
+                 (object-property paragraph :display-name))
+        "Unrelated property changes should not invalidate cached slots.")
+    (is (= 1 *slot-metadata-test-display-name-computations*)
+        "Unrelated property changes should preserve cached values.")
+    (set-object-property paragraph :last-name "Byron")
+    (is (string= "Ada Byron"
+                 (object-property paragraph :display-name))
+        "Changing a declared dependency should invalidate and recompute the slot.")
+    (is (= 2 *slot-metadata-test-display-name-computations*)
+        "Dependency changes should recompute affected cached slots once.")
+    (is (= 1 *slot-metadata-test-initials-computations*)
+        "Dependency changes should not recompute other cached slots until they are read.")
+    (is (string= "AB" (object-property paragraph :initials))
+        "Other affected cached slots should recompute lazily when read.")
+    (is (= 2 *slot-metadata-test-initials-computations*)
+        "Each affected cached slot should be invalidated independently.")))
+
+(deftest computed-slot-cache-is-transient ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (paragraph (make-paragraph :text "metadata target"
+                                    :registry registry)))
+    (setf *slot-metadata-test-display-name-computations* 0)
+    (set-object-property paragraph :first-name "Grace")
+    (set-object-property paragraph :last-name "Hopper")
+    (set-object-computed-slot paragraph
+                              :display-name
+                              'slot-metadata-test-counted-display-name
+                              :depends-on '(:first-name :last-name)
+                              :cached t)
+    (is (string= "Grace Hopper"
+                 (object-property paragraph :display-name))
+        "Cached computed slot should compute before persistence.")
+    (is (= 1 *slot-metadata-test-display-name-computations*)
+        "The pre-save read should populate the transient cache.")
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section paragraph)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (setf *slot-metadata-test-display-name-computations* 0)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-paragraph
+                     (find-if (lambda (object)
+                                (and (typep object 'paragraph)
+                                     (string= "metadata target"
+                                              (paragraph-text object))))
+                              (children-of loaded-section))))
+               (is (string= "Grace Hopper"
+                            (object-property loaded-paragraph
+                                             :display-name))
+                   "Loaded computed slots should still compute through metadata.")
+               (is (= 1 *slot-metadata-test-display-name-computations*)
+                   "Computed slot cache values should not be persisted.")))
         (when (probe-file path)
           (delete-file path))))))
 

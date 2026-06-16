@@ -18,6 +18,9 @@
    (metadata
     :initarg :metadata
     :accessor object-metadata
+    :initform (make-hash-table :test #'equal))
+   (computed-cache
+    :accessor object-computed-cache
     :initform (make-hash-table :test #'equal))))
 
 (defmethod print-object ((object model-object) stream)
@@ -92,6 +95,10 @@
       (push value result))
     (nreverse result)))
 
+(defun invalidate-object-computed-slot (object slot)
+  (remhash slot (object-computed-cache object))
+  object)
+
 (defun set-object-slot-metadata (object slot metadata-key value)
   (let* ((entries (object-slot-metadata-entries object))
          (entry (find-object-slot-metadata-entry object slot))
@@ -103,7 +110,18 @@
     (setf (gethash :slots (object-metadata object))
           (cons updated-entry
                 (remove slot entries :key #'first :test #'equal))))
+  (invalidate-object-computed-slot object slot)
   value)
+
+(defun object-slot-names (object &key (inherit t))
+  (let (slots)
+    (labels ((collect (current)
+               (dolist (entry (object-slot-metadata-entries current))
+                 (pushnew (first entry) slots :test #'equal))
+               (when (and inherit (object-prototype current))
+                 (collect (object-prototype current)))))
+      (collect object))
+    (nreverse slots)))
 
 (defun explicit-object-property (object key &key (inherit t))
   (multiple-value-bind (value presentp)
@@ -130,6 +148,24 @@
     (t
      (error "Slot ~A function ~S is not callable." role function))))
 
+(defun object-computed-slot-cached-p (object key &key (inherit t))
+  (multiple-value-bind (value presentp)
+      (object-slot-metadata object key :cached :inherit inherit)
+    (and presentp value)))
+
+(defun compute-object-slot-value (function object key)
+  (call-slot-function function object key :computed))
+
+(defun cached-object-computed-slot-value (object key function)
+  (multiple-value-bind (entry presentp)
+      (gethash key (object-computed-cache object))
+    (if (and presentp (getf entry :valid-p))
+        (values (getf entry :value) t)
+        (let ((value (compute-object-slot-value function object key)))
+          (setf (gethash key (object-computed-cache object))
+                (list :valid-p t :value value))
+          (values value t)))))
+
 (defun object-computed-slot-value (object key &key default (inherit t))
   (multiple-value-bind (function presentp)
       (object-slot-metadata object
@@ -137,7 +173,9 @@
                             :computed-function
                             :inherit inherit)
     (if presentp
-        (values (call-slot-function function object key :computed) t)
+        (if (object-computed-slot-cached-p object key :inherit inherit)
+            (cached-object-computed-slot-value object key function)
+            (values (compute-object-slot-value function object key) t))
         (values default nil))))
 
 (defun object-slot-default (object key &key default (inherit t))
@@ -173,14 +211,35 @@
                     slot-default
                     default)))))))
 
+(defun computed-slot-depends-on-key-p (object slot key)
+  (multiple-value-bind (function presentp)
+      (object-slot-metadata object slot :computed-function)
+    (declare (ignore function))
+    (when presentp
+      (multiple-value-bind (dependencies dependencies-presentp)
+          (object-slot-metadata object slot :depends-on)
+        (and dependencies-presentp
+             (member key (ensure-list dependencies) :test #'equal))))))
+
+(defun invalidate-dependent-computed-slots (object key)
+  (dolist (slot (object-slot-names object))
+    (when (computed-slot-depends-on-key-p object slot key)
+      (invalidate-object-computed-slot object slot)))
+  object)
+
 (defun set-object-property (object key value)
-  (setf (gethash key (object-properties object)) value))
+  (setf (gethash key (object-properties object)) value)
+  (invalidate-dependent-computed-slots object key)
+  value)
 
 (defun set-object-computed-slot (object slot function
-                                 &key (depends-on nil depends-on-p))
+                                 &key (depends-on nil depends-on-p)
+                                   (cached nil cached-p))
   (set-object-slot-metadata object slot :computed-function function)
   (when depends-on-p
     (set-object-slot-metadata object slot :depends-on depends-on))
+  (when cached-p
+    (set-object-slot-metadata object slot :cached cached))
   object)
 
 (defun set-object-metadata (object key value)
