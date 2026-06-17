@@ -64,6 +64,11 @@
                        (return found)))))))
     (visit root)))
 
+(defun read-persisted-payload (path)
+  (with-open-file (stream path :direction :input)
+    (with-standard-io-syntax
+      (read stream))))
+
 (deftest text-buffer-editing ()
   (let ((buffer (make-text-buffer :content "abc" :cursor 1)))
     (insert-buffer-text buffer "Z")
@@ -2349,6 +2354,78 @@
                     (result-block-evaluated-at
                      (code-block-result loaded-block)))
                    "Expected persisted evaluation timestamp.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest workspace-clone-command-writes-loadable-copy ()
+  (let* ((application (make-application :save-path "active-workspace.sexp"))
+         (paragraph (invoke-command application
+                                    'append-paragraph
+                                    "clone-only paragraph"))
+         (original-save-path (application-save-path application)))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (invoke-command application 'clone-workspace path)
+             (is (string= original-save-path
+                          (application-save-path application))
+                 "Cloning should not replace the active save path.")
+             (let* ((payload (read-persisted-payload path))
+                    (registry (make-object-registry))
+                    (workspace (load-workspace-from-file path
+                                                         :registry registry))
+                    (loaded-section
+                     (first (children-of (root-notebook workspace))))
+                    (loaded-paragraph
+                     (find-if (lambda (object)
+                                (and (typep object 'paragraph)
+                                     (string= "clone-only paragraph"
+                                              (paragraph-text object))))
+                              (children-of loaded-section))))
+               (is (eq :clone (getf payload :mode))
+                   "Clone files should carry clone mode metadata.")
+               (is (integerp (getf payload :saved-at))
+                   "Clone files should record when they were written.")
+               (is (string= (object-id paragraph)
+                            (object-id loaded-paragraph))
+                   "Clone files should load the same object graph.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest workspace-archive-command-writes-loadable-archive ()
+  (let* ((application (make-application :save-path "active-workspace.sexp"))
+         (paragraph (invoke-command application
+                                    'append-paragraph
+                                    "archive-only paragraph"))
+         (original-save-path (application-save-path application)))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (invoke-command application 'archive-workspace path)
+             (is (string= original-save-path
+                          (application-save-path application))
+                 "Archiving should not replace the active save path.")
+             (let* ((payload (read-persisted-payload path))
+                    (registry (make-object-registry))
+                    (workspace (load-workspace-from-file path
+                                                         :registry registry))
+                    (loaded-section
+                     (first (children-of (root-notebook workspace))))
+                    (loaded-paragraph
+                     (find-if (lambda (object)
+                                (and (typep object 'paragraph)
+                                     (string= "archive-only paragraph"
+                                              (paragraph-text object))))
+                              (children-of loaded-section))))
+               (is (eq :archive (getf payload :mode))
+                   "Archive files should carry archive mode metadata.")
+               (is (integerp (getf payload :saved-at))
+                   "Archive files should record when they were written.")
+               (is (integerp (getf payload :archived-at))
+                   "Archive files should record archive-specific timestamp metadata.")
+               (is (string= (object-id paragraph)
+                            (object-id loaded-paragraph))
+                   "Archive files should remain loadable workspace files.")))
         (when (probe-file path)
           (delete-file path))))))
 

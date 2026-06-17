@@ -17,6 +17,8 @@
    #:application-viewport-y
    #:application-workspace
    #:add-text-buffer-style-span
+   #:archive-workspace
+   #:archive-workspace-to-file
    #:append-code-block
    #:append-child
    #:append-condition-browser-block
@@ -45,6 +47,8 @@
    #:clear-application-dirty
    #:clear-event-log
    #:clear-text-buffer-style-spans
+   #:clone-workspace
+   #:clone-workspace-to-file
    #:code-block
    #:code-block-language
    #:code-block-incremental-parse-info
@@ -294,5 +298,6 @@
    #:undo-buffer-edit
    #:wrap-code-form
    #:workspace
+   #:workspace-file-payload
    #:workspace-notebooks
    #:workspace-title))

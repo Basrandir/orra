@@ -2095,6 +2095,18 @@
                             target
                             :registry (application-registry application))))
 
+(define-command clone-workspace (application path)
+  "Persist a loadable copy of the current workspace without changing the save path."
+  (clone-workspace-to-file (application-workspace application)
+                           path
+                           :registry (application-registry application)))
+
+(define-command archive-workspace (application path)
+  "Persist a loadable archive snapshot of the current workspace."
+  (archive-workspace-to-file (application-workspace application)
+                             path
+                             :registry (application-registry application)))
+
 (define-command load-workspace (application path)
   "Load a workspace from disk and replace the current one."
   (load-workspace-into-application application path))

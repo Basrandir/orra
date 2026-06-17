@@ -23,6 +23,8 @@
 (defmethod persistable-object-p ((object task-list)) t)
 (defmethod persistable-object-p ((object result-block)) t)
 
+(defparameter *workspace-file-version* 1)
+
 (defun encode-value (value)
   (cond
     ((typep value 'model-object)
@@ -399,21 +401,42 @@
            (decode-value (getf record :environment) object-table))))
   object)
 
-(defun save-workspace-to-file (workspace path &key registry)
+(defun workspace-file-payload (workspace &key registry (mode :save) timestamp)
   (let* ((objects (if registry
                       (remove-if-not #'persistable-object-p
                                      (registry-objects-list registry))
                       (collect-workspace-objects workspace)))
-         (payload (list :version 1
+         (timestamp (or timestamp (get-universal-time)))
+         (payload (list :version *workspace-file-version*
+                        :mode mode
+                        :saved-at timestamp
                         :workspace-id (object-id workspace)
                         :objects (mapcar #'serialize-object-record objects))))
-    (with-open-file (stream path
-                            :direction :output
-                            :if-exists :supersede
-                            :if-does-not-exist :create)
-      (with-standard-io-syntax
-        (print payload stream))))
+    (if (eq mode :archive)
+        (append payload (list :archived-at timestamp))
+        payload)))
+
+(defun write-workspace-payload-to-file (payload path)
+  (with-open-file (stream path
+                          :direction :output
+                          :if-exists :supersede
+                          :if-does-not-exist :create)
+    (with-standard-io-syntax
+      (print payload stream)))
   path)
+
+(defun save-workspace-to-file (workspace path &key registry (mode :save))
+  (write-workspace-payload-to-file
+   (workspace-file-payload workspace
+                           :registry registry
+                           :mode mode)
+   path))
+
+(defun clone-workspace-to-file (workspace path &key registry)
+  (save-workspace-to-file workspace path :registry registry :mode :clone))
+
+(defun archive-workspace-to-file (workspace path &key registry)
+  (save-workspace-to-file workspace path :registry registry :mode :archive))
 
 (defun load-workspace-from-file (path &key registry)
   (let* ((payload (with-open-file (stream path :direction :input)
