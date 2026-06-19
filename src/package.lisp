@@ -153,6 +153,7 @@
    #:make-text-buffer
    #:make-workspace
    #:mark-application-dirty
+   #:migrate-workspace-payload
    #:model-object
    #:move-active-buffer-cursor-down
    #:move-active-buffer-cursor-end
@@ -299,5 +300,6 @@
    #:wrap-code-form
    #:workspace
    #:workspace-file-payload
+   #:workspace-file-version
    #:workspace-notebooks
    #:workspace-title))

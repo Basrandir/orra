@@ -23,7 +23,10 @@
 (defmethod persistable-object-p ((object task-list)) t)
 (defmethod persistable-object-p ((object result-block)) t)
 
-(defparameter *workspace-file-version* 1)
+(defparameter *workspace-file-version* 2)
+
+(defun workspace-file-version ()
+  *workspace-file-version*)
 
 (defun encode-value (value)
   (cond
@@ -425,6 +428,36 @@
       (print payload stream)))
   path)
 
+(defun ensure-payload-value (payload key default)
+  (multiple-value-bind (value presentp)
+      (plist-value payload key)
+    (declare (ignore value))
+    (if presentp
+        payload
+        (put-plist-value payload key default))))
+
+(defun migrate-workspace-payload-from-version-1 (payload)
+  (let ((payload (put-plist-value payload
+                                  :version
+                                  *workspace-file-version*)))
+    (setf payload (ensure-payload-value payload :mode :save))
+    (setf payload (ensure-payload-value payload :saved-at 0))
+    payload))
+
+(defun migrate-workspace-payload (payload)
+  (let ((version (or (getf payload :version) 1)))
+    (cond
+      ((> version *workspace-file-version*)
+       (error "Unsupported workspace file version ~A; this build supports up to ~A."
+              version
+              *workspace-file-version*))
+      ((= version *workspace-file-version*)
+       payload)
+      ((= version 1)
+       (migrate-workspace-payload-from-version-1 payload))
+      (t
+       (error "Unsupported workspace file version ~A." version)))))
+
 (defun save-workspace-to-file (workspace path &key registry (mode :save))
   (write-workspace-payload-to-file
    (workspace-file-payload workspace
@@ -442,6 +475,7 @@
   (let* ((payload (with-open-file (stream path :direction :input)
                     (with-standard-io-syntax
                       (read stream))))
+         (payload (migrate-workspace-payload payload))
          (records (getf payload :objects))
          (object-table (make-hash-table :test #'equal)))
     (dolist (record records)

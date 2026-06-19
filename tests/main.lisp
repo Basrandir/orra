@@ -2429,6 +2429,63 @@
         (when (probe-file path)
           (delete-file path))))))
 
+(deftest workspace-payload-migration-loads-version-one-files ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (paragraph (make-paragraph :text "legacy paragraph"
+                                    :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section paragraph)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (let* ((legacy-payload
+                   (list :version 1
+                         :workspace-id (object-id workspace)
+                         :objects (mapcar #'orra::serialize-object-record
+                                          (orra::collect-workspace-objects
+                                           workspace))))
+                  (migrated (migrate-workspace-payload legacy-payload)))
+             (orra::write-workspace-payload-to-file legacy-payload path)
+             (is (= (workspace-file-version)
+                    (getf migrated :version))
+                 "Legacy payloads should migrate to the current schema version.")
+             (is (eq :save (getf migrated :mode))
+                 "Legacy payloads should default to save mode.")
+             (is (= 0 (getf migrated :saved-at))
+                 "Legacy payloads should receive a deterministic unknown timestamp.")
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-paragraph
+                     (find-if (lambda (object)
+                                (and (typep object 'paragraph)
+                                     (string= "legacy paragraph"
+                                              (paragraph-text object))))
+                              (children-of loaded-section))))
+               (is (typep loaded-paragraph 'paragraph)
+                   "Migrated legacy payloads should still load as workspaces.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest workspace-payload-migration-rejects-future-versions ()
+  (let ((payload (list :version (1+ (workspace-file-version))
+                       :workspace-id "future"
+                       :objects nil)))
+    (handler-case
+        (progn
+          (migrate-workspace-payload payload)
+          (is nil "Future workspace schemas should not be loaded silently."))
+      (error (condition)
+        (is (search "Unsupported workspace file version"
+                    (princ-to-string condition))
+            "Future workspace schemas should fail with a migration error.")))))
+
 (defun run-all-tests ()
   (let ((passed 0)
         (failed 0))
