@@ -415,9 +415,12 @@
                         :saved-at timestamp
                         :workspace-id (object-id workspace)
                         :objects (mapcar #'serialize-object-record objects))))
-    (if (eq mode :archive)
-        (append payload (list :archived-at timestamp))
-        payload)))
+    (case mode
+      (:archive
+       (append payload (list :archived-at timestamp)))
+      (:checkpoint
+       (append payload (list :checkpoint-at timestamp)))
+      (t payload))))
 
 (defun write-workspace-payload-to-file (payload path)
   (with-open-file (stream path
@@ -470,6 +473,14 @@
 
 (defun archive-workspace-to-file (workspace path &key registry)
   (save-workspace-to-file workspace path :registry registry :mode :archive))
+
+(defun checkpoint-workspace-to-file (workspace path &key registry timestamp)
+  (write-workspace-payload-to-file
+   (workspace-file-payload workspace
+                           :registry registry
+                           :mode :checkpoint
+                           :timestamp timestamp)
+   path))
 
 (defun load-workspace-from-file (path &key registry)
   (let* ((payload (with-open-file (stream path :direction :input)

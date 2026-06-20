@@ -4,6 +4,8 @@
    #:*application*
    #:application
    #:application-backend
+   #:application-checkpoint-directory
+   #:application-checkpoint-interval
    #:application-commands
    #:application-debug-visible-p
    #:application-damage-regions
@@ -11,6 +13,8 @@
    #:application-event-log
    #:application-event-log-limit
    #:application-keymap
+   #:application-last-checkpoint-at
+   #:application-last-checkpoint-path
    #:application-registry
    #:application-root-cell
    #:application-save-path
@@ -47,6 +51,8 @@
    #:clear-application-dirty
    #:clear-event-log
    #:clear-text-buffer-style-spans
+   #:checkpoint-workspace
+   #:checkpoint-workspace-to-file
    #:clone-workspace
    #:clone-workspace-to-file
    #:code-block
@@ -153,6 +159,7 @@
    #:make-text-buffer
    #:make-workspace
    #:mark-application-dirty
+   #:maybe-checkpoint-workspace
    #:migrate-workspace-payload
    #:model-object
    #:move-active-buffer-cursor-down

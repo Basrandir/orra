@@ -69,6 +69,19 @@
     (with-standard-io-syntax
       (read stream))))
 
+(defun make-test-directory (prefix)
+  (let ((directory (merge-pathnames
+                    (format nil "~A-~A/" prefix (fresh-id "tmp"))
+                    (uiop:temporary-directory))))
+    (ensure-directories-exist directory)
+    directory))
+
+(defun delete-test-directory (directory)
+  (when (probe-file directory)
+    (uiop:delete-directory-tree directory
+                                :validate t
+                                :if-does-not-exist :ignore)))
+
 (deftest text-buffer-editing ()
   (let ((buffer (make-text-buffer :content "abc" :cursor 1)))
     (insert-buffer-text buffer "Z")
@@ -2428,6 +2441,68 @@
                    "Archive files should remain loadable workspace files.")))
         (when (probe-file path)
           (delete-file path))))))
+
+(deftest checkpoint-workspace-command-writes-loadable-checkpoint ()
+  (let* ((application (make-application :save-path "active-workspace.sexp"))
+         (paragraph (invoke-command application
+                                    'append-paragraph
+                                    "checkpoint-only paragraph"))
+         (original-save-path (application-save-path application)))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (invoke-command application 'checkpoint-workspace path)
+             (is (string= original-save-path
+                          (application-save-path application))
+                 "Checkpointing should not replace the active save path.")
+             (let* ((payload (read-persisted-payload path))
+                    (registry (make-object-registry))
+                    (workspace (load-workspace-from-file path
+                                                         :registry registry))
+                    (loaded-section
+                     (first (children-of (root-notebook workspace))))
+                    (loaded-paragraph
+                     (find-if (lambda (object)
+                                (and (typep object 'paragraph)
+                                     (string= "checkpoint-only paragraph"
+                                              (paragraph-text object))))
+                              (children-of loaded-section))))
+               (is (eq :checkpoint (getf payload :mode))
+                   "Checkpoint files should carry checkpoint mode metadata.")
+               (is (integerp (getf payload :checkpoint-at))
+                   "Checkpoint files should record checkpoint-specific timestamp metadata.")
+               (is (string= (object-id paragraph)
+                            (object-id loaded-paragraph))
+                   "Checkpoint files should remain loadable workspace files.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest periodic-checkpoint-runs-only-when-interval-is-due ()
+  (let ((directory (make-test-directory "orra-checkpoints")))
+    (unwind-protect
+         (let ((application (make-application :checkpoint-directory directory
+                                              :checkpoint-interval 10)))
+           (setf (application-last-checkpoint-at application) 100)
+           (is (null (maybe-checkpoint-workspace application :now 109))
+               "Checkpointing before the interval should do nothing.")
+           (is (null (directory (merge-pathnames "*.sexp" directory)))
+               "No checkpoint file should be created before the interval is due.")
+           (let ((path (maybe-checkpoint-workspace application :now 110)))
+             (is path
+                 "Checkpointing should return the checkpoint path when due.")
+             (is (probe-file path)
+                 "Checkpointing should create a file when due.")
+             (is (= 110 (application-last-checkpoint-at application))
+                 "Checkpointing should record the completed checkpoint time.")
+             (is (equal (truename path)
+                        (truename (application-last-checkpoint-path application)))
+                 "Checkpointing should remember the last checkpoint path.")
+             (let ((payload (read-persisted-payload path)))
+               (is (eq :checkpoint (getf payload :mode))
+                   "Periodic checkpoints should use checkpoint mode metadata.")
+               (is (= 110 (getf payload :checkpoint-at))
+                   "Periodic checkpoints should use the triggering timestamp."))))
+      (delete-test-directory directory))))
 
 (deftest workspace-payload-migration-loads-version-one-files ()
   (let* ((registry (make-object-registry))

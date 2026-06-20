@@ -65,6 +65,22 @@
    (save-path
     :initarg :save-path
     :accessor application-save-path
+    :initform nil)
+   (checkpoint-directory
+    :initarg :checkpoint-directory
+    :accessor application-checkpoint-directory
+    :initform nil)
+   (checkpoint-interval
+    :initarg :checkpoint-interval
+    :accessor application-checkpoint-interval
+    :initform 300)
+   (last-checkpoint-at
+    :initarg :last-checkpoint-at
+    :accessor application-last-checkpoint-at
+    :initform nil)
+   (last-checkpoint-path
+    :initarg :last-checkpoint-path
+    :accessor application-last-checkpoint-path
     :initform nil)))
 
 (defun mark-application-dirty (application &key (region :full))
@@ -81,6 +97,7 @@
   application)
 
 (defun render-application-if-needed (application)
+  (maybe-checkpoint-workspace application)
   (when (application-dirty-p application)
     (render-application application)))
 
@@ -114,6 +131,46 @@
            (application-debug-visible-p application)))
   (mark-application-dirty application)
   application)
+
+(defun checkpoint-interval-due-p (application now)
+  (let ((interval (application-checkpoint-interval application))
+        (last-checkpoint-at (application-last-checkpoint-at application)))
+    (and (numberp interval)
+         (plusp interval)
+         (or (null last-checkpoint-at)
+             (>= (- now last-checkpoint-at) interval)))))
+
+(defun checkpoint-path-for-time (application timestamp)
+  (let ((directory (application-checkpoint-directory application)))
+    (unless directory
+      (error "No checkpoint directory is configured."))
+    (merge-pathnames
+     (format nil "~A-checkpoint-~D.sexp"
+             (object-id (application-workspace application))
+             timestamp)
+     (uiop:ensure-directory-pathname directory))))
+
+(defun write-application-checkpoint (application path timestamp)
+  (ensure-directories-exist path)
+  (checkpoint-workspace-to-file (application-workspace application)
+                                path
+                                :registry (application-registry application)
+                                :timestamp timestamp)
+  (setf (application-last-checkpoint-at application) timestamp)
+  (setf (application-last-checkpoint-path application) path)
+  (record-application-event application
+                            :checkpoint
+                            (format nil "checkpoint written to ~A"
+                                    (namestring path)))
+  path)
+
+(defun maybe-checkpoint-workspace (application &key (now (get-universal-time)) force)
+  (when (and (application-checkpoint-directory application)
+             (or force
+                 (checkpoint-interval-due-p application now)))
+    (write-application-checkpoint application
+                                  (checkpoint-path-for-time application now)
+                                  now)))
 
 (defun register-tree (registry object &optional seen)
   (let ((seen (or seen (make-hash-table :test #'equal))))
@@ -1253,7 +1310,8 @@
               :evaluated-at evaluated-at
               :environment condition-environment)))))))
 
-(defun make-application (&key backend workspace save-path)
+(defun make-application (&key backend workspace save-path checkpoint-directory
+                           (checkpoint-interval 300))
   (let* ((registry (make-object-registry))
          (workspace (or workspace (make-scratch-workspace registry)))
          (application (make-instance 'application
@@ -1264,7 +1322,9 @@
                                      (make-hash-table :test #'equal)
                                      :workspace workspace
                                      :backend (or backend (make-null-backend))
-                                     :save-path save-path)))
+                                     :save-path save-path
+                                     :checkpoint-directory checkpoint-directory
+                                     :checkpoint-interval checkpoint-interval)))
     (register-tree registry workspace)
     (install-defined-commands application)
     (install-defined-key-bindings application)
@@ -2106,6 +2166,14 @@
   (archive-workspace-to-file (application-workspace application)
                              path
                              :registry (application-registry application)))
+
+(define-command checkpoint-workspace (application &optional path)
+  "Persist a loadable checkpoint snapshot of the current workspace."
+  (let ((timestamp (get-universal-time)))
+    (write-application-checkpoint
+     application
+     (or path (checkpoint-path-for-time application timestamp))
+     timestamp)))
 
 (define-command load-workspace (application path)
   "Load a workspace from disk and replace the current one."
