@@ -431,6 +431,11 @@
       (print payload stream)))
   path)
 
+(defun read-workspace-payload-from-file (path)
+  (with-open-file (stream path :direction :input)
+    (with-standard-io-syntax
+      (read stream))))
+
 (defun ensure-payload-value (payload key default)
   (multiple-value-bind (value presentp)
       (plist-value payload key)
@@ -482,10 +487,37 @@
                            :timestamp timestamp)
    path))
 
+(defun workspace-checkpoint-record (path)
+  (handler-case
+      (let ((payload (migrate-workspace-payload
+                      (read-workspace-payload-from-file path))))
+        (when (and (eq :checkpoint (getf payload :mode))
+                   (integerp (getf payload :checkpoint-at)))
+          (let ((registry (make-object-registry)))
+            (load-workspace-from-file path :registry registry))
+          (list :path path
+                :checkpoint-at (getf payload :checkpoint-at))))
+    (error ()
+      nil)))
+
+(defun workspace-checkpoint-records (directory)
+  (loop for path in (directory
+                     (merge-pathnames
+                      "*.sexp"
+                      (uiop:ensure-directory-pathname directory)))
+        for record = (workspace-checkpoint-record path)
+        when record
+        collect record))
+
+(defun latest-workspace-checkpoint (directory)
+  (let ((records (workspace-checkpoint-records directory)))
+    (getf (first (sort records #'>
+                       :key (lambda (record)
+                              (getf record :checkpoint-at))))
+          :path)))
+
 (defun load-workspace-from-file (path &key registry)
-  (let* ((payload (with-open-file (stream path :direction :input)
-                    (with-standard-io-syntax
-                      (read stream))))
+  (let* ((payload (read-workspace-payload-from-file path))
          (payload (migrate-workspace-payload payload))
          (records (getf payload :objects))
          (object-table (make-hash-table :test #'equal)))

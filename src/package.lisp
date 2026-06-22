@@ -123,6 +123,7 @@
    #:inspector-block-target
    #:invalidate-dependent-computed-slots
    #:invalidate-object-computed-slot
+   #:latest-workspace-checkpoint
    #:list-commands
    #:list-key-bindings
    #:make-key-event
@@ -300,6 +301,8 @@
    #:replace-buffer-range
    #:redo-active-buffer-edit
    #:redo-buffer-edit
+   #:recover-workspace
+   #:recover-workspace-from-checkpoint
    #:replace-code-form-source
    #:replace-selected-code-block-form-source
    #:undo-active-buffer-edit

@@ -82,6 +82,16 @@
                                 :validate t
                                 :if-does-not-exist :ignore)))
 
+(defun workspace-has-paragraph-text-p (workspace text)
+  (let ((notebook (root-notebook workspace)))
+    (and notebook
+         (some (lambda (section)
+                 (some (lambda (object)
+                         (and (typep object 'paragraph)
+                              (string= text (paragraph-text object))))
+                       (children-of section)))
+               (children-of notebook)))))
+
 (deftest text-buffer-editing ()
   (let ((buffer (make-text-buffer :content "abc" :cursor 1)))
     (insert-buffer-text buffer "Z")
@@ -2502,6 +2512,82 @@
                    "Periodic checkpoints should use checkpoint mode metadata.")
                (is (= 110 (getf payload :checkpoint-at))
                    "Periodic checkpoints should use the triggering timestamp."))))
+      (delete-test-directory directory))))
+
+(deftest latest-workspace-checkpoint-ignores-invalid-files ()
+  (let ((directory (make-test-directory "orra-recovery")))
+    (unwind-protect
+         (let* ((old-application (make-application
+                                  :checkpoint-directory directory))
+                (new-application (make-application
+                                  :checkpoint-directory directory))
+                (save-application (make-application
+                                   :checkpoint-directory directory))
+                (old-path (merge-pathnames "old-checkpoint.sexp" directory))
+                (new-path (merge-pathnames "new-checkpoint.sexp" directory))
+                (save-path (merge-pathnames "normal-save.sexp" directory))
+                (bad-path (merge-pathnames "bad-checkpoint.sexp" directory)))
+           (invoke-command old-application
+                           'append-paragraph
+                           "old checkpoint")
+           (invoke-command new-application
+                           'append-paragraph
+                           "new checkpoint")
+           (invoke-command save-application
+                           'append-paragraph
+                           "normal save")
+           (checkpoint-workspace-to-file
+            (application-workspace old-application)
+            old-path
+            :registry (application-registry old-application)
+            :timestamp 100)
+           (checkpoint-workspace-to-file
+            (application-workspace new-application)
+            new-path
+            :registry (application-registry new-application)
+            :timestamp 200)
+           (save-workspace-to-file
+            (application-workspace save-application)
+            save-path
+            :registry (application-registry save-application))
+           (with-open-file (stream bad-path
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create)
+             (write-line "not a workspace payload" stream))
+           (is (equal (truename new-path)
+                      (truename (latest-workspace-checkpoint directory)))
+               "Recovery should choose the newest valid checkpoint file."))
+      (delete-test-directory directory))))
+
+(deftest recover-workspace-command-loads-latest-checkpoint ()
+  (let ((directory (make-test-directory "orra-recovery")))
+    (unwind-protect
+         (let* ((source (make-application :checkpoint-directory directory))
+                (application (make-application
+                              :save-path "active-workspace.sexp"
+                              :checkpoint-directory directory)))
+           (invoke-command source
+                           'append-paragraph
+                           "recovered checkpoint paragraph")
+           (maybe-checkpoint-workspace source :now 300 :force t)
+           (invoke-command application
+                           'append-paragraph
+                           "unrecovered paragraph")
+           (invoke-command application 'recover-workspace)
+           (is (string= "active-workspace.sexp"
+                        (application-save-path application))
+               "Recovering a checkpoint should preserve the active save path.")
+           (is (workspace-has-paragraph-text-p
+                (application-workspace application)
+                "recovered checkpoint paragraph")
+               "Recovery should load the latest checkpoint workspace.")
+           (is (not (workspace-has-paragraph-text-p
+                     (application-workspace application)
+                     "unrecovered paragraph"))
+               "Recovery should replace the current workspace.")
+           (is (probe-file (application-last-checkpoint-path application))
+               "Recovery should remember the checkpoint path it loaded."))
       (delete-test-directory directory))))
 
 (deftest workspace-payload-migration-loads-version-one-files ()

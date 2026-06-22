@@ -1339,7 +1339,8 @@
                  application))
   application)
 
-(defun load-workspace-into-application (application path)
+(defun load-workspace-into-application (application path &key
+							   (update-save-path-p t))
   (let ((registry (make-object-registry)))
     (setf (application-registry application) registry)
     (setf (application-editor-state-table application)
@@ -1347,11 +1348,35 @@
     (setf (application-workspace application)
           (load-workspace-from-file path :registry registry))
     (install-defined-commands application)
-    (setf (application-save-path application) path)
+    (when update-save-path-p
+      (setf (application-save-path application) path))
     (setf (application-viewport-y application) 0)
     (rebuild-root-cell application)
     (ensure-valid-focus application)
     (rebuild-root-cell application)
+    application))
+
+(defun recover-workspace-from-checkpoint (application &optional path)
+  (let* ((checkpoint-path
+          (or path
+              (let ((directory (application-checkpoint-directory application)))
+                (and directory
+                     (latest-workspace-checkpoint directory)))))
+         (record (and checkpoint-path
+                      (workspace-checkpoint-record checkpoint-path))))
+    (unless record
+      (error "No loadable workspace checkpoint is available."))
+    (load-workspace-into-application application
+                                     (getf record :path)
+                                     :update-save-path-p nil)
+    (setf (application-last-checkpoint-path application) (getf record :path))
+    (setf (application-last-checkpoint-at application)
+          (getf record :checkpoint-at))
+    (record-application-event
+     application
+     :recovery
+     (format nil "workspace recovered from ~A"
+             (namestring (getf record :path))))
     application))
 
 (defun save-runtime-image (path)
@@ -2178,6 +2203,10 @@
 (define-command load-workspace (application path)
   "Load a workspace from disk and replace the current one."
   (load-workspace-into-application application path))
+
+(define-command recover-workspace (application &optional path)
+  "Recover the current workspace from a checkpoint file."
+  (recover-workspace-from-checkpoint application path))
 
 (defun start-demo (&key backend)
   (start-application
