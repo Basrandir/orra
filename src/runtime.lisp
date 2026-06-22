@@ -1333,6 +1333,55 @@
     (rebuild-root-cell application)
     application))
 
+(defun truthy-environment-value-p (value)
+  (and value
+       (not (member (string-downcase value)
+                    '("" "0" "false" "no" "nil")
+                    :test #'string=))))
+
+(defun parse-positive-environment-integer (value)
+  (when value
+    (let ((parsed (parse-integer value :junk-allowed t)))
+      (and parsed
+           (plusp parsed)
+           parsed))))
+
+(defun image-restore-options-from-environment ()
+  (let ((checkpoint-interval
+         (parse-positive-environment-integer
+          (uiop:getenv "ORRA_CHECKPOINT_INTERVAL"))))
+    (append
+     (let ((workspace-path (uiop:getenv "ORRA_WORKSPACE")))
+       (when workspace-path
+         (list :workspace-path workspace-path)))
+     (let ((checkpoint-directory (uiop:getenv "ORRA_CHECKPOINT_DIR")))
+       (when checkpoint-directory
+         (list :checkpoint-directory checkpoint-directory)))
+     (when (truthy-environment-value-p
+            (uiop:getenv "ORRA_RECOVER_CHECKPOINT"))
+       (list :recover-checkpoint-p t))
+     (when checkpoint-interval
+       (list :checkpoint-interval checkpoint-interval)))))
+
+(defun make-image-restored-application (&key backend workspace-path save-path
+                                          checkpoint-directory
+                                          recover-checkpoint-p
+                                          (checkpoint-interval 300))
+  (let ((application
+         (make-application :backend backend
+                           :save-path (or save-path workspace-path)
+                           :checkpoint-directory checkpoint-directory
+                           :checkpoint-interval checkpoint-interval)))
+    (when workspace-path
+      (load-workspace-into-application application workspace-path)
+      (when save-path
+        (setf (application-save-path application) save-path)))
+    (when (and recover-checkpoint-p
+               checkpoint-directory
+               (latest-workspace-checkpoint checkpoint-directory))
+      (recover-workspace-from-checkpoint application))
+    application))
+
 (defun start-application (application)
   (let ((*application* application))
     (run-backend (application-backend application)
@@ -2210,6 +2259,8 @@
 
 (defun start-demo (&key backend)
   (start-application
-   (make-application
-    :backend (or backend
-                 (make-sdl2-backend)))))
+   (apply #'make-image-restored-application
+          (append
+           (list :backend (or backend
+                              (make-sdl2-backend)))
+           (image-restore-options-from-environment)))))

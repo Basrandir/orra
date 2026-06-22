@@ -123,6 +123,7 @@
    #:inspector-block-target
    #:invalidate-dependent-computed-slots
    #:invalidate-object-computed-slot
+   #:image-restore-options-from-environment
    #:latest-workspace-checkpoint
    #:list-commands
    #:list-key-bindings
@@ -140,6 +141,7 @@
    #:make-cross-reference-browser-block
    #:make-inspector-block
    #:make-list-block
+   #:make-image-restored-application
    #:make-notebook
    #:make-null-backend
    #:make-object-registry

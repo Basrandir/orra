@@ -2590,6 +2590,73 @@
                "Recovery should remember the checkpoint path it loaded."))
       (delete-test-directory directory))))
 
+(deftest image-restored-application-loads-workspace-path ()
+  (let ((source (make-application)))
+    (invoke-command source
+                    'append-paragraph
+                    "image-restored workspace paragraph")
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file (application-workspace source)
+                                     path
+                                     :registry (application-registry source))
+             (let ((application
+                    (make-image-restored-application
+                     :backend (make-null-backend)
+                     :workspace-path path)))
+               (is (workspace-has-paragraph-text-p
+                    (application-workspace application)
+                    "image-restored workspace paragraph")
+                   "Image restore should load the requested workspace path.")
+               (is (equal (truename path)
+                          (truename (application-save-path application)))
+                   "Image restore should keep the loaded workspace as the save path.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest image-restored-application-recovers-latest-checkpoint ()
+  (let ((directory (make-test-directory "orra-image-restore")))
+    (unwind-protect
+         (uiop:with-temporary-file (:pathname save-path :keep t)
+           (unwind-protect
+                (let ((saved (make-application))
+                      (checkpointed
+                       (make-application :checkpoint-directory directory)))
+                  (invoke-command saved
+                                  'append-paragraph
+                                  "saved image workspace")
+                  (save-workspace-to-file
+                   (application-workspace saved)
+                   save-path
+                   :registry (application-registry saved))
+                  (invoke-command checkpointed
+                                  'append-paragraph
+                                  "checkpoint image workspace")
+                  (maybe-checkpoint-workspace checkpointed
+                                              :now 400
+                                              :force t)
+                  (let ((application
+                         (make-image-restored-application
+                          :backend (make-null-backend)
+                          :workspace-path save-path
+                          :checkpoint-directory directory
+                          :recover-checkpoint-p t)))
+                    (is (workspace-has-paragraph-text-p
+                         (application-workspace application)
+                         "checkpoint image workspace")
+                        "Image restore should recover the newest checkpoint when requested.")
+                    (is (not (workspace-has-paragraph-text-p
+                              (application-workspace application)
+                              "saved image workspace"))
+                        "Recovered checkpoint state should replace the saved workspace state.")
+                    (is (equal (truename save-path)
+                               (truename (application-save-path application)))
+                        "Checkpoint image restore should preserve the normal save path.")))
+             (when (probe-file save-path)
+               (delete-file save-path))))
+      (delete-test-directory directory))))
+
 (deftest workspace-payload-migration-loads-version-one-files ()
   (let* ((registry (make-object-registry))
          (workspace (make-workspace :registry registry))
