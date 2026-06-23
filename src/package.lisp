@@ -124,6 +124,9 @@
    #:invalidate-dependent-computed-slots
    #:invalidate-object-computed-slot
    #:image-restore-options-from-environment
+   #:journal-next-sequence
+   #:journal-operations
+   #:journal-workspace-id
    #:latest-workspace-checkpoint
    #:list-commands
    #:list-key-bindings
@@ -144,6 +147,7 @@
    #:make-image-restored-application
    #:make-notebook
    #:make-null-backend
+   #:make-operation-journal
    #:make-object-registry
    #:make-paragraph
    #:make-quote-block
@@ -161,6 +165,7 @@
    #:make-text-cell
    #:make-text-buffer
    #:make-workspace
+   #:make-workspace-operation
    #:mark-application-dirty
    #:maybe-checkpoint-workspace
    #:migrate-workspace-payload
@@ -190,6 +195,15 @@
    #:object-slot-metadata-entries
    #:object-slot-names
    #:object-summary-string
+   #:operation-actor-id
+   #:operation-id
+   #:operation-journal
+   #:operation-payload
+   #:operation-sequence
+   #:operation-session-id
+   #:operation-target-id
+   #:operation-timestamp
+   #:operation-type
    #:paragraph
    #:paragraph-text
    #:parse-common-lisp-source
@@ -212,6 +226,8 @@
    #:render-application
    #:render-application-if-needed
    #:record-application-event
+   #:record-local-operation
+   #:record-operation
    #:result-block
    #:result-block-environment
    #:result-block-evaluated-at
@@ -313,5 +329,8 @@
    #:workspace
    #:workspace-file-payload
    #:workspace-file-version
+   #:workspace-operation
+   #:workspace-operation-plist
+   #:workspace-operation-type-p
    #:workspace-notebooks
    #:workspace-title))

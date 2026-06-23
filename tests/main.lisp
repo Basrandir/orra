@@ -713,6 +713,69 @@
     (is (eql :serif (object-property child :font))
         "Prototype property lookup failed.")))
 
+(deftest workspace-operation-records-semantic-payload ()
+  (let* ((registry (make-object-registry))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (operation
+          (make-workspace-operation
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "updated")
+           :actor-id "user-1"
+           :session-id "session-1"
+           :timestamp 100)))
+    (is (stringp (operation-id operation))
+        "Operations should have stable ids.")
+    (is (eq :set-slot (operation-type operation))
+        "Operation type should describe the semantic change.")
+    (is (string= (object-id paragraph)
+                 (operation-target-id operation))
+        "Operation target should reference object identity, not object memory.")
+    (is (equal (list :slot :text :value "updated")
+               (operation-payload operation))
+        "Operation payload should preserve serializer-friendly semantic data.")
+    (is (equal (list :id (operation-id operation)
+                     :type :set-slot
+                     :target-id (object-id paragraph)
+                     :payload (list :slot :text :value "updated")
+                     :actor-id "user-1"
+                     :session-id "session-1"
+                     :timestamp 100)
+               (workspace-operation-plist operation))
+        "Operations should expose a persistence-ready plist representation.")))
+
+(deftest operation-journal-assigns-local-sequence ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"))
+         (first-operation
+          (record-local-operation journal
+                                  :create-object
+                                  :target-id "paragraph-1"
+                                  :payload (list :kind :paragraph)
+                                  :actor-id "user-1"
+                                  :session-id "session-1"
+                                  :timestamp 101))
+         (second-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "hello")
+                                  :actor-id "user-1"
+                                  :session-id "session-1"
+                                  :timestamp 102)))
+    (is (= 1 (operation-sequence first-operation))
+        "The first local operation should receive sequence 1.")
+    (is (= 2 (operation-sequence second-operation))
+        "The second local operation should receive sequence 2.")
+    (is (= 3 (journal-next-sequence journal))
+        "The journal should track the next available local sequence.")
+    (is (equal (list first-operation second-operation)
+               (journal-operations journal))
+        "Journal reads should preserve append order.")
+    (let ((snapshot (journal-operations journal)))
+      (setf (cdr snapshot) nil)
+      (is (= 2 (length (journal-operations journal)))
+          "Journal reads should not expose mutable journal storage."))))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))

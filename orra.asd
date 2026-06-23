@@ -8,6 +8,7 @@
     :components ((:file "src/package")
                  (:file "src/util")
                  (:file "src/model")
+                 (:file "src/operations")
                  (:file "src/text-buffer")
                  (:file "src/notebook")
                  (:file "src/code-lens")
