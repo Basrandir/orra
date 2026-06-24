@@ -776,6 +776,81 @@
       (is (= 2 (length (journal-operations journal)))
           "Journal reads should not expose mutable journal storage."))))
 
+(deftest apply-workspace-operation-sets-target-slot ()
+  (let* ((registry (make-object-registry))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-op-1"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "remote text")
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 200)))
+    (is (eq paragraph
+            (apply-workspace-operation registry operation))
+        "Applying a set-slot operation should return the target object.")
+    (is (string= "remote text" (paragraph-text paragraph))
+        "Applying a set-slot operation should mutate the target model slot.")))
+
+(deftest apply-remote-operation-records-and-dedupes ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-op-2"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "first remote value")
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 201
+           :sequence 7)))
+    (is (eq paragraph
+            (apply-remote-operation registry journal operation))
+        "Remote apply should apply new operations to the model.")
+    (is (string= "first remote value" (paragraph-text paragraph))
+        "Remote apply should perform the semantic operation.")
+    (is (= 1 (length (journal-operations journal)))
+        "Remote apply should record the applied operation once.")
+    (is (journal-recorded-operation-p journal "remote-op-2")
+        "The journal should remember applied operation ids for dedupe.")
+    (setf (paragraph-text paragraph) "local value after apply")
+    (is (null (apply-remote-operation registry journal operation))
+        "Applying the same remote operation again should be a no-op.")
+    (is (string= "local value after apply" (paragraph-text paragraph))
+        "Duplicate remote operations should not reapply model mutations.")
+    (is (= 1 (length (journal-operations journal)))
+        "Duplicate remote operations should not be appended again.")))
+
+(deftest apply-operation-journal-replays-in-append-order ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"))
+         (paragraph (make-paragraph :text "draft" :registry registry)))
+    (record-operation
+     journal
+     (make-workspace-operation
+      :id "replay-op-1"
+      :type :set-slot
+      :target-id (object-id paragraph)
+      :payload (list :slot :text :value "first replay value")
+      :timestamp 300))
+    (record-operation
+     journal
+     (make-workspace-operation
+      :id "replay-op-2"
+      :type :set-slot
+      :target-id (object-id paragraph)
+      :payload (list :slot :text :value "second replay value")
+      :timestamp 301))
+    (is (equal (list paragraph paragraph)
+               (apply-operation-journal registry journal))
+        "Journal replay should return each operation application result.")
+    (is (string= "second replay value" (paragraph-text paragraph))
+        "Journal replay should apply operations in append order.")))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))

@@ -37,6 +37,9 @@
    #:append-stack-frame-browser-block
    #:append-table-block
    #:append-task-list
+   #:apply-operation-journal
+   #:apply-remote-operation
+   #:apply-workspace-operation
    #:backend
    #:backend-name
    #:build-workspace-cell-tree
@@ -102,6 +105,7 @@
    #:focus-previous-model
    #:focused-model
    #:fresh-id
+   #:find-journal-operation
    #:invoke-command
    #:key-binding
    #:key-binding-context
@@ -126,6 +130,7 @@
    #:image-restore-options-from-environment
    #:journal-next-sequence
    #:journal-operations
+   #:journal-recorded-operation-p
    #:journal-workspace-id
    #:latest-workspace-checkpoint
    #:list-commands
