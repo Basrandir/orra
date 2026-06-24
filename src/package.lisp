@@ -130,7 +130,11 @@
    #:image-restore-options-from-environment
    #:journal-next-sequence
    #:journal-operations
+   #:journal-actor-id
+   #:journal-clock-position
    #:journal-recorded-operation-p
+   #:journal-session-id
+   #:journal-vector-clock
    #:journal-workspace-id
    #:latest-workspace-checkpoint
    #:list-commands
@@ -201,6 +205,7 @@
    #:object-slot-names
    #:object-summary-string
    #:operation-actor-id
+   #:operation-clock
    #:operation-id
    #:operation-journal
    #:operation-payload

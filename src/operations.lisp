@@ -18,6 +18,54 @@
     (error "Unsupported workspace operation type ~S." type))
   type)
 
+(defun vector-clock-entry-position (entry)
+  (let ((tail (cdr entry)))
+    (if (consp tail)
+        (first tail)
+        tail)))
+
+(defun ensure-vector-clock-position (position)
+  (unless (and (integerp position)
+               (not (minusp position)))
+    (error "Vector clock positions must be non-negative integers, got ~S."
+           position))
+  position)
+
+(defun map-vector-clock-entries (function clock)
+  (cond
+    ((null clock)
+     nil)
+    ((hash-table-p clock)
+     (maphash (lambda (actor-id position)
+                (funcall function
+                         actor-id
+                         (ensure-vector-clock-position position)))
+              clock))
+    ((listp clock)
+     (dolist (entry clock)
+       (unless (consp entry)
+         (error "Vector clock entries must be conses, got ~S." entry))
+       (funcall function
+                (car entry)
+                (ensure-vector-clock-position
+                 (vector-clock-entry-position entry)))))
+    (t
+     (error "Vector clocks must be NIL, hash tables, or alists, got ~S."
+            clock))))
+
+(defun vector-clock-entry-sort-key (entry)
+  (princ-to-string (car entry)))
+
+(defun copy-vector-clock (clock)
+  (let (entries)
+    (map-vector-clock-entries
+     (lambda (actor-id position)
+       (when (and actor-id
+                  (plusp position))
+         (push (cons actor-id position) entries)))
+     clock)
+    (sort entries #'string< :key #'vector-clock-entry-sort-key)))
+
 (defclass workspace-operation ()
   ((id
     :initarg :id
@@ -45,6 +93,10 @@
     :initarg :timestamp
     :reader operation-timestamp
     :initform nil)
+   (clock
+    :initarg :clock
+    :reader operation-clock
+    :initform nil)
    (sequence
     :initarg :sequence
     :accessor operation-sequence
@@ -63,6 +115,7 @@
                                    actor-id
                                    session-id
                                    (timestamp (get-universal-time))
+                                   clock
                                    sequence)
   (make-instance 'workspace-operation
                  :id id
@@ -72,6 +125,7 @@
                  :actor-id actor-id
                  :session-id session-id
                  :timestamp timestamp
+                 :clock (copy-vector-clock clock)
                  :sequence sequence))
 
 (defun workspace-operation-plist (operation)
@@ -83,6 +137,8 @@
          :actor-id (operation-actor-id operation)
          :session-id (operation-session-id operation)
          :timestamp (operation-timestamp operation))
+   (when (operation-clock operation)
+     (list :clock (copy-vector-clock (operation-clock operation))))
    (when (operation-sequence operation)
      (list :sequence (operation-sequence operation)))))
 
@@ -91,10 +147,21 @@
     :initarg :workspace-id
     :reader journal-workspace-id
     :initform nil)
+   (actor-id
+    :initarg :actor-id
+    :reader journal-actor-id
+    :initform nil)
+   (session-id
+    :initarg :session-id
+    :reader journal-session-id
+    :initform nil)
    (next-sequence
     :initarg :next-sequence
     :accessor journal-next-sequence
     :initform 1)
+   (clock
+    :accessor %journal-clock
+    :initform (make-hash-table :test #'equal))
    (operations
     :accessor %journal-operations
     :initform nil)
@@ -102,10 +169,42 @@
     :accessor %journal-operation-ids
     :initform (make-hash-table :test #'equal))))
 
-(defun make-operation-journal (&key workspace-id (next-sequence 1))
-  (make-instance 'operation-journal
-                 :workspace-id workspace-id
-                 :next-sequence next-sequence))
+(defun merge-journal-clock-position (journal actor-id position)
+  (let ((position (ensure-vector-clock-position position)))
+    (when (and actor-id
+               (> position (gethash actor-id (%journal-clock journal) 0)))
+      (setf (gethash actor-id (%journal-clock journal)) position))))
+
+(defun merge-journal-clock (journal clock)
+  (map-vector-clock-entries
+   (lambda (actor-id position)
+     (merge-journal-clock-position journal actor-id position))
+   clock)
+  journal)
+
+(defun journal-clock-position (journal actor-id &optional (default 0))
+  (gethash actor-id (%journal-clock journal) default))
+
+(defun journal-vector-clock (journal)
+  (copy-vector-clock (%journal-clock journal)))
+
+(defun advance-journal-clock (journal actor-id)
+  (let ((next-position (1+ (journal-clock-position journal actor-id))))
+    (setf (gethash actor-id (%journal-clock journal)) next-position)
+    next-position))
+
+(defun make-operation-journal (&key workspace-id
+                                 actor-id
+                                 session-id
+                                 (next-sequence 1)
+                                 clock)
+  (let ((journal (make-instance 'operation-journal
+                                :workspace-id workspace-id
+                                :actor-id actor-id
+                                :session-id session-id
+                                :next-sequence next-sequence)))
+    (merge-journal-clock journal clock)
+    journal))
 
 (defun journal-operations (journal)
   (copy-list (%journal-operations journal)))
@@ -134,18 +233,25 @@
         (setf (gethash (operation-id operation)
                        (%journal-operation-ids journal))
               operation)
+        (merge-journal-clock journal (operation-clock operation))
         operation)))
 
 (defun record-local-operation (journal type &key target-id payload actor-id
-					      session-id timestamp)
-  (record-operation
-   journal
-   (make-workspace-operation :type type
-                             :target-id target-id
-                             :payload payload
-                             :actor-id actor-id
-                             :session-id session-id
-                             :timestamp timestamp)))
+                                              session-id timestamp)
+  (let* ((effective-actor-id (or actor-id (journal-actor-id journal)))
+         (effective-session-id (or session-id (journal-session-id journal)))
+         (clock (when effective-actor-id
+                  (advance-journal-clock journal effective-actor-id)
+                  (journal-vector-clock journal))))
+    (record-operation
+     journal
+     (make-workspace-operation :type type
+                               :target-id target-id
+                               :payload payload
+                               :actor-id effective-actor-id
+                               :session-id effective-session-id
+                               :timestamp timestamp
+                               :clock clock))))
 
 (defun operation-payload-value (operation key &optional default)
   (multiple-value-bind (value presentp)

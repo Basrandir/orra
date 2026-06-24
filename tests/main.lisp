@@ -851,6 +851,73 @@
     (is (string= "second replay value" (paragraph-text paragraph))
         "Journal replay should apply operations in append order.")))
 
+(deftest local-operations-carry-journal-identity-and-clock ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (first-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "first")))
+         (second-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "second"))))
+    (is (string= "local-user" (operation-actor-id first-operation))
+        "Local operations should default to the journal actor.")
+    (is (string= "local-session" (operation-session-id first-operation))
+        "Local operations should default to the journal session.")
+    (is (equal '(("local-user" . 1))
+               (operation-clock first-operation))
+        "The first local operation should carry the first local clock tick.")
+    (is (equal '(("local-user" . 2))
+               (operation-clock second-operation))
+        "The second local operation should advance the local actor clock.")
+    (is (= 2 (journal-clock-position journal "local-user"))
+        "The journal should retain the latest local actor clock position.")
+    (is (equal '(("local-user" . 2))
+               (journal-vector-clock journal))
+        "The journal should expose a serializer-friendly causal clock.")))
+
+(deftest remote-operations-merge-causal-clock ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (local-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text :value "local")))
+         (remote-operation
+          (make-workspace-operation
+           :id "causal-remote-op"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "remote")
+           :actor-id "peer-user"
+           :session-id "peer-session"
+           :clock '(("local-user" . 1)
+                    ("peer-user" . 3)))))
+    (declare (ignore local-operation))
+    (apply-remote-operation registry journal remote-operation)
+    (is (= 1 (journal-clock-position journal "local-user"))
+        "Remote apply should preserve the known local clock position.")
+    (is (= 3 (journal-clock-position journal "peer-user"))
+        "Remote apply should merge the peer clock position.")
+    (is (equal '(("local-user" . 1)
+                 ("peer-user" . 3))
+               (journal-vector-clock journal))
+        "Merged clocks should stay deterministic and serializer-friendly.")
+    (apply-remote-operation registry journal remote-operation)
+    (is (equal '(("local-user" . 1)
+                 ("peer-user" . 3))
+               (journal-vector-clock journal))
+        "Duplicate remote operations should not advance causal state twice.")))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))
