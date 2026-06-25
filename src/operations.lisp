@@ -10,6 +10,9 @@
     :link-object
     :evaluate-cell))
 
+(defparameter *journal-operation-queue-statuses*
+  '(:pending :acknowledged :failed))
+
 (defun workspace-operation-type-p (type)
   (not (null (member type *workspace-operation-types*))))
 
@@ -17,6 +20,11 @@
   (unless (workspace-operation-type-p type)
     (error "Unsupported workspace operation type ~S." type))
   type)
+
+(defun ensure-journal-operation-queue-status (status)
+  (unless (member status *journal-operation-queue-statuses*)
+    (error "Unsupported operation queue status ~S." status))
+  status)
 
 (defun vector-clock-entry-position (entry)
   (let ((tail (cdr entry)))
@@ -167,6 +175,9 @@
     :initform nil)
    (operation-ids
     :accessor %journal-operation-ids
+    :initform (make-hash-table :test #'equal))
+   (queue-statuses
+    :accessor %journal-queue-statuses
     :initform (make-hash-table :test #'equal))))
 
 (defun merge-journal-clock-position (journal actor-id position)
@@ -213,11 +224,50 @@
   (or (gethash operation-id (%journal-operation-ids journal))
       default))
 
+(defun journal-operation-id-for (operation-or-id)
+  (if (typep operation-or-id 'workspace-operation)
+      (operation-id operation-or-id)
+      operation-or-id))
+
 (defun journal-recorded-operation-p (journal operation-or-id)
-  (let ((operation-id (if (typep operation-or-id 'workspace-operation)
-                          (operation-id operation-or-id)
-                          operation-or-id)))
+  (let ((operation-id (journal-operation-id-for operation-or-id)))
     (not (null (find-journal-operation journal operation-id)))))
+
+(defun journal-operation-queue-status (journal operation-or-id
+                                       &optional default)
+  (gethash (journal-operation-id-for operation-or-id)
+           (%journal-queue-statuses journal)
+           default))
+
+(defun require-journal-operation (journal operation-or-id)
+  (or (find-journal-operation journal
+                              (journal-operation-id-for operation-or-id))
+      (error "Journal does not contain operation ~S." operation-or-id)))
+
+(defun set-journal-operation-queue-status (journal operation-or-id status)
+  (let ((operation (require-journal-operation journal operation-or-id)))
+    (setf (gethash (operation-id operation) (%journal-queue-statuses journal))
+          (ensure-journal-operation-queue-status status))
+    operation))
+
+(defun journal-operations-with-queue-status (journal status)
+  (let ((status (ensure-journal-operation-queue-status status)))
+    (remove-if-not
+     (lambda (operation)
+       (eq status (journal-operation-queue-status journal operation)))
+     (journal-operations journal))))
+
+(defun journal-pending-operations (journal)
+  (journal-operations-with-queue-status journal :pending))
+
+(defun journal-failed-operations (journal)
+  (journal-operations-with-queue-status journal :failed))
+
+(defun acknowledge-journal-operation (journal operation-or-id)
+  (set-journal-operation-queue-status journal operation-or-id :acknowledged))
+
+(defun fail-journal-operation (journal operation-or-id)
+  (set-journal-operation-queue-status journal operation-or-id :failed))
 
 (defun record-operation (journal operation)
   (ensure-workspace-operation-type (operation-type operation))
@@ -243,15 +293,17 @@
          (clock (when effective-actor-id
                   (advance-journal-clock journal effective-actor-id)
                   (journal-vector-clock journal))))
-    (record-operation
-     journal
-     (make-workspace-operation :type type
-                               :target-id target-id
-                               :payload payload
-                               :actor-id effective-actor-id
-                               :session-id effective-session-id
-                               :timestamp timestamp
-                               :clock clock))))
+    (let ((operation (record-operation
+                      journal
+                      (make-workspace-operation :type type
+                                                :target-id target-id
+                                                :payload payload
+                                                :actor-id effective-actor-id
+                                                :session-id effective-session-id
+                                                :timestamp timestamp
+                                                :clock clock))))
+      (set-journal-operation-queue-status journal operation :pending)
+      operation)))
 
 (defun operation-payload-value (operation key &optional default)
   (multiple-value-bind (value presentp)

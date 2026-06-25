@@ -21,6 +21,7 @@
    #:application-viewport-y
    #:application-workspace
    #:add-text-buffer-style-span
+   #:acknowledge-journal-operation
    #:archive-workspace
    #:archive-workspace-to-file
    #:append-code-block
@@ -93,6 +94,7 @@
    #:define-key-binding
    #:evaluate-code-block
    #:evaluate-repl-entry
+   #:fail-journal-operation
    #:find-object
    #:begin-editing-focused-model
    #:delete-active-buffer-backward
@@ -128,12 +130,15 @@
    #:invalidate-dependent-computed-slots
    #:invalidate-object-computed-slot
    #:image-restore-options-from-environment
+   #:journal-failed-operations
    #:journal-next-sequence
+   #:journal-operation-queue-status
    #:journal-operations
    #:journal-actor-id
    #:journal-clock-position
    #:journal-recorded-operation-p
    #:journal-session-id
+   #:journal-pending-operations
    #:journal-vector-clock
    #:journal-workspace-id
    #:latest-workspace-checkpoint

@@ -918,6 +918,77 @@
                (journal-vector-clock journal))
         "Duplicate remote operations should not advance causal state twice.")))
 
+(deftest local-operations-enter-pending-queue-until-acknowledged ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (first-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "first")))
+         (second-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "second"))))
+    (is (eq :pending
+            (journal-operation-queue-status journal first-operation))
+        "Local operations should enter the journal queue as pending.")
+    (is (equal (list first-operation second-operation)
+               (journal-pending-operations journal))
+        "Pending operations should preserve journal append order.")
+    (is (eq first-operation
+            (acknowledge-journal-operation journal first-operation))
+        "Acknowledging should return the acknowledged operation.")
+    (is (eq :acknowledged
+            (journal-operation-queue-status journal first-operation))
+        "Acknowledged operations should retain their acknowledgement state.")
+    (is (equal (list second-operation)
+               (journal-pending-operations journal))
+        "Acknowledged operations should leave the pending queue.")))
+
+(deftest failed-local-operations-leave-pending-queue ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "draft"))))
+    (is (eq operation
+            (fail-journal-operation journal operation))
+        "Failing should return the failed operation.")
+    (is (eq :failed
+            (journal-operation-queue-status journal operation))
+        "Failed operations should retain their failed queue state.")
+    (is (null (journal-pending-operations journal))
+        "Failed operations should leave the pending queue.")
+    (is (equal (list operation)
+               (journal-failed-operations journal))
+        "Failed operations should be inspectable in journal order.")))
+
+(deftest remote-operations-do-not-enter-local-queue ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (remote-operation
+          (make-workspace-operation
+           :id "queue-remote-op"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "remote")
+           :actor-id "peer-user"
+           :session-id "peer-session")))
+    (apply-remote-operation registry journal remote-operation)
+    (is (null (journal-operation-queue-status journal remote-operation))
+        "Remote operations should not become local queue entries.")
+    (is (null (journal-pending-operations journal))
+        "Remote operations should not appear in the pending local queue.")))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))
