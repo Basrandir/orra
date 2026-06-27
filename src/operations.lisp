@@ -150,6 +150,31 @@
    (when (operation-sequence operation)
      (list :sequence (operation-sequence operation)))))
 
+(defun required-operation-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Operation plist is missing required key ~S." key))
+    value))
+
+(defun operation-plist-initargs (plist)
+  (let ((initargs (list (required-operation-plist-value plist :type)
+                        :type
+                        (required-operation-plist-value plist :id)
+                        :id)))
+    (dolist (key '(:target-id :payload :actor-id :session-id
+                   :timestamp :clock :sequence)
+             (nreverse initargs))
+      (multiple-value-bind (value presentp)
+          (plist-value plist key)
+        (when presentp
+          (push key initargs)
+          (push value initargs))))))
+
+(defun make-workspace-operation-from-plist (plist)
+  (apply #'make-workspace-operation
+         (operation-plist-initargs plist)))
+
 (defclass operation-journal ()
   ((workspace-id
     :initarg :workspace-id
@@ -259,6 +284,14 @@
 
 (defun journal-pending-operations (journal)
   (journal-operations-with-queue-status journal :pending))
+
+(defun journal-pending-sync-payload (journal)
+  (list :workspace-id (journal-workspace-id journal)
+        :actor-id (journal-actor-id journal)
+        :session-id (journal-session-id journal)
+        :clock (journal-vector-clock journal)
+        :operations (mapcar #'workspace-operation-plist
+                            (journal-pending-operations journal))))
 
 (defun journal-failed-operations (journal)
   (journal-operations-with-queue-status journal :failed))

@@ -139,6 +139,7 @@
    #:journal-recorded-operation-p
    #:journal-session-id
    #:journal-pending-operations
+   #:journal-pending-sync-payload
    #:journal-vector-clock
    #:journal-workspace-id
    #:latest-workspace-checkpoint
@@ -180,6 +181,7 @@
    #:make-text-buffer
    #:make-workspace
    #:make-workspace-operation
+   #:make-workspace-operation-from-plist
    #:mark-application-dirty
    #:maybe-checkpoint-workspace
    #:migrate-workspace-payload

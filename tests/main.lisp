@@ -989,6 +989,72 @@
     (is (null (journal-pending-operations journal))
         "Remote operations should not appear in the pending local queue.")))
 
+(deftest workspace-operation-plist-round-trips-sync-fields ()
+  (let* ((payload (list :id "sync-op-1"
+                        :type :set-slot
+                        :target-id "paragraph-1"
+                        :payload (list :slot :text :value "synced")
+                        :actor-id "actor-1"
+                        :session-id "session-1"
+                        :timestamp 123
+                        :clock '(("actor-1" . 2))
+                        :sequence 9))
+         (operation (make-workspace-operation-from-plist payload)))
+    (is (string= "sync-op-1" (operation-id operation))
+        "Operation plist readers should preserve operation identity.")
+    (is (eq :set-slot (operation-type operation))
+        "Operation plist readers should preserve operation type.")
+    (is (string= "paragraph-1" (operation-target-id operation))
+        "Operation plist readers should preserve target identity.")
+    (is (equal (list :slot :text :value "synced")
+               (operation-payload operation))
+        "Operation plist readers should preserve semantic payloads.")
+    (is (string= "actor-1" (operation-actor-id operation))
+        "Operation plist readers should preserve actor identity.")
+    (is (string= "session-1" (operation-session-id operation))
+        "Operation plist readers should preserve session identity.")
+    (is (= 123 (operation-timestamp operation))
+        "Operation plist readers should preserve timestamps.")
+    (is (equal '(("actor-1" . 2))
+               (operation-clock operation))
+        "Operation plist readers should preserve causal clocks.")
+    (is (= 9 (operation-sequence operation))
+        "Operation plist readers should preserve local sequences.")
+    (is (equal payload
+               (workspace-operation-plist operation))
+        "Operation plist serialization should round-trip sync fields.")))
+
+(deftest journal-pending-sync-payload-exports-queued-operations ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "actor-1"
+                                          :session-id "session-1"))
+         (first-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "first")
+                                  :timestamp 200))
+         (second-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "second")
+                                  :timestamp 201)))
+    (acknowledge-journal-operation journal first-operation)
+    (let ((payload (journal-pending-sync-payload journal)))
+      (is (equal "workspace-1" (getf payload :workspace-id))
+          "Sync payloads should identify the workspace.")
+      (is (equal "actor-1" (getf payload :actor-id))
+          "Sync payloads should identify the local actor.")
+      (is (equal "session-1" (getf payload :session-id))
+          "Sync payloads should identify the local session.")
+      (is (equal '(("actor-1" . 2))
+                 (getf payload :clock))
+          "Sync payloads should include the latest local causal clock.")
+      (is (equal (list (workspace-operation-plist second-operation))
+                 (getf payload :operations))
+          "Sync payloads should include only pending operations in journal order."))))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))
