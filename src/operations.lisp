@@ -175,6 +175,13 @@
   (apply #'make-workspace-operation
          (operation-plist-initargs plist)))
 
+(defun required-sync-payload-value (payload key)
+  (multiple-value-bind (value presentp)
+      (plist-value payload key)
+    (unless presentp
+      (error "Sync payload is missing required key ~S." key))
+    value))
+
 (defclass operation-journal ()
   ((workspace-id
     :initarg :workspace-id
@@ -415,6 +422,31 @@
     (let ((result (apply-workspace-operation registry operation)))
       (record-operation journal operation)
       result)))
+
+(defun ensure-sync-payload-workspace (journal payload)
+  (let ((payload-workspace-id (required-sync-payload-value payload :workspace-id))
+        (journal-workspace-id (journal-workspace-id journal)))
+    (unless (equal payload-workspace-id journal-workspace-id)
+      (error "Sync payload workspace ~S does not match journal workspace ~S."
+             payload-workspace-id
+             journal-workspace-id))
+    payload-workspace-id))
+
+(defun sync-payload-operation-plists (payload)
+  (multiple-value-bind (operation-plists presentp)
+      (plist-value payload :operations)
+    (if presentp operation-plists nil)))
+
+(defun sync-payload-operations (payload)
+  (mapcar #'make-workspace-operation-from-plist
+          (sync-payload-operation-plists payload)))
+
+(defun apply-remote-sync-payload (registry journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (loop for operation in (sync-payload-operations payload)
+        for result = (apply-remote-operation registry journal operation)
+        when result
+        collect result))
 
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)

@@ -40,6 +40,7 @@
    #:append-task-list
    #:apply-operation-journal
    #:apply-remote-operation
+   #:apply-remote-sync-payload
    #:apply-workspace-operation
    #:backend
    #:backend-name

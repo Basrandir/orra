@@ -1055,6 +1055,69 @@
                  (getf payload :operations))
           "Sync payloads should include only pending operations in journal order."))))
 
+(deftest remote-sync-payload-applies-operation-plists ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (payload
+          (list :workspace-id "workspace-1"
+                :actor-id "peer-user"
+                :session-id "peer-session"
+                :clock '(("peer-user" . 2))
+                :operations
+                (list (list :id "sync-remote-op-1"
+                            :type :set-slot
+                            :target-id (object-id paragraph)
+                            :payload (list :slot :text :value "first remote")
+                            :actor-id "peer-user"
+                            :session-id "peer-session"
+                            :timestamp 300
+                            :clock '(("peer-user" . 1)))
+                      (list :id "sync-remote-op-2"
+                            :type :set-slot
+                            :target-id (object-id paragraph)
+                            :payload (list :slot :text :value "second remote")
+                            :actor-id "peer-user"
+                            :session-id "peer-session"
+                            :timestamp 301
+                            :clock '(("peer-user" . 2)))))))
+    (is (equal (list paragraph paragraph)
+               (apply-remote-sync-payload registry journal payload))
+        "Remote sync payloads should apply new operation plists in payload order.")
+    (is (string= "second remote" (paragraph-text paragraph))
+        "Remote sync payloads should apply semantic model changes.")
+    (is (= 2 (length (journal-operations journal)))
+        "Remote sync payloads should record applied operations.")
+    (is (equal '(("peer-user" . 2))
+               (journal-vector-clock journal))
+        "Remote sync payloads should merge operation causal clocks.")
+    (setf (paragraph-text paragraph) "local after apply")
+    (is (null (apply-remote-sync-payload registry journal payload))
+        "Reapplying an already-recorded sync payload should return no results.")
+    (is (string= "local after apply" (paragraph-text paragraph))
+        "Duplicate sync payloads should not replay operation side effects.")
+    (is (= 2 (length (journal-operations journal)))
+        "Duplicate sync payloads should not append duplicate operations.")))
+
+(deftest remote-sync-payload-rejects-other-workspaces ()
+  (let ((registry (make-object-registry))
+        (journal (make-operation-journal :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"))
+        (payload (list :workspace-id "workspace-2"
+                       :operations nil)))
+    (handler-case
+        (progn
+          (apply-remote-sync-payload registry journal payload)
+          (is nil "Sync payloads from another workspace should not be applied."))
+      (error (condition)
+        (is (search "workspace-2" (princ-to-string condition))
+            "Workspace mismatch errors should identify the payload workspace.")))
+    (is (null (journal-operations journal))
+        "Rejected sync payloads should not mutate the journal.")))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))
