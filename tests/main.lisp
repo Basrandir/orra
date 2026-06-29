@@ -1055,6 +1055,63 @@
                  (getf payload :operations))
           "Sync payloads should include only pending operations in journal order."))))
 
+(deftest sync-acknowledgement-payload-clears-confirmed-local-operations ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "actor-1"
+                                          :session-id "session-1"))
+         (first-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "first")
+                                  :timestamp 300))
+         (second-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "second")
+                                  :timestamp 301))
+         (payload
+          (list :workspace-id "workspace-1"
+                :acknowledged-operation-ids
+                (list (operation-id first-operation)))))
+    (is (equal (list first-operation)
+               (apply-sync-acknowledgement-payload journal payload))
+        "Acknowledgement payloads should return acknowledged operations.")
+    (is (eq :acknowledged
+            (journal-operation-queue-status journal first-operation))
+        "Acknowledged sync operations should leave the pending queue.")
+    (is (eq :pending
+            (journal-operation-queue-status journal second-operation))
+        "Unacknowledged sync operations should remain pending.")
+    (is (equal (list second-operation)
+               (journal-pending-operations journal))
+        "Only operations confirmed by the server should leave pending state.")))
+
+(deftest sync-acknowledgement-payload-rejects-other-workspaces ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "actor-1"
+                                          :session-id "session-1"))
+         (operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "draft")))
+         (payload
+          (list :workspace-id "workspace-2"
+                :acknowledged-operation-ids
+                (list (operation-id operation)))))
+    (handler-case
+        (progn
+          (apply-sync-acknowledgement-payload journal payload)
+          (is nil "Acknowledgements from another workspace should not apply."))
+      (error (condition)
+        (is (search "workspace-2" (princ-to-string condition))
+            "Workspace mismatch errors should identify the payload workspace.")))
+    (is (eq :pending
+            (journal-operation-queue-status journal operation))
+        "Rejected acknowledgements should not mutate local queue state.")))
+
 (deftest remote-sync-payload-applies-operation-plists ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"

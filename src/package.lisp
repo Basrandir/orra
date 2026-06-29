@@ -41,6 +41,7 @@
    #:apply-operation-journal
    #:apply-remote-operation
    #:apply-remote-sync-payload
+   #:apply-sync-acknowledgement-payload
    #:apply-workspace-operation
    #:backend
    #:backend-name

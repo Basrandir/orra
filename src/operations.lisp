@@ -432,6 +432,23 @@
              journal-workspace-id))
     payload-workspace-id))
 
+(defun sync-payload-acknowledged-operation-ids (payload)
+  (multiple-value-bind (operation-ids presentp)
+      (plist-value payload :acknowledged-operation-ids)
+    (if presentp operation-ids nil)))
+
+(defun sync-payload-acknowledged-operations (journal payload)
+  (mapcar (lambda (operation-id)
+            (require-journal-operation journal operation-id))
+          (sync-payload-acknowledged-operation-ids payload)))
+
+(defun apply-sync-acknowledgement-payload (journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (let ((operations (sync-payload-acknowledged-operations journal payload)))
+    (mapcar (lambda (operation)
+              (acknowledge-journal-operation journal operation))
+            operations)))
+
 (defun sync-payload-operation-plists (payload)
   (multiple-value-bind (operation-plists presentp)
       (plist-value payload :operations)
