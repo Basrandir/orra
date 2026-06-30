@@ -1175,6 +1175,120 @@
     (is (null (journal-operations journal))
         "Rejected sync payloads should not mutate the journal.")))
 
+(deftest local-presence-sync-payload-is-serializer-friendly ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "actor-1"
+                                          :session-id "session-1"))
+         (presence
+          (record-local-presence journal
+                                 :focus-id "paragraph-1"
+                                 :cursor-position 12
+                                 :status :editing
+                                 :updated-at 400
+                                 :metadata (list :color "blue")))
+         (payload (journal-presence-sync-payload journal)))
+    (is (eq presence
+            (find-journal-presence journal "actor-1" "session-1"))
+        "Local presence should be visible in the journal by actor/session.")
+    (is (equal (list :workspace-id "workspace-1"
+                     :actor-id "actor-1"
+                     :session-id "session-1"
+                     :presence
+                     (list :actor-id "actor-1"
+                           :session-id "session-1"
+                           :focus-id "paragraph-1"
+                           :cursor-position 12
+                           :status :editing
+                           :updated-at 400
+                           :metadata (list :color "blue")))
+               payload)
+        "Presence payloads should remain simple plists for sync transport.")))
+
+(deftest presence-sync-payload-updates-remote-presence ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (older-payload
+          (list :workspace-id "workspace-1"
+                :presence
+                (list :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :focus-id "paragraph-1"
+                      :cursor-position 3
+                      :status :editing
+                      :updated-at 100
+                      :metadata (list :color "red"))))
+         (stale-payload
+          (list :workspace-id "workspace-1"
+                :presence
+                (list :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :focus-id "paragraph-2"
+                      :cursor-position 5
+                      :status :idle
+                      :updated-at 99
+                      :metadata (list :color "green"))))
+         (newer-payload
+          (list :workspace-id "workspace-1"
+                :presence
+                (list :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :focus-id "paragraph-3"
+                      :cursor-position 8
+                      :status :active
+                      :updated-at 101
+                      :metadata (list :color "blue")))))
+    (let ((applied (apply-presence-sync-payload journal older-payload)))
+      (is (= 1 (length applied))
+          "Presence sync should return the presence entries it accepted.")
+      (is (string= "paragraph-1"
+                   (collaborator-presence-focus-id (first applied)))
+          "Remote presence should preserve focus identity."))
+    (apply-presence-sync-payload journal stale-payload)
+    (let ((presence (find-journal-presence journal
+                                           "peer-user"
+                                           "peer-session")))
+      (is (string= "paragraph-1"
+                   (collaborator-presence-focus-id presence))
+          "Stale presence should not replace newer local state.")
+      (is (= 100 (collaborator-presence-updated-at presence))
+          "Stale presence should not rewind update time."))
+    (apply-presence-sync-payload journal newer-payload)
+    (let ((presence (find-journal-presence journal
+                                           "peer-user"
+                                           "peer-session")))
+      (is (string= "paragraph-3"
+                   (collaborator-presence-focus-id presence))
+          "Newer presence should replace older presence for the same session.")
+      (is (= 101 (collaborator-presence-updated-at presence))
+          "Newer presence should advance update time.")
+      (is (equal (list :color "blue")
+                 (collaborator-presence-metadata presence))
+          "Presence metadata should remain available for future UI rendering."))))
+
+(deftest presence-sync-payload-rejects-other-workspaces ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (payload
+          (list :workspace-id "workspace-2"
+                :presence
+                (list :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :focus-id "paragraph-1"
+                      :cursor-position 3
+                      :status :editing
+                      :updated-at 100))))
+    (handler-case
+        (progn
+          (apply-presence-sync-payload journal payload)
+          (is nil "Presence from another workspace should not apply."))
+      (error (condition)
+        (is (search "workspace-2" (princ-to-string condition))
+            "Presence workspace mismatch errors should identify the payload workspace.")))
+    (is (null (journal-presences journal))
+        "Rejected presence payloads should not mutate local presence state.")))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))

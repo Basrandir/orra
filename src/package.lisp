@@ -39,6 +39,7 @@
    #:append-table-block
    #:append-task-list
    #:apply-operation-journal
+   #:apply-presence-sync-payload
    #:apply-remote-operation
    #:apply-remote-sync-payload
    #:apply-sync-acknowledgement-payload
@@ -77,6 +78,15 @@
    #:code-block-structure-visible-p
    #:code-block-syntax-summary-line
    #:code-block-syntax-tokens
+   #:collaborator-presence
+   #:collaborator-presence-actor-id
+   #:collaborator-presence-cursor-position
+   #:collaborator-presence-focus-id
+   #:collaborator-presence-metadata
+   #:collaborator-presence-plist
+   #:collaborator-presence-session-id
+   #:collaborator-presence-status
+   #:collaborator-presence-updated-at
    #:command
    #:command-documentation
    #:command-function
@@ -110,6 +120,7 @@
    #:focused-model
    #:fresh-id
    #:find-journal-operation
+   #:find-journal-presence
    #:invoke-command
    #:key-binding
    #:key-binding-context
@@ -142,6 +153,8 @@
    #:journal-session-id
    #:journal-pending-operations
    #:journal-pending-sync-payload
+   #:journal-presences
+   #:journal-presence-sync-payload
    #:journal-vector-clock
    #:journal-workspace-id
    #:latest-workspace-checkpoint
@@ -166,6 +179,7 @@
    #:make-null-backend
    #:make-operation-journal
    #:make-object-registry
+   #:make-collaborator-presence
    #:make-paragraph
    #:make-quote-block
    #:make-reference-block
@@ -246,6 +260,7 @@
    #:render-application-if-needed
    #:record-application-event
    #:record-local-operation
+   #:record-local-presence
    #:record-operation
    #:result-block
    #:result-block-environment

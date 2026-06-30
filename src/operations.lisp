@@ -182,6 +182,102 @@
       (error "Sync payload is missing required key ~S." key))
     value))
 
+(defun required-presence-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Presence plist is missing required key ~S." key))
+    value))
+
+(defun ensure-presence-cursor-position (cursor-position)
+  (unless (or (null cursor-position)
+              (and (integerp cursor-position)
+                   (not (minusp cursor-position))))
+    (error "Presence cursor positions must be NIL or non-negative integers, got ~S."
+           cursor-position))
+  cursor-position)
+
+(defun ensure-presence-updated-at (updated-at)
+  (unless (and (integerp updated-at)
+               (not (minusp updated-at)))
+    (error "Presence update times must be non-negative integers, got ~S."
+           updated-at))
+  updated-at)
+
+(defun ensure-presence-metadata (metadata)
+  (unless (or (null metadata)
+              (listp metadata))
+    (error "Presence metadata must be NIL or a plist, got ~S."
+           metadata))
+  metadata)
+
+(defclass collaborator-presence ()
+  ((actor-id
+    :initarg :actor-id
+    :reader collaborator-presence-actor-id)
+   (session-id
+    :initarg :session-id
+    :reader collaborator-presence-session-id)
+   (focus-id
+    :initarg :focus-id
+    :reader collaborator-presence-focus-id
+    :initform nil)
+   (cursor-position
+    :initarg :cursor-position
+    :reader collaborator-presence-cursor-position
+    :initform nil)
+   (status
+    :initarg :status
+    :reader collaborator-presence-status
+    :initform :active)
+   (updated-at
+    :initarg :updated-at
+    :reader collaborator-presence-updated-at)
+   (metadata
+    :initarg :metadata
+    :reader collaborator-presence-metadata
+    :initform nil)))
+
+(defun make-collaborator-presence (&key actor-id
+                                     session-id
+                                     focus-id
+                                     cursor-position
+                                     (status :active)
+                                     (updated-at (get-universal-time))
+                                     metadata)
+  (unless actor-id
+    (error "Collaborator presence requires an actor id."))
+  (unless session-id
+    (error "Collaborator presence requires a session id."))
+  (make-instance 'collaborator-presence
+                 :actor-id actor-id
+                 :session-id session-id
+                 :focus-id focus-id
+                 :cursor-position
+                 (ensure-presence-cursor-position cursor-position)
+                 :status status
+                 :updated-at (ensure-presence-updated-at updated-at)
+                 :metadata (copy-list (ensure-presence-metadata metadata))))
+
+(defun collaborator-presence-plist (presence)
+  (list :actor-id (collaborator-presence-actor-id presence)
+        :session-id (collaborator-presence-session-id presence)
+        :focus-id (collaborator-presence-focus-id presence)
+        :cursor-position (collaborator-presence-cursor-position presence)
+        :status (collaborator-presence-status presence)
+        :updated-at (collaborator-presence-updated-at presence)
+        :metadata (copy-list (collaborator-presence-metadata presence))))
+
+(defun make-collaborator-presence-from-plist (plist)
+  (make-collaborator-presence
+   :actor-id (required-presence-plist-value plist :actor-id)
+   :session-id (required-presence-plist-value plist :session-id)
+   :focus-id (getf plist :focus-id)
+   :cursor-position (getf plist :cursor-position)
+   :status (getf plist :status :active)
+   :updated-at (getf plist :updated-at (get-universal-time))
+   :metadata (getf plist :metadata)))
+
 (defclass operation-journal ()
   ((workspace-id
     :initarg :workspace-id
@@ -210,6 +306,9 @@
     :initform (make-hash-table :test #'equal))
    (queue-statuses
     :accessor %journal-queue-statuses
+    :initform (make-hash-table :test #'equal))
+   (presences
+    :accessor %journal-presences
     :initform (make-hash-table :test #'equal))))
 
 (defun merge-journal-clock-position (journal actor-id position)
@@ -251,6 +350,77 @@
 
 (defun journal-operations (journal)
   (copy-list (%journal-operations journal)))
+
+(defun journal-presence-key (actor-id session-id)
+  (list actor-id session-id))
+
+(defun collaborator-presence-journal-key (presence)
+  (journal-presence-key (collaborator-presence-actor-id presence)
+                        (collaborator-presence-session-id presence)))
+
+(defun collaborator-presence-sort-key (presence)
+  (format nil "~A ~A"
+          (collaborator-presence-actor-id presence)
+          (collaborator-presence-session-id presence)))
+
+(defun journal-presences (journal)
+  (let (presences)
+    (maphash (lambda (key presence)
+               (declare (ignore key))
+               (push presence presences))
+             (%journal-presences journal))
+    (sort presences #'string< :key #'collaborator-presence-sort-key)))
+
+(defun find-journal-presence (journal actor-id session-id &optional default)
+  (gethash (journal-presence-key actor-id session-id)
+           (%journal-presences journal)
+           default))
+
+(defun collaborator-presence-newer-p (presence existing-presence)
+  (or (null existing-presence)
+      (> (collaborator-presence-updated-at presence)
+         (collaborator-presence-updated-at existing-presence))))
+
+(defun update-journal-presence (journal presence &key force)
+  (let* ((key (collaborator-presence-journal-key presence))
+         (existing-presence (gethash key (%journal-presences journal))))
+    (when (or force
+              (collaborator-presence-newer-p presence existing-presence))
+      (setf (gethash key (%journal-presences journal)) presence)
+      presence)))
+
+(defun journal-local-presence (journal)
+  (find-journal-presence journal
+                         (journal-actor-id journal)
+                         (journal-session-id journal)))
+
+(defun record-local-presence (journal &key actor-id
+                                        session-id
+                                        focus-id
+                                        cursor-position
+                                        status
+                                        updated-at
+                                        metadata)
+  (update-journal-presence
+   journal
+   (make-collaborator-presence
+    :actor-id (or actor-id (journal-actor-id journal))
+    :session-id (or session-id (journal-session-id journal))
+    :focus-id focus-id
+    :cursor-position cursor-position
+    :status (or status :active)
+    :updated-at (or updated-at (get-universal-time))
+    :metadata metadata)
+   :force t))
+
+(defun journal-presence-sync-payload (journal &optional presence)
+  (let ((presence (or presence (journal-local-presence journal))))
+    (unless presence
+      (error "Journal has no local presence to export."))
+    (list :workspace-id (journal-workspace-id journal)
+          :actor-id (journal-actor-id journal)
+          :session-id (journal-session-id journal)
+          :presence (collaborator-presence-plist presence))))
 
 (defun find-journal-operation (journal operation-id &optional default)
   (or (gethash operation-id (%journal-operation-ids journal))
@@ -448,6 +618,22 @@
     (mapcar (lambda (operation)
               (acknowledge-journal-operation journal operation))
             operations)))
+
+(defun sync-payload-presence-plists (payload)
+  (multiple-value-bind (presence presentp)
+      (plist-value payload :presence)
+    (if presentp (list presence) nil)))
+
+(defun sync-payload-presences (payload)
+  (mapcar #'make-collaborator-presence-from-plist
+          (sync-payload-presence-plists payload)))
+
+(defun apply-presence-sync-payload (journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (loop for presence in (sync-payload-presences payload)
+        for accepted-presence = (update-journal-presence journal presence)
+        when accepted-presence
+        collect accepted-presence))
 
 (defun sync-payload-operation-plists (payload)
   (multiple-value-bind (operation-plists presentp)
