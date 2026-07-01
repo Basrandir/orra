@@ -1289,6 +1289,150 @@
     (is (null (journal-presences journal))
         "Rejected presence payloads should not mutate local presence state.")))
 
+(deftest local-comment-sync-payload-is-serializer-friendly ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "actor-1"
+                                          :session-id "session-1"))
+         (comment
+          (record-local-comment journal
+                                :id "comment-1"
+                                :target-id "paragraph-1"
+                                :body "Needs a citation."
+                                :status :open
+                                :created-at 500
+                                :updated-at 501
+                                :metadata (list :range (list 0 17))))
+         (payload (journal-comment-sync-payload journal comment)))
+    (is (eq comment
+            (find-journal-comment journal "comment-1"))
+        "Local comments should be visible in the journal by comment id.")
+    (is (equal (list :workspace-id "workspace-1"
+                     :actor-id "actor-1"
+                     :session-id "session-1"
+                     :comment
+                     (list :id "comment-1"
+                           :target-id "paragraph-1"
+                           :body "Needs a citation."
+                           :actor-id "actor-1"
+                           :session-id "session-1"
+                           :status :open
+                           :created-at 500
+                           :updated-at 501
+                           :metadata (list :range (list 0 17))))
+               payload)
+        "Comment payloads should remain simple plists for sync transport.")))
+
+(deftest local-comment-recording-assigns-default-id ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "actor-1"
+                                          :session-id "session-1"))
+         (comment
+          (record-local-comment journal
+                                :target-id "paragraph-1"
+                                :body "Draft note."
+                                :created-at 600)))
+    (is (stringp (collaboration-comment-id comment))
+        "Local comments should receive an id when callers do not supply one.")
+    (is (eq comment
+            (find-journal-comment journal (collaboration-comment-id comment)))
+        "Generated comment ids should be immediately usable for journal lookup.")
+    (is (string= "Draft note."
+                 (collaboration-comment-body comment))
+        "Local comments should preserve the supplied body.")))
+
+(deftest comment-sync-payload-updates-remote-comment ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (older-payload
+          (list :workspace-id "workspace-1"
+                :comment
+                (list :id "comment-remote-1"
+                      :target-id "paragraph-1"
+                      :body "Please clarify this."
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :status :open
+                      :created-at 100
+                      :updated-at 101
+                      :metadata (list :kind :review))))
+         (stale-payload
+          (list :workspace-id "workspace-1"
+                :comment
+                (list :id "comment-remote-1"
+                      :target-id "paragraph-2"
+                      :body "Stale body."
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :status :open
+                      :created-at 100
+                      :updated-at 100
+                      :metadata (list :kind :stale))))
+         (newer-payload
+          (list :workspace-id "workspace-1"
+                :comment
+                (list :id "comment-remote-1"
+                      :target-id "paragraph-3"
+                      :body "Resolved after edit."
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :status :resolved
+                      :created-at 100
+                      :updated-at 102
+                      :metadata (list :kind :review :resolution :accepted)))))
+    (let ((applied (apply-comment-sync-payload journal older-payload)))
+      (is (= 1 (length applied))
+          "Comment sync should return the comment entries it accepted.")
+      (is (string= "Please clarify this."
+                   (collaboration-comment-body (first applied)))
+          "Remote comments should preserve comment body text."))
+    (apply-comment-sync-payload journal stale-payload)
+    (let ((comment (find-journal-comment journal "comment-remote-1")))
+      (is (string= "paragraph-1"
+                   (collaboration-comment-target-id comment))
+          "Stale comments should not replace newer local state.")
+      (is (= 101 (collaboration-comment-updated-at comment))
+          "Stale comments should not rewind update time."))
+    (apply-comment-sync-payload journal newer-payload)
+    (let ((comment (find-journal-comment journal "comment-remote-1")))
+      (is (string= "paragraph-3"
+                   (collaboration-comment-target-id comment))
+          "Newer comments should replace older comments for the same id.")
+      (is (eq :resolved
+              (collaboration-comment-status comment))
+          "Newer comments should update status.")
+      (is (equal (list :kind :review :resolution :accepted)
+                 (collaboration-comment-metadata comment))
+          "Comment metadata should remain available for future UI rendering.")
+      (is (equal (list comment)
+                 (journal-comments journal))
+          "Journal comments should be inspectable in deterministic order."))))
+
+(deftest comment-sync-payload-rejects-other-workspaces ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (payload
+          (list :workspace-id "workspace-2"
+                :comment
+                (list :id "comment-remote-1"
+                      :target-id "paragraph-1"
+                      :body "Wrong workspace."
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :status :open
+                      :created-at 100
+                      :updated-at 100))))
+    (handler-case
+        (progn
+          (apply-comment-sync-payload journal payload)
+          (is nil "Comments from another workspace should not apply."))
+      (error (condition)
+        (is (search "workspace-2" (princ-to-string condition))
+            "Comment workspace mismatch errors should identify the payload workspace.")))
+    (is (null (journal-comments journal))
+        "Rejected comment payloads should not mutate local comment state.")))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))

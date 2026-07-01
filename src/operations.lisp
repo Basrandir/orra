@@ -13,6 +13,9 @@
 (defparameter *journal-operation-queue-statuses*
   '(:pending :acknowledged :failed))
 
+(defparameter *collaboration-comment-statuses*
+  '(:open :resolved :deleted))
+
 (defun workspace-operation-type-p (type)
   (not (null (member type *workspace-operation-types*))))
 
@@ -24,6 +27,11 @@
 (defun ensure-journal-operation-queue-status (status)
   (unless (member status *journal-operation-queue-statuses*)
     (error "Unsupported operation queue status ~S." status))
+  status)
+
+(defun ensure-collaboration-comment-status (status)
+  (unless (member status *collaboration-comment-statuses*)
+    (error "Unsupported collaboration comment status ~S." status))
   status)
 
 (defun vector-clock-entry-position (entry)
@@ -278,6 +286,111 @@
    :updated-at (getf plist :updated-at (get-universal-time))
    :metadata (getf plist :metadata)))
 
+(defun required-comment-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Comment plist is missing required key ~S." key))
+    value))
+
+(defun ensure-comment-timestamp (timestamp)
+  (unless (and (integerp timestamp)
+               (not (minusp timestamp)))
+    (error "Comment timestamps must be non-negative integers, got ~S."
+           timestamp))
+  timestamp)
+
+(defun ensure-comment-metadata (metadata)
+  (unless (or (null metadata)
+              (listp metadata))
+    (error "Comment metadata must be NIL or a plist, got ~S."
+           metadata))
+  metadata)
+
+(defclass collaboration-comment ()
+  ((id
+    :initarg :id
+    :reader collaboration-comment-id)
+   (target-id
+    :initarg :target-id
+    :reader collaboration-comment-target-id)
+   (body
+    :initarg :body
+    :reader collaboration-comment-body)
+   (actor-id
+    :initarg :actor-id
+    :reader collaboration-comment-actor-id)
+   (session-id
+    :initarg :session-id
+    :reader collaboration-comment-session-id)
+   (status
+    :initarg :status
+    :reader collaboration-comment-status
+    :initform :open)
+   (created-at
+    :initarg :created-at
+    :reader collaboration-comment-created-at)
+   (updated-at
+    :initarg :updated-at
+    :reader collaboration-comment-updated-at)
+   (metadata
+    :initarg :metadata
+    :reader collaboration-comment-metadata
+    :initform nil)))
+
+(defun make-collaboration-comment (&key (id (fresh-id "comment"))
+                                     target-id
+                                     body
+                                     actor-id
+                                     session-id
+                                     (status :open)
+                                     created-at
+                                     updated-at
+                                     metadata)
+  (unless id
+    (error "Collaboration comments require an id."))
+  (unless target-id
+    (error "Collaboration comments require a target id."))
+  (unless actor-id
+    (error "Collaboration comments require an actor id."))
+  (unless session-id
+    (error "Collaboration comments require a session id."))
+  (let* ((effective-created-at (or created-at (get-universal-time)))
+         (effective-updated-at (or updated-at effective-created-at)))
+    (make-instance 'collaboration-comment
+                   :id id
+                   :target-id target-id
+                   :body (normalize-display-string body)
+                   :actor-id actor-id
+                   :session-id session-id
+                   :status (ensure-collaboration-comment-status status)
+                   :created-at (ensure-comment-timestamp effective-created-at)
+                   :updated-at (ensure-comment-timestamp effective-updated-at)
+                   :metadata (copy-list (ensure-comment-metadata metadata)))))
+
+(defun collaboration-comment-plist (comment)
+  (list :id (collaboration-comment-id comment)
+        :target-id (collaboration-comment-target-id comment)
+        :body (collaboration-comment-body comment)
+        :actor-id (collaboration-comment-actor-id comment)
+        :session-id (collaboration-comment-session-id comment)
+        :status (collaboration-comment-status comment)
+        :created-at (collaboration-comment-created-at comment)
+        :updated-at (collaboration-comment-updated-at comment)
+        :metadata (copy-list (collaboration-comment-metadata comment))))
+
+(defun make-collaboration-comment-from-plist (plist)
+  (make-collaboration-comment
+   :id (required-comment-plist-value plist :id)
+   :target-id (required-comment-plist-value plist :target-id)
+   :body (required-comment-plist-value plist :body)
+   :actor-id (required-comment-plist-value plist :actor-id)
+   :session-id (required-comment-plist-value plist :session-id)
+   :status (getf plist :status :open)
+   :created-at (getf plist :created-at (get-universal-time))
+   :updated-at (getf plist :updated-at)
+   :metadata (getf plist :metadata)))
+
 (defclass operation-journal ()
   ((workspace-id
     :initarg :workspace-id
@@ -309,6 +422,9 @@
     :initform (make-hash-table :test #'equal))
    (presences
     :accessor %journal-presences
+    :initform (make-hash-table :test #'equal))
+   (comments
+    :accessor %journal-comments
     :initform (make-hash-table :test #'equal))))
 
 (defun merge-journal-clock-position (journal actor-id position)
@@ -421,6 +537,62 @@
           :actor-id (journal-actor-id journal)
           :session-id (journal-session-id journal)
           :presence (collaborator-presence-plist presence))))
+
+(defun collaboration-comment-sort-key (comment)
+  (collaboration-comment-id comment))
+
+(defun journal-comments (journal)
+  (let (comments)
+    (maphash (lambda (id comment)
+               (declare (ignore id))
+               (push comment comments))
+             (%journal-comments journal))
+    (sort comments #'string< :key #'collaboration-comment-sort-key)))
+
+(defun find-journal-comment (journal comment-id &optional default)
+  (gethash comment-id (%journal-comments journal) default))
+
+(defun collaboration-comment-newer-p (comment existing-comment)
+  (or (null existing-comment)
+      (> (collaboration-comment-updated-at comment)
+         (collaboration-comment-updated-at existing-comment))))
+
+(defun update-journal-comment (journal comment &key force)
+  (let* ((comment-id (collaboration-comment-id comment))
+         (existing-comment (gethash comment-id (%journal-comments journal))))
+    (when (or force
+              (collaboration-comment-newer-p comment existing-comment))
+      (setf (gethash comment-id (%journal-comments journal)) comment)
+      comment)))
+
+(defun record-local-comment (journal &key id
+                                       target-id
+                                       body
+                                       actor-id
+                                       session-id
+                                       status
+                                       created-at
+                                       updated-at
+                                       metadata)
+  (update-journal-comment
+   journal
+   (make-collaboration-comment
+    :id (or id (fresh-id "comment"))
+    :target-id target-id
+    :body body
+    :actor-id (or actor-id (journal-actor-id journal))
+    :session-id (or session-id (journal-session-id journal))
+    :status (or status :open)
+    :created-at created-at
+    :updated-at updated-at
+    :metadata metadata)
+   :force t))
+
+(defun journal-comment-sync-payload (journal comment)
+  (list :workspace-id (journal-workspace-id journal)
+        :actor-id (journal-actor-id journal)
+        :session-id (journal-session-id journal)
+        :comment (collaboration-comment-plist comment)))
 
 (defun find-journal-operation (journal operation-id &optional default)
   (or (gethash operation-id (%journal-operation-ids journal))
@@ -634,6 +806,22 @@
         for accepted-presence = (update-journal-presence journal presence)
         when accepted-presence
         collect accepted-presence))
+
+(defun sync-payload-comment-plists (payload)
+  (multiple-value-bind (comment presentp)
+      (plist-value payload :comment)
+    (if presentp (list comment) nil)))
+
+(defun sync-payload-comments (payload)
+  (mapcar #'make-collaboration-comment-from-plist
+          (sync-payload-comment-plists payload)))
+
+(defun apply-comment-sync-payload (journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (loop for comment in (sync-payload-comments payload)
+        for accepted-comment = (update-journal-comment journal comment)
+        when accepted-comment
+        collect accepted-comment))
 
 (defun sync-payload-operation-plists (payload)
   (multiple-value-bind (operation-plists presentp)

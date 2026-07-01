@@ -38,6 +38,7 @@
    #:append-stack-frame-browser-block
    #:append-table-block
    #:append-task-list
+   #:apply-comment-sync-payload
    #:apply-operation-journal
    #:apply-presence-sync-payload
    #:apply-remote-operation
@@ -78,6 +79,17 @@
    #:code-block-structure-visible-p
    #:code-block-syntax-summary-line
    #:code-block-syntax-tokens
+   #:collaboration-comment
+   #:collaboration-comment-actor-id
+   #:collaboration-comment-body
+   #:collaboration-comment-created-at
+   #:collaboration-comment-id
+   #:collaboration-comment-metadata
+   #:collaboration-comment-plist
+   #:collaboration-comment-session-id
+   #:collaboration-comment-status
+   #:collaboration-comment-target-id
+   #:collaboration-comment-updated-at
    #:collaborator-presence
    #:collaborator-presence-actor-id
    #:collaborator-presence-cursor-position
@@ -119,6 +131,7 @@
    #:focus-previous-model
    #:focused-model
    #:fresh-id
+   #:find-journal-comment
    #:find-journal-operation
    #:find-journal-presence
    #:invoke-command
@@ -143,6 +156,8 @@
    #:invalidate-dependent-computed-slots
    #:invalidate-object-computed-slot
    #:image-restore-options-from-environment
+   #:journal-comment-sync-payload
+   #:journal-comments
    #:journal-failed-operations
    #:journal-next-sequence
    #:journal-operation-queue-status
@@ -179,6 +194,7 @@
    #:make-null-backend
    #:make-operation-journal
    #:make-object-registry
+   #:make-collaboration-comment
    #:make-collaborator-presence
    #:make-paragraph
    #:make-quote-block
@@ -259,6 +275,7 @@
    #:render-application
    #:render-application-if-needed
    #:record-application-event
+   #:record-local-comment
    #:record-local-operation
    #:record-local-presence
    #:record-operation
