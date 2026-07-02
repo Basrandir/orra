@@ -39,6 +39,7 @@
    #:append-table-block
    #:append-task-list
    #:apply-comment-sync-payload
+   #:apply-membership-sync-payload
    #:apply-operation-journal
    #:apply-presence-sync-payload
    #:apply-remote-operation
@@ -132,6 +133,7 @@
    #:focused-model
    #:fresh-id
    #:find-journal-comment
+   #:find-journal-member
    #:find-journal-operation
    #:find-journal-presence
    #:invoke-command
@@ -159,6 +161,8 @@
    #:journal-comment-sync-payload
    #:journal-comments
    #:journal-failed-operations
+   #:journal-members
+   #:journal-membership-sync-payload
    #:journal-next-sequence
    #:journal-operation-queue-status
    #:journal-operations
@@ -196,6 +200,7 @@
    #:make-object-registry
    #:make-collaboration-comment
    #:make-collaborator-presence
+   #:make-workspace-member
    #:make-paragraph
    #:make-quote-block
    #:make-reference-block
@@ -278,6 +283,7 @@
    #:record-local-comment
    #:record-local-operation
    #:record-local-presence
+   #:record-workspace-member
    #:record-operation
    #:result-block
    #:result-block-environment
@@ -380,6 +386,14 @@
    #:workspace
    #:workspace-file-payload
    #:workspace-file-version
+   #:workspace-member
+   #:workspace-member-actor-id
+   #:workspace-member-display-name
+   #:workspace-member-metadata
+   #:workspace-member-plist
+   #:workspace-member-role
+   #:workspace-member-status
+   #:workspace-member-updated-at
    #:workspace-operation
    #:workspace-operation-plist
    #:workspace-operation-type-p

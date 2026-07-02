@@ -1433,6 +1433,116 @@
     (is (null (journal-comments journal))
         "Rejected comment payloads should not mutate local comment state.")))
 
+(deftest local-membership-sync-payload-is-serializer-friendly ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (member
+          (record-workspace-member journal
+                                   :actor-id "peer-user"
+                                   :display-name "Peer User"
+                                   :role :editor
+                                   :status :active
+                                   :updated-at 700
+                                   :metadata (list :color "blue")))
+         (payload (journal-membership-sync-payload journal member)))
+    (is (eq member
+            (find-journal-member journal "peer-user"))
+        "Workspace members should be visible in the journal by actor id.")
+    (is (equal (list :workspace-id "workspace-1"
+                     :actor-id "local-user"
+                     :session-id "local-session"
+                     :member
+                     (list :actor-id "peer-user"
+                           :display-name "Peer User"
+                           :role :editor
+                           :status :active
+                           :updated-at 700
+                           :metadata (list :color "blue")))
+               payload)
+        "Membership payloads should remain simple plists for sync transport.")))
+
+(deftest membership-sync-payload-updates-remote-member ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (older-payload
+          (list :workspace-id "workspace-1"
+                :member
+                (list :actor-id "peer-user"
+                      :display-name "Peer User"
+                      :role :editor
+                      :status :active
+                      :updated-at 100
+                      :metadata (list :color "red"))))
+         (stale-payload
+          (list :workspace-id "workspace-1"
+                :member
+                (list :actor-id "peer-user"
+                      :display-name "Stale Peer"
+                      :role :viewer
+                      :status :removed
+                      :updated-at 99
+                      :metadata (list :color "green"))))
+         (newer-payload
+          (list :workspace-id "workspace-1"
+                :member
+                (list :actor-id "peer-user"
+                      :display-name "Peer Admin"
+                      :role :admin
+                      :status :active
+                      :updated-at 101
+                      :metadata (list :color "blue")))))
+    (let ((applied (apply-membership-sync-payload journal older-payload)))
+      (is (= 1 (length applied))
+          "Membership sync should return the member entries it accepted.")
+      (is (string= "Peer User"
+                   (workspace-member-display-name (first applied)))
+          "Remote membership should preserve display names."))
+    (apply-membership-sync-payload journal stale-payload)
+    (let ((member (find-journal-member journal "peer-user")))
+      (is (string= "Peer User"
+                   (workspace-member-display-name member))
+          "Stale membership should not replace newer local state.")
+      (is (= 100 (workspace-member-updated-at member))
+          "Stale membership should not rewind update time."))
+    (apply-membership-sync-payload journal newer-payload)
+    (let ((member (find-journal-member journal "peer-user")))
+      (is (string= "Peer Admin"
+                   (workspace-member-display-name member))
+          "Newer membership should replace older membership for the same actor.")
+      (is (eq :admin
+              (workspace-member-role member))
+          "Newer membership should update roles.")
+      (is (equal (list :color "blue")
+                 (workspace-member-metadata member))
+          "Membership metadata should remain available for future auth/UI use.")
+      (is (equal (list member)
+                 (journal-members journal))
+          "Journal members should be inspectable in deterministic order."))))
+
+(deftest membership-sync-payload-rejects-other-workspaces ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (payload
+          (list :workspace-id "workspace-2"
+                :member
+                (list :actor-id "peer-user"
+                      :display-name "Wrong Workspace"
+                      :role :editor
+                      :status :active
+                      :updated-at 100))))
+    (handler-case
+        (progn
+          (apply-membership-sync-payload journal payload)
+          (is nil "Members from another workspace should not apply."))
+      (error (condition)
+        (is (search "workspace-2" (princ-to-string condition))
+            "Membership workspace mismatch errors should identify the payload workspace.")))
+    (is (null (journal-members journal))
+        "Rejected membership payloads should not mutate local membership state.")))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))

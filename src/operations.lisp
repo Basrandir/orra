@@ -16,6 +16,12 @@
 (defparameter *collaboration-comment-statuses*
   '(:open :resolved :deleted))
 
+(defparameter *workspace-member-roles*
+  '(:owner :admin :editor :viewer))
+
+(defparameter *workspace-member-statuses*
+  '(:active :inactive :removed))
+
 (defun workspace-operation-type-p (type)
   (not (null (member type *workspace-operation-types*))))
 
@@ -32,6 +38,16 @@
 (defun ensure-collaboration-comment-status (status)
   (unless (member status *collaboration-comment-statuses*)
     (error "Unsupported collaboration comment status ~S." status))
+  status)
+
+(defun ensure-workspace-member-role (role)
+  (unless (member role *workspace-member-roles*)
+    (error "Unsupported workspace member role ~S." role))
+  role)
+
+(defun ensure-workspace-member-status (status)
+  (unless (member status *workspace-member-statuses*)
+    (error "Unsupported workspace member status ~S." status))
   status)
 
 (defun vector-clock-entry-position (entry)
@@ -391,6 +407,83 @@
    :updated-at (getf plist :updated-at)
    :metadata (getf plist :metadata)))
 
+(defun required-member-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Workspace member plist is missing required key ~S." key))
+    value))
+
+(defun ensure-member-timestamp (timestamp)
+  (unless (and (integerp timestamp)
+               (not (minusp timestamp)))
+    (error "Workspace member update times must be non-negative integers, got ~S."
+           timestamp))
+  timestamp)
+
+(defun ensure-member-metadata (metadata)
+  (unless (or (null metadata)
+              (listp metadata))
+    (error "Workspace member metadata must be NIL or a plist, got ~S."
+           metadata))
+  metadata)
+
+(defclass workspace-member ()
+  ((actor-id
+    :initarg :actor-id
+    :reader workspace-member-actor-id)
+   (display-name
+    :initarg :display-name
+    :reader workspace-member-display-name)
+   (role
+    :initarg :role
+    :reader workspace-member-role
+    :initform :editor)
+   (status
+    :initarg :status
+    :reader workspace-member-status
+    :initform :active)
+   (updated-at
+    :initarg :updated-at
+    :reader workspace-member-updated-at)
+   (metadata
+    :initarg :metadata
+    :reader workspace-member-metadata
+    :initform nil)))
+
+(defun make-workspace-member (&key actor-id
+                                display-name
+                                (role :editor)
+                                (status :active)
+                                (updated-at (get-universal-time))
+                                metadata)
+  (unless actor-id
+    (error "Workspace members require an actor id."))
+  (make-instance 'workspace-member
+                 :actor-id actor-id
+                 :display-name (normalize-display-string display-name)
+                 :role (ensure-workspace-member-role role)
+                 :status (ensure-workspace-member-status status)
+                 :updated-at (ensure-member-timestamp updated-at)
+                 :metadata (copy-list (ensure-member-metadata metadata))))
+
+(defun workspace-member-plist (member)
+  (list :actor-id (workspace-member-actor-id member)
+        :display-name (workspace-member-display-name member)
+        :role (workspace-member-role member)
+        :status (workspace-member-status member)
+        :updated-at (workspace-member-updated-at member)
+        :metadata (copy-list (workspace-member-metadata member))))
+
+(defun make-workspace-member-from-plist (plist)
+  (make-workspace-member
+   :actor-id (required-member-plist-value plist :actor-id)
+   :display-name (getf plist :display-name)
+   :role (getf plist :role :editor)
+   :status (getf plist :status :active)
+   :updated-at (getf plist :updated-at (get-universal-time))
+   :metadata (getf plist :metadata)))
+
 (defclass operation-journal ()
   ((workspace-id
     :initarg :workspace-id
@@ -425,6 +518,9 @@
     :initform (make-hash-table :test #'equal))
    (comments
     :accessor %journal-comments
+    :initform (make-hash-table :test #'equal))
+   (members
+    :accessor %journal-members
     :initform (make-hash-table :test #'equal))))
 
 (defun merge-journal-clock-position (journal actor-id position)
@@ -593,6 +689,56 @@
         :actor-id (journal-actor-id journal)
         :session-id (journal-session-id journal)
         :comment (collaboration-comment-plist comment)))
+
+(defun workspace-member-sort-key (member)
+  (workspace-member-actor-id member))
+
+(defun journal-members (journal)
+  (let (members)
+    (maphash (lambda (actor-id member)
+               (declare (ignore actor-id))
+               (push member members))
+             (%journal-members journal))
+    (sort members #'string< :key #'workspace-member-sort-key)))
+
+(defun find-journal-member (journal actor-id &optional default)
+  (gethash actor-id (%journal-members journal) default))
+
+(defun workspace-member-newer-p (member existing-member)
+  (or (null existing-member)
+      (> (workspace-member-updated-at member)
+         (workspace-member-updated-at existing-member))))
+
+(defun update-journal-member (journal member &key force)
+  (let* ((actor-id (workspace-member-actor-id member))
+         (existing-member (gethash actor-id (%journal-members journal))))
+    (when (or force
+              (workspace-member-newer-p member existing-member))
+      (setf (gethash actor-id (%journal-members journal)) member)
+      member)))
+
+(defun record-workspace-member (journal &key actor-id
+                                          display-name
+                                          role
+                                          status
+                                          updated-at
+                                          metadata)
+  (update-journal-member
+   journal
+   (make-workspace-member
+    :actor-id actor-id
+    :display-name display-name
+    :role (or role :editor)
+    :status (or status :active)
+    :updated-at (or updated-at (get-universal-time))
+    :metadata metadata)
+   :force t))
+
+(defun journal-membership-sync-payload (journal member)
+  (list :workspace-id (journal-workspace-id journal)
+        :actor-id (journal-actor-id journal)
+        :session-id (journal-session-id journal)
+        :member (workspace-member-plist member)))
 
 (defun find-journal-operation (journal operation-id &optional default)
   (or (gethash operation-id (%journal-operation-ids journal))
@@ -822,6 +968,22 @@
         for accepted-comment = (update-journal-comment journal comment)
         when accepted-comment
         collect accepted-comment))
+
+(defun sync-payload-member-plists (payload)
+  (multiple-value-bind (member presentp)
+      (plist-value payload :member)
+    (if presentp (list member) nil)))
+
+(defun sync-payload-members (payload)
+  (mapcar #'make-workspace-member-from-plist
+          (sync-payload-member-plists payload)))
+
+(defun apply-membership-sync-payload (journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (loop for member in (sync-payload-members payload)
+        for accepted-member = (update-journal-member journal member)
+        when accepted-member
+        collect accepted-member))
 
 (defun sync-payload-operation-plists (payload)
   (multiple-value-bind (operation-plists presentp)
