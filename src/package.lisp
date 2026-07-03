@@ -45,6 +45,7 @@
    #:apply-remote-operation
    #:apply-remote-sync-payload
    #:apply-sync-acknowledgement-payload
+   #:apply-sync-response-payload
    #:apply-workspace-operation
    #:backend
    #:backend-name
@@ -174,6 +175,7 @@
    #:journal-pending-sync-payload
    #:journal-presences
    #:journal-presence-sync-payload
+   #:journal-sync-request-payload
    #:journal-vector-clock
    #:journal-workspace-id
    #:latest-workspace-checkpoint

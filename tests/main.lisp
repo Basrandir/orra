@@ -1543,6 +1543,177 @@
     (is (null (journal-members journal))
         "Rejected membership payloads should not mutate local membership state.")))
 
+(deftest journal-sync-request-payload-batches-local-sync-state ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (first-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "first")
+                                  :timestamp 800))
+         (second-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "second")
+                                  :timestamp 801))
+         (presence
+          (record-local-presence journal
+                                 :focus-id "paragraph-1"
+                                 :cursor-position 5
+                                 :status :editing
+                                 :updated-at 802))
+         (comment
+          (record-local-comment journal
+                                :id "comment-1"
+                                :target-id "paragraph-1"
+                                :body "Review this."
+                                :created-at 803
+                                :updated-at 804))
+         (member
+          (record-workspace-member journal
+                                   :actor-id "local-user"
+                                   :display-name "Local User"
+                                   :role :owner
+                                   :status :active
+                                   :updated-at 805)))
+    (acknowledge-journal-operation journal first-operation)
+    (let ((payload (journal-sync-request-payload journal
+                                                 :comments (list comment)
+                                                 :members (list member))))
+      (is (equal "workspace-1" (getf payload :workspace-id))
+          "Sync request envelopes should identify the workspace.")
+      (is (equal "local-user" (getf payload :actor-id))
+          "Sync request envelopes should identify the local actor.")
+      (is (equal "local-session" (getf payload :session-id))
+          "Sync request envelopes should identify the local session.")
+      (is (equal '(("local-user" . 2))
+                 (getf payload :clock))
+          "Sync request envelopes should include the local causal clock.")
+      (is (equal (list (workspace-operation-plist second-operation))
+                 (getf payload :operations))
+          "Sync request envelopes should batch pending operations.")
+      (is (equal (list (collaborator-presence-plist presence))
+                 (getf payload :presences))
+          "Sync request envelopes should batch local presence.")
+      (is (equal (list (collaboration-comment-plist comment))
+                 (getf payload :comments))
+          "Sync request envelopes should batch selected comments.")
+      (is (equal (list (workspace-member-plist member))
+                 (getf payload :members))
+          "Sync request envelopes should batch selected workspace members."))))
+
+(deftest sync-response-payload-applies-distributed-state ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "local" :registry registry))
+         (local-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text :value "local draft")
+                                  :timestamp 900))
+         (payload
+          (list :workspace-id "workspace-1"
+                :clock '(("local-user" . 1) ("peer-user" . 2))
+                :acknowledged-operation-ids
+                (list (operation-id local-operation))
+                :operations
+                (list (list :id "remote-op-1"
+                            :type :set-slot
+                            :target-id (object-id paragraph)
+                            :payload (list :slot :text :value "remote")
+                            :actor-id "peer-user"
+                            :session-id "peer-session"
+                            :timestamp 901
+                            :clock '(("peer-user" . 2))))
+                :presences
+                (list (list :actor-id "peer-user"
+                            :session-id "peer-session"
+                            :focus-id (object-id paragraph)
+                            :cursor-position 3
+                            :status :editing
+                            :updated-at 902))
+                :comments
+                (list (list :id "comment-remote-1"
+                            :target-id (object-id paragraph)
+                            :body "Remote comment."
+                            :actor-id "peer-user"
+                            :session-id "peer-session"
+                            :status :open
+                            :created-at 903
+                            :updated-at 904))
+                :members
+                (list (list :actor-id "peer-user"
+                            :display-name "Peer User"
+                            :role :editor
+                            :status :active
+                            :updated-at 905)))))
+    (let ((result (apply-sync-response-payload registry journal payload)))
+      (is (equal (list local-operation)
+                 (getf result :acknowledged-operations))
+          "Sync responses should acknowledge local operations.")
+      (is (equal (list paragraph)
+                 (getf result :applied-operations))
+          "Sync responses should return applied semantic operation results.")
+      (is (= 1 (length (getf result :presences)))
+          "Sync responses should return accepted presence updates.")
+      (is (= 1 (length (getf result :comments)))
+          "Sync responses should return accepted comment updates.")
+      (is (= 1 (length (getf result :members)))
+          "Sync responses should return accepted membership updates."))
+    (is (eq :acknowledged
+            (journal-operation-queue-status journal local-operation))
+        "Sync responses should clear acknowledged local operations from pending state.")
+    (is (string= "remote" (paragraph-text paragraph))
+        "Sync responses should apply distributed semantic operations.")
+    (is (= 2 (journal-clock-position journal "peer-user"))
+        "Sync responses should merge distributed causal clocks.")
+    (is (find-journal-presence journal "peer-user" "peer-session")
+        "Sync responses should store distributed presence.")
+    (is (find-journal-comment journal "comment-remote-1")
+        "Sync responses should store distributed comments.")
+    (is (find-journal-member journal "peer-user")
+        "Sync responses should store distributed workspace members.")))
+
+(deftest sync-response-payload-rejects-other-workspaces ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "local" :registry registry))
+         (local-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text :value "local draft")))
+         (payload
+          (list :workspace-id "workspace-2"
+                :acknowledged-operation-ids
+                (list (operation-id local-operation))
+                :members
+                (list (list :actor-id "peer-user"
+                            :display-name "Wrong Workspace"
+                            :role :editor
+                            :status :active
+                            :updated-at 100)))))
+    (handler-case
+        (progn
+          (apply-sync-response-payload registry journal payload)
+          (is nil "Sync responses from another workspace should not apply."))
+      (error (condition)
+        (is (search "workspace-2" (princ-to-string condition))
+            "Sync response workspace mismatch errors should identify the payload workspace.")))
+    (is (eq :pending
+            (journal-operation-queue-status journal local-operation))
+        "Rejected sync responses should not mutate local queue state.")
+    (is (null (journal-members journal))
+        "Rejected sync responses should not mutate local membership state.")))
+
 (defun slot-metadata-test-summary-default (object slot)
   (declare (ignore slot))
   (format nil "summary: ~A" (paragraph-text object)))

@@ -788,6 +788,22 @@
         :operations (mapcar #'workspace-operation-plist
                             (journal-pending-operations journal))))
 
+(defun journal-sync-request-payload (journal &key presence comments members)
+  (let ((presence (or presence (journal-local-presence journal))))
+    (append
+     (journal-pending-sync-payload journal)
+     (when presence
+       (list :presences
+             (list (collaborator-presence-plist presence))))
+     (when comments
+       (list :comments
+             (mapcar #'collaboration-comment-plist
+                     (ensure-list comments))))
+     (when members
+       (list :members
+             (mapcar #'workspace-member-plist
+                     (ensure-list members)))))))
+
 (defun journal-failed-operations (journal)
   (journal-operations-with-queue-status journal :failed))
 
@@ -937,10 +953,22 @@
               (acknowledge-journal-operation journal operation))
             operations)))
 
+(defun sync-payload-entry-plists (payload singular-key plural-key)
+  (let (entry-plists)
+    (multiple-value-bind (entry presentp)
+        (plist-value payload singular-key)
+      (when presentp
+        (push entry entry-plists)))
+    (multiple-value-bind (entries presentp)
+        (plist-value payload plural-key)
+      (when presentp
+        (setf entry-plists
+              (append entry-plists
+                      (ensure-list entries)))))
+    entry-plists))
+
 (defun sync-payload-presence-plists (payload)
-  (multiple-value-bind (presence presentp)
-      (plist-value payload :presence)
-    (if presentp (list presence) nil)))
+  (sync-payload-entry-plists payload :presence :presences))
 
 (defun sync-payload-presences (payload)
   (mapcar #'make-collaborator-presence-from-plist
@@ -954,9 +982,7 @@
         collect accepted-presence))
 
 (defun sync-payload-comment-plists (payload)
-  (multiple-value-bind (comment presentp)
-      (plist-value payload :comment)
-    (if presentp (list comment) nil)))
+  (sync-payload-entry-plists payload :comment :comments))
 
 (defun sync-payload-comments (payload)
   (mapcar #'make-collaboration-comment-from-plist
@@ -970,9 +996,7 @@
         collect accepted-comment))
 
 (defun sync-payload-member-plists (payload)
-  (multiple-value-bind (member presentp)
-      (plist-value payload :member)
-    (if presentp (list member) nil)))
+  (sync-payload-entry-plists payload :member :members))
 
 (defun sync-payload-members (payload)
   (mapcar #'make-workspace-member-from-plist
@@ -1000,6 +1024,20 @@
         for result = (apply-remote-operation registry journal operation)
         when result
         collect result))
+
+(defun apply-sync-response-payload (registry journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (merge-journal-clock journal (getf payload :clock))
+  (list :acknowledged-operations
+        (apply-sync-acknowledgement-payload journal payload)
+        :applied-operations
+        (apply-remote-sync-payload registry journal payload)
+        :presences
+        (apply-presence-sync-payload journal payload)
+        :comments
+        (apply-comment-sync-payload journal payload)
+        :members
+        (apply-membership-sync-payload journal payload)))
 
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)
