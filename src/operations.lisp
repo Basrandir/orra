@@ -22,6 +22,9 @@
 (defparameter *workspace-member-statuses*
   '(:active :inactive :removed))
 
+(defparameter *workspace-attachment-statuses*
+  '(:pending :available :failed :deleted))
+
 (defun workspace-operation-type-p (type)
   (not (null (member type *workspace-operation-types*))))
 
@@ -48,6 +51,11 @@
 (defun ensure-workspace-member-status (status)
   (unless (member status *workspace-member-statuses*)
     (error "Unsupported workspace member status ~S." status))
+  status)
+
+(defun ensure-workspace-attachment-status (status)
+  (unless (member status *workspace-attachment-statuses*)
+    (error "Unsupported workspace attachment status ~S." status))
   status)
 
 (defun vector-clock-entry-position (entry)
@@ -484,6 +492,151 @@
    :updated-at (getf plist :updated-at (get-universal-time))
    :metadata (getf plist :metadata)))
 
+(defun required-attachment-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Workspace attachment plist is missing required key ~S." key))
+    value))
+
+(defun ensure-attachment-byte-size (byte-size)
+  (unless (and (integerp byte-size)
+               (not (minusp byte-size)))
+    (error "Workspace attachment byte sizes must be non-negative integers, got ~S."
+           byte-size))
+  byte-size)
+
+(defun ensure-attachment-timestamp (timestamp)
+  (unless (and (integerp timestamp)
+               (not (minusp timestamp)))
+    (error "Workspace attachment timestamps must be non-negative integers, got ~S."
+           timestamp))
+  timestamp)
+
+(defun ensure-attachment-metadata (metadata)
+  (unless (or (null metadata)
+              (listp metadata))
+    (error "Workspace attachment metadata must be NIL or a plist, got ~S."
+           metadata))
+  metadata)
+
+(defclass workspace-attachment ()
+  ((id
+    :initarg :id
+    :reader workspace-attachment-id)
+   (target-id
+    :initarg :target-id
+    :reader workspace-attachment-target-id)
+   (content-type
+    :initarg :content-type
+    :reader workspace-attachment-content-type)
+   (byte-size
+    :initarg :byte-size
+    :reader workspace-attachment-byte-size)
+   (digest
+    :initarg :digest
+    :reader workspace-attachment-digest
+    :initform nil)
+   (storage-ref
+    :initarg :storage-ref
+    :reader workspace-attachment-storage-ref
+    :initform nil)
+   (status
+    :initarg :status
+    :reader workspace-attachment-status
+    :initform :pending)
+   (actor-id
+    :initarg :actor-id
+    :reader workspace-attachment-actor-id)
+   (session-id
+    :initarg :session-id
+    :reader workspace-attachment-session-id)
+   (created-at
+    :initarg :created-at
+    :reader workspace-attachment-created-at)
+   (updated-at
+    :initarg :updated-at
+    :reader workspace-attachment-updated-at)
+   (metadata
+    :initarg :metadata
+    :reader workspace-attachment-metadata
+    :initform nil)))
+
+(defun make-workspace-attachment (&key (id (fresh-id "attachment"))
+                                    target-id
+                                    content-type
+                                    byte-size
+                                    digest
+                                    storage-ref
+                                    (status :pending)
+                                    actor-id
+                                    session-id
+                                    created-at
+                                    updated-at
+                                    metadata)
+  (unless id
+    (error "Workspace attachments require an id."))
+  (unless target-id
+    (error "Workspace attachments require a target id."))
+  (unless content-type
+    (error "Workspace attachments require a content type."))
+  (unless byte-size
+    (error "Workspace attachments require a byte size."))
+  (unless actor-id
+    (error "Workspace attachments require an actor id."))
+  (unless session-id
+    (error "Workspace attachments require a session id."))
+  (let* ((effective-created-at (or created-at (get-universal-time)))
+         (effective-updated-at (or updated-at effective-created-at)))
+    (make-instance 'workspace-attachment
+                   :id id
+                   :target-id target-id
+                   :content-type (normalize-display-string content-type)
+                   :byte-size
+                   (ensure-attachment-byte-size byte-size)
+                   :digest (and digest (normalize-display-string digest))
+                   :storage-ref
+                   (and storage-ref
+                        (normalize-display-string storage-ref))
+                   :status (ensure-workspace-attachment-status status)
+                   :actor-id actor-id
+                   :session-id session-id
+                   :created-at
+                   (ensure-attachment-timestamp effective-created-at)
+                   :updated-at
+                   (ensure-attachment-timestamp effective-updated-at)
+                   :metadata
+                   (copy-list (ensure-attachment-metadata metadata)))))
+
+(defun workspace-attachment-plist (attachment)
+  (list :id (workspace-attachment-id attachment)
+        :target-id (workspace-attachment-target-id attachment)
+        :content-type (workspace-attachment-content-type attachment)
+        :byte-size (workspace-attachment-byte-size attachment)
+        :digest (workspace-attachment-digest attachment)
+        :storage-ref (workspace-attachment-storage-ref attachment)
+        :status (workspace-attachment-status attachment)
+        :actor-id (workspace-attachment-actor-id attachment)
+        :session-id (workspace-attachment-session-id attachment)
+        :created-at (workspace-attachment-created-at attachment)
+        :updated-at (workspace-attachment-updated-at attachment)
+        :metadata (copy-list (workspace-attachment-metadata attachment))))
+
+(defun make-workspace-attachment-from-plist (plist)
+  (make-workspace-attachment
+   :id (required-attachment-plist-value plist :id)
+   :target-id (required-attachment-plist-value plist :target-id)
+   :content-type (required-attachment-plist-value plist :content-type)
+   :byte-size (required-attachment-plist-value plist :byte-size)
+   :digest (getf plist :digest)
+   :storage-ref (getf plist :storage-ref)
+   :status (getf plist :status :pending)
+   :actor-id (required-attachment-plist-value plist :actor-id)
+   :session-id (required-attachment-plist-value plist :session-id)
+   :created-at (getf plist :created-at (get-universal-time))
+   :updated-at (getf plist :updated-at)
+   :metadata (getf plist :metadata)))
+
 (defclass operation-journal ()
   ((workspace-id
     :initarg :workspace-id
@@ -521,6 +674,9 @@
     :initform (make-hash-table :test #'equal))
    (members
     :accessor %journal-members
+    :initform (make-hash-table :test #'equal))
+   (attachments
+    :accessor %journal-attachments
     :initform (make-hash-table :test #'equal))))
 
 (defun merge-journal-clock-position (journal actor-id position)
@@ -740,6 +896,70 @@
         :session-id (journal-session-id journal)
         :member (workspace-member-plist member)))
 
+(defun workspace-attachment-sort-key (attachment)
+  (workspace-attachment-id attachment))
+
+(defun journal-attachments (journal)
+  (let (attachments)
+    (maphash (lambda (id attachment)
+               (declare (ignore id))
+               (push attachment attachments))
+             (%journal-attachments journal))
+    (sort attachments #'string< :key #'workspace-attachment-sort-key)))
+
+(defun find-journal-attachment (journal attachment-id &optional default)
+  (gethash attachment-id (%journal-attachments journal) default))
+
+(defun workspace-attachment-newer-p (attachment existing-attachment)
+  (or (null existing-attachment)
+      (> (workspace-attachment-updated-at attachment)
+         (workspace-attachment-updated-at existing-attachment))))
+
+(defun update-journal-attachment (journal attachment &key force)
+  (let* ((attachment-id (workspace-attachment-id attachment))
+         (existing-attachment
+          (gethash attachment-id (%journal-attachments journal))))
+    (when (or force
+              (workspace-attachment-newer-p attachment existing-attachment))
+      (setf (gethash attachment-id (%journal-attachments journal))
+            attachment)
+      attachment)))
+
+(defun record-local-attachment (journal &key id
+					  target-id
+					  content-type
+					  byte-size
+					  digest
+					  storage-ref
+					  status
+					  actor-id
+					  session-id
+					  created-at
+					  updated-at
+					  metadata)
+  (update-journal-attachment
+   journal
+   (make-workspace-attachment
+    :id (or id (fresh-id "attachment"))
+    :target-id target-id
+    :content-type content-type
+    :byte-size byte-size
+    :digest digest
+    :storage-ref storage-ref
+    :status (or status :pending)
+    :actor-id (or actor-id (journal-actor-id journal))
+    :session-id (or session-id (journal-session-id journal))
+    :created-at created-at
+    :updated-at updated-at
+    :metadata metadata)
+   :force t))
+
+(defun journal-attachment-sync-payload (journal attachment)
+  (list :workspace-id (journal-workspace-id journal)
+        :actor-id (journal-actor-id journal)
+        :session-id (journal-session-id journal)
+        :attachment (workspace-attachment-plist attachment)))
+
 (defun find-journal-operation (journal operation-id &optional default)
   (or (gethash operation-id (%journal-operation-ids journal))
       default))
@@ -788,7 +1008,8 @@
         :operations (mapcar #'workspace-operation-plist
                             (journal-pending-operations journal))))
 
-(defun journal-sync-request-payload (journal &key presence comments members)
+(defun journal-sync-request-payload (journal &key presence comments members
+                                               attachments)
   (let ((presence (or presence (journal-local-presence journal))))
     (append
      (journal-pending-sync-payload journal)
@@ -802,7 +1023,11 @@
      (when members
        (list :members
              (mapcar #'workspace-member-plist
-                     (ensure-list members)))))))
+                     (ensure-list members))))
+     (when attachments
+       (list :attachments
+             (mapcar #'workspace-attachment-plist
+                     (ensure-list attachments)))))))
 
 (defun journal-failed-operations (journal)
   (journal-operations-with-queue-status journal :failed))
@@ -1009,6 +1234,22 @@
         when accepted-member
         collect accepted-member))
 
+(defun sync-payload-attachment-plists (payload)
+  (sync-payload-entry-plists payload :attachment :attachments))
+
+(defun sync-payload-attachments (payload)
+  (mapcar #'make-workspace-attachment-from-plist
+          (sync-payload-attachment-plists payload)))
+
+(defun apply-attachment-sync-payload (journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (loop for attachment in (sync-payload-attachments payload)
+        for accepted-attachment = (update-journal-attachment
+                                   journal
+                                   attachment)
+        when accepted-attachment
+        collect accepted-attachment))
+
 (defun sync-payload-operation-plists (payload)
   (multiple-value-bind (operation-plists presentp)
       (plist-value payload :operations)
@@ -1037,7 +1278,9 @@
         :comments
         (apply-comment-sync-payload journal payload)
         :members
-        (apply-membership-sync-payload journal payload)))
+        (apply-membership-sync-payload journal payload)
+        :attachments
+        (apply-attachment-sync-payload journal payload)))
 
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)

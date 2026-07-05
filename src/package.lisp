@@ -38,6 +38,7 @@
    #:append-stack-frame-browser-block
    #:append-table-block
    #:append-task-list
+   #:apply-attachment-sync-payload
    #:apply-comment-sync-payload
    #:apply-membership-sync-payload
    #:apply-operation-journal
@@ -133,6 +134,7 @@
    #:focus-previous-model
    #:focused-model
    #:fresh-id
+   #:find-journal-attachment
    #:find-journal-comment
    #:find-journal-member
    #:find-journal-operation
@@ -159,6 +161,8 @@
    #:invalidate-dependent-computed-slots
    #:invalidate-object-computed-slot
    #:image-restore-options-from-environment
+   #:journal-attachment-sync-payload
+   #:journal-attachments
    #:journal-comment-sync-payload
    #:journal-comments
    #:journal-failed-operations
@@ -202,6 +206,7 @@
    #:make-object-registry
    #:make-collaboration-comment
    #:make-collaborator-presence
+   #:make-workspace-attachment
    #:make-workspace-member
    #:make-paragraph
    #:make-quote-block
@@ -282,6 +287,7 @@
    #:render-application
    #:render-application-if-needed
    #:record-application-event
+   #:record-local-attachment
    #:record-local-comment
    #:record-local-operation
    #:record-local-presence
@@ -386,6 +392,20 @@
    #:undo-buffer-edit
    #:wrap-code-form
    #:workspace
+   #:workspace-attachment
+   #:workspace-attachment-actor-id
+   #:workspace-attachment-byte-size
+   #:workspace-attachment-content-type
+   #:workspace-attachment-created-at
+   #:workspace-attachment-digest
+   #:workspace-attachment-id
+   #:workspace-attachment-metadata
+   #:workspace-attachment-plist
+   #:workspace-attachment-session-id
+   #:workspace-attachment-status
+   #:workspace-attachment-storage-ref
+   #:workspace-attachment-target-id
+   #:workspace-attachment-updated-at
    #:workspace-file-payload
    #:workspace-file-version
    #:workspace-member

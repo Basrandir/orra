@@ -1543,6 +1543,148 @@
     (is (null (journal-members journal))
         "Rejected membership payloads should not mutate local membership state.")))
 
+(deftest local-attachment-sync-payload-is-serializer-friendly ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (attachment
+          (record-local-attachment journal
+                                   :id "attachment-1"
+                                   :target-id "paragraph-1"
+                                   :content-type "image/png"
+                                   :byte-size 4096
+                                   :digest "sha256:abc"
+                                   :storage-ref "local://attachment-1"
+                                   :status :pending
+                                   :created-at 800
+                                   :updated-at 801
+                                   :metadata (list :filename "diagram.png")))
+         (payload (journal-attachment-sync-payload journal attachment)))
+    (is (eq attachment
+            (find-journal-attachment journal "attachment-1"))
+        "Workspace attachments should be visible in the journal by attachment id.")
+    (is (equal (list :workspace-id "workspace-1"
+                     :actor-id "local-user"
+                     :session-id "local-session"
+                     :attachment
+                     (list :id "attachment-1"
+                           :target-id "paragraph-1"
+                           :content-type "image/png"
+                           :byte-size 4096
+                           :digest "sha256:abc"
+                           :storage-ref "local://attachment-1"
+                           :status :pending
+                           :actor-id "local-user"
+                           :session-id "local-session"
+                           :created-at 800
+                           :updated-at 801
+                           :metadata (list :filename "diagram.png")))
+               payload)
+        "Attachment payloads should remain simple plists for sync transport.")))
+
+(deftest attachment-sync-payload-updates-remote-attachment ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (older-payload
+          (list :workspace-id "workspace-1"
+                :attachment
+                (list :id "attachment-remote-1"
+                      :target-id "paragraph-1"
+                      :content-type "application/pdf"
+                      :byte-size 1024
+                      :digest "sha256:old"
+                      :storage-ref "server://pending"
+                      :status :pending
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :created-at 100
+                      :updated-at 101
+                      :metadata (list :filename "draft.pdf"))))
+         (stale-payload
+          (list :workspace-id "workspace-1"
+                :attachment
+                (list :id "attachment-remote-1"
+                      :target-id "paragraph-2"
+                      :content-type "application/pdf"
+                      :byte-size 2048
+                      :digest "sha256:stale"
+                      :storage-ref "server://stale"
+                      :status :available
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :created-at 100
+                      :updated-at 99
+                      :metadata (list :filename "stale.pdf"))))
+         (newer-payload
+          (list :workspace-id "workspace-1"
+                :attachment
+                (list :id "attachment-remote-1"
+                      :target-id "paragraph-3"
+                      :content-type "application/pdf"
+                      :byte-size 4096
+                      :digest "sha256:new"
+                      :storage-ref "server://attachments/remote-1"
+                      :status :available
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :created-at 100
+                      :updated-at 102
+                      :metadata (list :filename "final.pdf")))))
+    (let ((applied (apply-attachment-sync-payload journal older-payload)))
+      (is (= 1 (length applied))
+          "Attachment sync should return the attachment entries it accepted.")
+      (is (string= "server://pending"
+                   (workspace-attachment-storage-ref (first applied)))
+          "Remote attachments should preserve storage coordination references."))
+    (apply-attachment-sync-payload journal stale-payload)
+    (let ((attachment (find-journal-attachment journal "attachment-remote-1")))
+      (is (string= "paragraph-1"
+                   (workspace-attachment-target-id attachment))
+          "Stale attachments should not replace newer local state.")
+      (is (= 101 (workspace-attachment-updated-at attachment))
+          "Stale attachments should not rewind update time."))
+    (apply-attachment-sync-payload journal newer-payload)
+    (let ((attachment (find-journal-attachment journal "attachment-remote-1")))
+      (is (string= "paragraph-3"
+                   (workspace-attachment-target-id attachment))
+          "Newer attachments should replace older attachments for the same id.")
+      (is (eq :available
+              (workspace-attachment-status attachment))
+          "Newer attachments should update server coordination status.")
+      (is (equal (list :filename "final.pdf")
+                 (workspace-attachment-metadata attachment))
+          "Attachment metadata should remain available for future media rendering.")
+      (is (equal (list attachment)
+                 (journal-attachments journal))
+          "Journal attachments should be inspectable in deterministic order."))))
+
+(deftest attachment-sync-payload-rejects-other-workspaces ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (payload
+          (list :workspace-id "workspace-2"
+                :attachment
+                (list :id "attachment-remote-1"
+                      :target-id "paragraph-1"
+                      :content-type "image/jpeg"
+                      :byte-size 200
+                      :status :pending
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :created-at 100
+                      :updated-at 100))))
+    (handler-case
+        (progn
+          (apply-attachment-sync-payload journal payload)
+          (is nil "Attachments from another workspace should not apply."))
+      (error (condition)
+        (is (search "workspace-2" (princ-to-string condition))
+            "Attachment workspace mismatch errors should identify the payload workspace.")))
+    (is (null (journal-attachments journal))
+        "Rejected attachment payloads should not mutate local attachment state.")))
+
 (deftest journal-sync-request-payload-batches-local-sync-state ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"
                                           :actor-id "local-user"
@@ -1578,11 +1720,23 @@
                                    :display-name "Local User"
                                    :role :owner
                                    :status :active
-                                   :updated-at 805)))
+                                   :updated-at 805))
+         (attachment
+          (record-local-attachment journal
+                                   :id "attachment-1"
+                                   :target-id "paragraph-1"
+                                   :content-type "image/png"
+                                   :byte-size 4096
+                                   :digest "sha256:abc"
+                                   :storage-ref "local://attachment-1"
+                                   :status :pending
+                                   :created-at 806
+                                   :updated-at 807)))
     (acknowledge-journal-operation journal first-operation)
     (let ((payload (journal-sync-request-payload journal
                                                  :comments (list comment)
-                                                 :members (list member))))
+                                                 :members (list member)
+                                                 :attachments (list attachment))))
       (is (equal "workspace-1" (getf payload :workspace-id))
           "Sync request envelopes should identify the workspace.")
       (is (equal "local-user" (getf payload :actor-id))
@@ -1603,7 +1757,10 @@
           "Sync request envelopes should batch selected comments.")
       (is (equal (list (workspace-member-plist member))
                  (getf payload :members))
-          "Sync request envelopes should batch selected workspace members."))))
+          "Sync request envelopes should batch selected workspace members.")
+      (is (equal (list (workspace-attachment-plist attachment))
+                 (getf payload :attachments))
+          "Sync request envelopes should batch selected workspace attachments."))))
 
 (deftest sync-response-payload-applies-distributed-state ()
   (let* ((registry (make-object-registry))
@@ -1652,7 +1809,19 @@
                             :display-name "Peer User"
                             :role :editor
                             :status :active
-                            :updated-at 905)))))
+                            :updated-at 905))
+                :attachments
+                (list (list :id "attachment-remote-1"
+                            :target-id (object-id paragraph)
+                            :content-type "image/png"
+                            :byte-size 4096
+                            :digest "sha256:remote"
+                            :storage-ref "server://attachments/remote-1"
+                            :status :available
+                            :actor-id "peer-user"
+                            :session-id "peer-session"
+                            :created-at 906
+                            :updated-at 907)))))
     (let ((result (apply-sync-response-payload registry journal payload)))
       (is (equal (list local-operation)
                  (getf result :acknowledged-operations))
@@ -1665,7 +1834,9 @@
       (is (= 1 (length (getf result :comments)))
           "Sync responses should return accepted comment updates.")
       (is (= 1 (length (getf result :members)))
-          "Sync responses should return accepted membership updates."))
+          "Sync responses should return accepted membership updates.")
+      (is (= 1 (length (getf result :attachments)))
+          "Sync responses should return accepted attachment updates."))
     (is (eq :acknowledged
             (journal-operation-queue-status journal local-operation))
         "Sync responses should clear acknowledged local operations from pending state.")
@@ -1678,7 +1849,9 @@
     (is (find-journal-comment journal "comment-remote-1")
         "Sync responses should store distributed comments.")
     (is (find-journal-member journal "peer-user")
-        "Sync responses should store distributed workspace members.")))
+        "Sync responses should store distributed workspace members.")
+    (is (find-journal-attachment journal "attachment-remote-1")
+        "Sync responses should store distributed workspace attachments.")))
 
 (deftest sync-response-payload-rejects-other-workspaces ()
   (let* ((registry (make-object-registry))
