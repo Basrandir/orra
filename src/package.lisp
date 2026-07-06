@@ -39,6 +39,7 @@
    #:append-table-block
    #:append-task-list
    #:apply-attachment-sync-payload
+   #:apply-checkpoint-sync-payload
    #:apply-comment-sync-payload
    #:apply-membership-sync-payload
    #:apply-operation-journal
@@ -135,6 +136,7 @@
    #:focused-model
    #:fresh-id
    #:find-journal-attachment
+   #:find-journal-checkpoint
    #:find-journal-comment
    #:find-journal-member
    #:find-journal-operation
@@ -163,6 +165,8 @@
    #:image-restore-options-from-environment
    #:journal-attachment-sync-payload
    #:journal-attachments
+   #:journal-checkpoint-sync-payload
+   #:journal-checkpoints
    #:journal-comment-sync-payload
    #:journal-comments
    #:journal-failed-operations
@@ -207,6 +211,7 @@
    #:make-collaboration-comment
    #:make-collaborator-presence
    #:make-workspace-attachment
+   #:make-workspace-checkpoint
    #:make-workspace-member
    #:make-paragraph
    #:make-quote-block
@@ -288,6 +293,7 @@
    #:render-application-if-needed
    #:record-application-event
    #:record-local-attachment
+   #:record-local-checkpoint
    #:record-local-comment
    #:record-local-operation
    #:record-local-presence
@@ -406,6 +412,20 @@
    #:workspace-attachment-storage-ref
    #:workspace-attachment-target-id
    #:workspace-attachment-updated-at
+   #:workspace-checkpoint
+   #:workspace-checkpoint-actor-id
+   #:workspace-checkpoint-byte-size
+   #:workspace-checkpoint-checkpoint-at
+   #:workspace-checkpoint-clock
+   #:workspace-checkpoint-created-at
+   #:workspace-checkpoint-digest
+   #:workspace-checkpoint-id
+   #:workspace-checkpoint-metadata
+   #:workspace-checkpoint-plist
+   #:workspace-checkpoint-session-id
+   #:workspace-checkpoint-status
+   #:workspace-checkpoint-storage-ref
+   #:workspace-checkpoint-updated-at
    #:workspace-file-payload
    #:workspace-file-version
    #:workspace-member

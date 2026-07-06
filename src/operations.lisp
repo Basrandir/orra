@@ -25,6 +25,9 @@
 (defparameter *workspace-attachment-statuses*
   '(:pending :available :failed :deleted))
 
+(defparameter *workspace-checkpoint-statuses*
+  '(:pending :available :failed :deleted))
+
 (defun workspace-operation-type-p (type)
   (not (null (member type *workspace-operation-types*))))
 
@@ -56,6 +59,11 @@
 (defun ensure-workspace-attachment-status (status)
   (unless (member status *workspace-attachment-statuses*)
     (error "Unsupported workspace attachment status ~S." status))
+  status)
+
+(defun ensure-workspace-checkpoint-status (status)
+  (unless (member status *workspace-checkpoint-statuses*)
+    (error "Unsupported workspace checkpoint status ~S." status))
   status)
 
 (defun vector-clock-entry-position (entry)
@@ -637,6 +645,151 @@
    :updated-at (getf plist :updated-at)
    :metadata (getf plist :metadata)))
 
+(defun required-checkpoint-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Workspace checkpoint plist is missing required key ~S." key))
+    value))
+
+(defun ensure-checkpoint-timestamp (timestamp)
+  (unless (and (integerp timestamp)
+               (not (minusp timestamp)))
+    (error "Workspace checkpoint timestamps must be non-negative integers, got ~S."
+           timestamp))
+  timestamp)
+
+(defun ensure-checkpoint-byte-size (byte-size)
+  (unless (or (null byte-size)
+              (and (integerp byte-size)
+                   (not (minusp byte-size))))
+    (error "Workspace checkpoint byte sizes must be NIL or non-negative integers, got ~S."
+           byte-size))
+  byte-size)
+
+(defun ensure-checkpoint-metadata (metadata)
+  (unless (or (null metadata)
+              (listp metadata))
+    (error "Workspace checkpoint metadata must be NIL or a plist, got ~S."
+           metadata))
+  metadata)
+
+(defclass workspace-checkpoint ()
+  ((id
+    :initarg :id
+    :reader workspace-checkpoint-id)
+   (checkpoint-at
+    :initarg :checkpoint-at
+    :reader workspace-checkpoint-checkpoint-at)
+   (storage-ref
+    :initarg :storage-ref
+    :reader workspace-checkpoint-storage-ref
+    :initform nil)
+   (byte-size
+    :initarg :byte-size
+    :reader workspace-checkpoint-byte-size
+    :initform nil)
+   (digest
+    :initarg :digest
+    :reader workspace-checkpoint-digest
+    :initform nil)
+   (status
+    :initarg :status
+    :reader workspace-checkpoint-status
+    :initform :pending)
+   (actor-id
+    :initarg :actor-id
+    :reader workspace-checkpoint-actor-id)
+   (session-id
+    :initarg :session-id
+    :reader workspace-checkpoint-session-id)
+   (clock
+    :initarg :clock
+    :reader workspace-checkpoint-clock
+    :initform nil)
+   (created-at
+    :initarg :created-at
+    :reader workspace-checkpoint-created-at)
+   (updated-at
+    :initarg :updated-at
+    :reader workspace-checkpoint-updated-at)
+   (metadata
+    :initarg :metadata
+    :reader workspace-checkpoint-metadata
+    :initform nil)))
+
+(defun make-workspace-checkpoint (&key (id (fresh-id "checkpoint"))
+                                    checkpoint-at
+                                    storage-ref
+                                    byte-size
+                                    digest
+                                    (status :pending)
+                                    actor-id
+                                    session-id
+                                    clock
+                                    created-at
+                                    updated-at
+                                    metadata)
+  (unless id
+    (error "Workspace checkpoints require an id."))
+  (unless checkpoint-at
+    (error "Workspace checkpoints require a checkpoint timestamp."))
+  (unless actor-id
+    (error "Workspace checkpoints require an actor id."))
+  (unless session-id
+    (error "Workspace checkpoints require a session id."))
+  (let* ((effective-checkpoint-at
+          (ensure-checkpoint-timestamp checkpoint-at))
+         (effective-created-at (or created-at effective-checkpoint-at))
+         (effective-updated-at (or updated-at effective-created-at)))
+    (make-instance 'workspace-checkpoint
+                   :id id
+                   :checkpoint-at effective-checkpoint-at
+                   :storage-ref
+                   (and storage-ref
+                        (normalize-display-string storage-ref))
+                   :byte-size (ensure-checkpoint-byte-size byte-size)
+                   :digest (and digest (normalize-display-string digest))
+                   :status (ensure-workspace-checkpoint-status status)
+                   :actor-id actor-id
+                   :session-id session-id
+                   :clock (copy-vector-clock clock)
+                   :created-at
+                   (ensure-checkpoint-timestamp effective-created-at)
+                   :updated-at
+                   (ensure-checkpoint-timestamp effective-updated-at)
+                   :metadata
+                   (copy-list (ensure-checkpoint-metadata metadata)))))
+
+(defun workspace-checkpoint-plist (checkpoint)
+  (list :id (workspace-checkpoint-id checkpoint)
+        :checkpoint-at (workspace-checkpoint-checkpoint-at checkpoint)
+        :storage-ref (workspace-checkpoint-storage-ref checkpoint)
+        :byte-size (workspace-checkpoint-byte-size checkpoint)
+        :digest (workspace-checkpoint-digest checkpoint)
+        :status (workspace-checkpoint-status checkpoint)
+        :actor-id (workspace-checkpoint-actor-id checkpoint)
+        :session-id (workspace-checkpoint-session-id checkpoint)
+        :clock (copy-vector-clock (workspace-checkpoint-clock checkpoint))
+        :created-at (workspace-checkpoint-created-at checkpoint)
+        :updated-at (workspace-checkpoint-updated-at checkpoint)
+        :metadata (copy-list (workspace-checkpoint-metadata checkpoint))))
+
+(defun make-workspace-checkpoint-from-plist (plist)
+  (make-workspace-checkpoint
+   :id (required-checkpoint-plist-value plist :id)
+   :checkpoint-at (required-checkpoint-plist-value plist :checkpoint-at)
+   :storage-ref (getf plist :storage-ref)
+   :byte-size (getf plist :byte-size)
+   :digest (getf plist :digest)
+   :status (getf plist :status :pending)
+   :actor-id (required-checkpoint-plist-value plist :actor-id)
+   :session-id (required-checkpoint-plist-value plist :session-id)
+   :clock (getf plist :clock)
+   :created-at (getf plist :created-at)
+   :updated-at (getf plist :updated-at)
+   :metadata (getf plist :metadata)))
+
 (defclass operation-journal ()
   ((workspace-id
     :initarg :workspace-id
@@ -677,6 +830,9 @@
     :initform (make-hash-table :test #'equal))
    (attachments
     :accessor %journal-attachments
+    :initform (make-hash-table :test #'equal))
+   (checkpoints
+    :accessor %journal-checkpoints
     :initform (make-hash-table :test #'equal))))
 
 (defun merge-journal-clock-position (journal actor-id position)
@@ -926,17 +1082,17 @@
       attachment)))
 
 (defun record-local-attachment (journal &key id
-					  target-id
-					  content-type
-					  byte-size
-					  digest
-					  storage-ref
-					  status
-					  actor-id
-					  session-id
-					  created-at
-					  updated-at
-					  metadata)
+                                          target-id
+                                          content-type
+                                          byte-size
+                                          digest
+                                          storage-ref
+                                          status
+                                          actor-id
+                                          session-id
+                                          created-at
+                                          updated-at
+                                          metadata)
   (update-journal-attachment
    journal
    (make-workspace-attachment
@@ -959,6 +1115,70 @@
         :actor-id (journal-actor-id journal)
         :session-id (journal-session-id journal)
         :attachment (workspace-attachment-plist attachment)))
+
+(defun workspace-checkpoint-sort-key (checkpoint)
+  (workspace-checkpoint-id checkpoint))
+
+(defun journal-checkpoints (journal)
+  (let (checkpoints)
+    (maphash (lambda (id checkpoint)
+               (declare (ignore id))
+               (push checkpoint checkpoints))
+             (%journal-checkpoints journal))
+    (sort checkpoints #'string< :key #'workspace-checkpoint-sort-key)))
+
+(defun find-journal-checkpoint (journal checkpoint-id &optional default)
+  (gethash checkpoint-id (%journal-checkpoints journal) default))
+
+(defun workspace-checkpoint-newer-p (checkpoint existing-checkpoint)
+  (or (null existing-checkpoint)
+      (> (workspace-checkpoint-updated-at checkpoint)
+         (workspace-checkpoint-updated-at existing-checkpoint))))
+
+(defun update-journal-checkpoint (journal checkpoint &key force)
+  (let* ((checkpoint-id (workspace-checkpoint-id checkpoint))
+         (existing-checkpoint
+          (gethash checkpoint-id (%journal-checkpoints journal))))
+    (when (or force
+              (workspace-checkpoint-newer-p checkpoint existing-checkpoint))
+      (setf (gethash checkpoint-id (%journal-checkpoints journal))
+            checkpoint)
+      checkpoint)))
+
+(defun record-local-checkpoint (journal &key id
+					  checkpoint-at
+					  storage-ref
+					  byte-size
+					  digest
+					  status
+					  actor-id
+					  session-id
+					  clock
+					  created-at
+					  updated-at
+					  metadata)
+  (update-journal-checkpoint
+   journal
+   (make-workspace-checkpoint
+    :id (or id (fresh-id "checkpoint"))
+    :checkpoint-at checkpoint-at
+    :storage-ref storage-ref
+    :byte-size byte-size
+    :digest digest
+    :status (or status :pending)
+    :actor-id (or actor-id (journal-actor-id journal))
+    :session-id (or session-id (journal-session-id journal))
+    :clock (or clock (journal-vector-clock journal))
+    :created-at created-at
+    :updated-at updated-at
+    :metadata metadata)
+   :force t))
+
+(defun journal-checkpoint-sync-payload (journal checkpoint)
+  (list :workspace-id (journal-workspace-id journal)
+        :actor-id (journal-actor-id journal)
+        :session-id (journal-session-id journal)
+        :checkpoint (workspace-checkpoint-plist checkpoint)))
 
 (defun find-journal-operation (journal operation-id &optional default)
   (or (gethash operation-id (%journal-operation-ids journal))
@@ -1009,7 +1229,7 @@
                             (journal-pending-operations journal))))
 
 (defun journal-sync-request-payload (journal &key presence comments members
-                                               attachments)
+                                               attachments checkpoints)
   (let ((presence (or presence (journal-local-presence journal))))
     (append
      (journal-pending-sync-payload journal)
@@ -1027,7 +1247,11 @@
      (when attachments
        (list :attachments
              (mapcar #'workspace-attachment-plist
-                     (ensure-list attachments)))))))
+                     (ensure-list attachments))))
+     (when checkpoints
+       (list :checkpoints
+             (mapcar #'workspace-checkpoint-plist
+                     (ensure-list checkpoints)))))))
 
 (defun journal-failed-operations (journal)
   (journal-operations-with-queue-status journal :failed))
@@ -1250,6 +1474,22 @@
         when accepted-attachment
         collect accepted-attachment))
 
+(defun sync-payload-checkpoint-plists (payload)
+  (sync-payload-entry-plists payload :checkpoint :checkpoints))
+
+(defun sync-payload-checkpoints (payload)
+  (mapcar #'make-workspace-checkpoint-from-plist
+          (sync-payload-checkpoint-plists payload)))
+
+(defun apply-checkpoint-sync-payload (journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (loop for checkpoint in (sync-payload-checkpoints payload)
+        for accepted-checkpoint = (update-journal-checkpoint
+                                   journal
+                                   checkpoint)
+        when accepted-checkpoint
+        collect accepted-checkpoint))
+
 (defun sync-payload-operation-plists (payload)
   (multiple-value-bind (operation-plists presentp)
       (plist-value payload :operations)
@@ -1280,7 +1520,9 @@
         :members
         (apply-membership-sync-payload journal payload)
         :attachments
-        (apply-attachment-sync-payload journal payload)))
+        (apply-attachment-sync-payload journal payload)
+        :checkpoints
+        (apply-checkpoint-sync-payload journal payload)))
 
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)

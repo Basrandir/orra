@@ -1685,6 +1685,152 @@
     (is (null (journal-attachments journal))
         "Rejected attachment payloads should not mutate local attachment state.")))
 
+(deftest local-checkpoint-sync-payload-is-serializer-friendly ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text :value "saved")
+                                  :timestamp 900))
+         (checkpoint
+          (record-local-checkpoint journal
+                                   :id "checkpoint-1"
+                                   :checkpoint-at 901
+                                   :storage-ref "local://checkpoint-1"
+                                   :byte-size 8192
+                                   :digest "sha256:checkpoint"
+                                   :status :pending
+                                   :created-at 902
+                                   :updated-at 903
+                                   :metadata (list :path "checkpoint.sexp")))
+         (payload (journal-checkpoint-sync-payload journal checkpoint)))
+    (declare (ignore operation))
+    (is (eq checkpoint
+            (find-journal-checkpoint journal "checkpoint-1"))
+        "Workspace checkpoints should be visible in the journal by checkpoint id.")
+    (is (equal (list :workspace-id "workspace-1"
+                     :actor-id "local-user"
+                     :session-id "local-session"
+                     :checkpoint
+                     (list :id "checkpoint-1"
+                           :checkpoint-at 901
+                           :storage-ref "local://checkpoint-1"
+                           :byte-size 8192
+                           :digest "sha256:checkpoint"
+                           :status :pending
+                           :actor-id "local-user"
+                           :session-id "local-session"
+                           :clock '(("local-user" . 1))
+                           :created-at 902
+                           :updated-at 903
+                           :metadata (list :path "checkpoint.sexp")))
+               payload)
+        "Checkpoint payloads should remain simple plists for sync transport.")))
+
+(deftest checkpoint-sync-payload-updates-remote-checkpoint ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (older-payload
+          (list :workspace-id "workspace-1"
+                :checkpoint
+                (list :id "checkpoint-remote-1"
+                      :checkpoint-at 100
+                      :storage-ref "server://pending"
+                      :byte-size 1024
+                      :digest "sha256:old"
+                      :status :pending
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :clock '(("peer-user" . 1))
+                      :created-at 100
+                      :updated-at 101
+                      :metadata (list :kind :automatic))))
+         (stale-payload
+          (list :workspace-id "workspace-1"
+                :checkpoint
+                (list :id "checkpoint-remote-1"
+                      :checkpoint-at 99
+                      :storage-ref "server://stale"
+                      :byte-size 2048
+                      :digest "sha256:stale"
+                      :status :available
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :clock '(("peer-user" . 2))
+                      :created-at 100
+                      :updated-at 99
+                      :metadata (list :kind :stale))))
+         (newer-payload
+          (list :workspace-id "workspace-1"
+                :checkpoint
+                (list :id "checkpoint-remote-1"
+                      :checkpoint-at 102
+                      :storage-ref "server://checkpoints/remote-1"
+                      :byte-size 4096
+                      :digest "sha256:new"
+                      :status :available
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :clock '(("peer-user" . 3))
+                      :created-at 100
+                      :updated-at 103
+                      :metadata (list :kind :manual)))))
+    (let ((applied (apply-checkpoint-sync-payload journal older-payload)))
+      (is (= 1 (length applied))
+          "Checkpoint sync should return the checkpoint entries it accepted.")
+      (is (string= "server://pending"
+                   (workspace-checkpoint-storage-ref (first applied)))
+          "Remote checkpoints should preserve storage coordination references."))
+    (apply-checkpoint-sync-payload journal stale-payload)
+    (let ((checkpoint (find-journal-checkpoint journal "checkpoint-remote-1")))
+      (is (= 100 (workspace-checkpoint-checkpoint-at checkpoint))
+          "Stale checkpoints should not replace newer local state.")
+      (is (= 101 (workspace-checkpoint-updated-at checkpoint))
+          "Stale checkpoints should not rewind update time."))
+    (apply-checkpoint-sync-payload journal newer-payload)
+    (let ((checkpoint (find-journal-checkpoint journal "checkpoint-remote-1")))
+      (is (= 102 (workspace-checkpoint-checkpoint-at checkpoint))
+          "Newer checkpoints should replace older checkpoints for the same id.")
+      (is (eq :available
+              (workspace-checkpoint-status checkpoint))
+          "Newer checkpoints should update server storage status.")
+      (is (equal '(("peer-user" . 3))
+                 (workspace-checkpoint-clock checkpoint))
+          "Checkpoint metadata should retain the causal frontier it captures.")
+      (is (equal (list checkpoint)
+                 (journal-checkpoints journal))
+          "Journal checkpoints should be inspectable in deterministic order."))))
+
+(deftest checkpoint-sync-payload-rejects-other-workspaces ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (payload
+          (list :workspace-id "workspace-2"
+                :checkpoint
+                (list :id "checkpoint-remote-1"
+                      :checkpoint-at 100
+                      :storage-ref "server://wrong"
+                      :byte-size 200
+                      :status :pending
+                      :actor-id "peer-user"
+                      :session-id "peer-session"
+                      :created-at 100
+                      :updated-at 100))))
+    (handler-case
+        (progn
+          (apply-checkpoint-sync-payload journal payload)
+          (is nil "Checkpoints from another workspace should not apply."))
+      (error (condition)
+        (is (search "workspace-2" (princ-to-string condition))
+            "Checkpoint workspace mismatch errors should identify the payload workspace.")))
+    (is (null (journal-checkpoints journal))
+        "Rejected checkpoint payloads should not mutate local checkpoint state.")))
+
 (deftest journal-sync-request-payload-batches-local-sync-state ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"
                                           :actor-id "local-user"
@@ -1731,12 +1877,23 @@
                                    :storage-ref "local://attachment-1"
                                    :status :pending
                                    :created-at 806
-                                   :updated-at 807)))
+                                   :updated-at 807))
+         (checkpoint
+          (record-local-checkpoint journal
+                                   :id "checkpoint-1"
+                                   :checkpoint-at 808
+                                   :storage-ref "local://checkpoint-1"
+                                   :byte-size 8192
+                                   :digest "sha256:checkpoint"
+                                   :status :pending
+                                   :created-at 809
+                                   :updated-at 810)))
     (acknowledge-journal-operation journal first-operation)
     (let ((payload (journal-sync-request-payload journal
                                                  :comments (list comment)
                                                  :members (list member)
-                                                 :attachments (list attachment))))
+                                                 :attachments (list attachment)
+                                                 :checkpoints (list checkpoint))))
       (is (equal "workspace-1" (getf payload :workspace-id))
           "Sync request envelopes should identify the workspace.")
       (is (equal "local-user" (getf payload :actor-id))
@@ -1760,7 +1917,10 @@
           "Sync request envelopes should batch selected workspace members.")
       (is (equal (list (workspace-attachment-plist attachment))
                  (getf payload :attachments))
-          "Sync request envelopes should batch selected workspace attachments."))))
+          "Sync request envelopes should batch selected workspace attachments.")
+      (is (equal (list (workspace-checkpoint-plist checkpoint))
+                 (getf payload :checkpoints))
+          "Sync request envelopes should batch selected workspace checkpoints."))))
 
 (deftest sync-response-payload-applies-distributed-state ()
   (let* ((registry (make-object-registry))
@@ -1821,7 +1981,19 @@
                             :actor-id "peer-user"
                             :session-id "peer-session"
                             :created-at 906
-                            :updated-at 907)))))
+                            :updated-at 907))
+                :checkpoints
+                (list (list :id "checkpoint-remote-1"
+                            :checkpoint-at 908
+                            :storage-ref "server://checkpoints/remote-1"
+                            :byte-size 8192
+                            :digest "sha256:checkpoint"
+                            :status :available
+                            :actor-id "peer-user"
+                            :session-id "peer-session"
+                            :clock '(("peer-user" . 2))
+                            :created-at 909
+                            :updated-at 910)))))
     (let ((result (apply-sync-response-payload registry journal payload)))
       (is (equal (list local-operation)
                  (getf result :acknowledged-operations))
@@ -1836,7 +2008,9 @@
       (is (= 1 (length (getf result :members)))
           "Sync responses should return accepted membership updates.")
       (is (= 1 (length (getf result :attachments)))
-          "Sync responses should return accepted attachment updates."))
+          "Sync responses should return accepted attachment updates.")
+      (is (= 1 (length (getf result :checkpoints)))
+          "Sync responses should return accepted checkpoint updates."))
     (is (eq :acknowledged
             (journal-operation-queue-status journal local-operation))
         "Sync responses should clear acknowledged local operations from pending state.")
@@ -1851,7 +2025,9 @@
     (is (find-journal-member journal "peer-user")
         "Sync responses should store distributed workspace members.")
     (is (find-journal-attachment journal "attachment-remote-1")
-        "Sync responses should store distributed workspace attachments.")))
+        "Sync responses should store distributed workspace attachments.")
+    (is (find-journal-checkpoint journal "checkpoint-remote-1")
+        "Sync responses should store distributed workspace checkpoints.")))
 
 (deftest sync-response-payload-rejects-other-workspaces ()
   (let* ((registry (make-object-registry))
