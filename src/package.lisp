@@ -49,6 +49,7 @@
    #:apply-sync-acknowledgement-payload
    #:apply-sync-response-payload
    #:apply-workspace-operation
+   #:authorize-sync-request-payload
    #:backend
    #:backend-name
    #:build-workspace-cell-tree
@@ -224,6 +225,8 @@
    #:make-stack-frame-browser-block
    #:make-sdl2-backend
    #:make-table-block
+   #:make-sync-authentication
+   #:make-sync-authentication-from-plist
    #:make-task-item
    #:make-task-list
    #:make-text-cell
@@ -344,6 +347,16 @@
    #:start-application
    #:start-demo
    #:stop-editing
+   #:sync-authentication
+   #:sync-authentication-actor-id
+   #:sync-authentication-expires-at
+   #:sync-authentication-issued-at
+   #:sync-authentication-metadata
+   #:sync-authentication-plist
+   #:sync-authentication-scopes
+   #:sync-authentication-session-id
+   #:sync-authentication-token-id
+   #:sync-authentication-workspace-id
    #:table-block
    #:table-block-columns
    #:table-block-rows

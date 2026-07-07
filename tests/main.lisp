@@ -1831,6 +1831,175 @@
     (is (null (journal-checkpoints journal))
         "Rejected checkpoint payloads should not mutate local checkpoint state.")))
 
+(deftest sync-authentication-plist-round-trips ()
+  (let* ((payload (list :token-id "token-1"
+                        :workspace-id "workspace-1"
+                        :actor-id "local-user"
+                        :session-id "local-session"
+                        :scopes (list :sync :attachments)
+                        :issued-at 100
+                        :expires-at 200
+                        :metadata (list :device "laptop")))
+         (authentication
+          (make-sync-authentication-from-plist payload)))
+    (is (string= "token-1" (sync-authentication-token-id authentication))
+        "Sync auth plist readers should preserve token identity.")
+    (is (string= "workspace-1" (sync-authentication-workspace-id authentication))
+        "Sync auth plist readers should preserve workspace identity.")
+    (is (string= "local-user" (sync-authentication-actor-id authentication))
+        "Sync auth plist readers should preserve actor identity.")
+    (is (string= "local-session" (sync-authentication-session-id authentication))
+        "Sync auth plist readers should preserve session identity.")
+    (is (equal (list :sync :attachments)
+               (sync-authentication-scopes authentication))
+        "Sync auth plist readers should preserve authorization scopes.")
+    (is (= 100 (sync-authentication-issued-at authentication))
+        "Sync auth plist readers should preserve issue timestamps.")
+    (is (= 200 (sync-authentication-expires-at authentication))
+        "Sync auth plist readers should preserve expiry timestamps.")
+    (is (equal (list :device "laptop")
+               (sync-authentication-metadata authentication))
+        "Sync auth plist readers should preserve metadata.")
+    (is (equal payload
+               (sync-authentication-plist authentication))
+        "Sync auth serialization should round-trip simple plist payloads.")))
+
+(deftest journal-sync-request-payload-includes-authentication ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (authentication
+          (make-sync-authentication :token-id "token-1"
+                                    :workspace-id "workspace-1"
+                                    :actor-id "local-user"
+                                    :session-id "local-session"
+                                    :scopes (list :sync)
+                                    :issued-at 100
+                                    :expires-at 200))
+         (payload (journal-sync-request-payload journal
+                                                :authentication authentication)))
+    (is (equal (sync-authentication-plist authentication)
+               (getf payload :auth))
+        "Sync request envelopes should include serializer-friendly auth metadata.")
+    (is (equal "local-user" (getf payload :actor-id))
+        "Auth metadata should not replace the normal envelope actor identity.")
+    (is (equal "local-session" (getf payload :session-id))
+        "Auth metadata should not replace the normal envelope session identity.")))
+
+(deftest sync-request-authorization-accepts-active-member ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "server"
+                                          :session-id "server-session"))
+         (authentication
+          (make-sync-authentication :token-id "token-1"
+                                    :workspace-id "workspace-1"
+                                    :actor-id "local-user"
+                                    :session-id "local-session"
+                                    :scopes (list :sync :attachments)
+                                    :issued-at 100
+                                    :expires-at 200))
+         (payload (list :workspace-id "workspace-1"
+                        :actor-id "local-user"
+                        :session-id "local-session"
+                        :auth (sync-authentication-plist authentication))))
+    (record-workspace-member journal
+                             :actor-id "local-user"
+                             :display-name "Local User"
+                             :role :editor
+                             :status :active
+                             :updated-at 99)
+    (is (equalp (sync-authentication-plist authentication)
+                (sync-authentication-plist
+                 (authorize-sync-request-payload journal
+                                                 payload
+                                                 :now 150
+                                                 :required-scope :sync)))
+        "Server-side sync auth should accept active workspace members with the required scope.")))
+
+(deftest sync-request-authorization-rejects-invalid-auth ()
+  (let ((journal (make-operation-journal :workspace-id "workspace-1"
+                                         :actor-id "server"
+                                         :session-id "server-session"))
+        (expired-payload
+         (list :workspace-id "workspace-1"
+               :actor-id "local-user"
+               :session-id "local-session"
+               :auth (list :token-id "expired-token"
+                           :workspace-id "workspace-1"
+                           :actor-id "local-user"
+                           :session-id "local-session"
+                           :scopes (list :sync)
+                           :issued-at 100
+                           :expires-at 120)))
+        (mismatched-payload
+         (list :workspace-id "workspace-1"
+               :actor-id "local-user"
+               :session-id "local-session"
+               :auth (list :token-id "mismatched-token"
+                           :workspace-id "workspace-1"
+                           :actor-id "other-user"
+                           :session-id "local-session"
+                           :scopes (list :sync)
+                           :issued-at 100
+                           :expires-at 200))))
+    (record-workspace-member journal
+                             :actor-id "local-user"
+                             :display-name "Local User"
+                             :role :editor
+                             :status :active
+                             :updated-at 99)
+    (handler-case
+        (progn
+          (authorize-sync-request-payload journal
+                                          expired-payload
+                                          :now 150
+                                          :required-scope :sync)
+          (is nil "Expired sync auth should not authorize requests."))
+      (error (condition)
+        (is (search "expired" (string-downcase (princ-to-string condition)))
+            "Expired auth errors should explain the rejected token.")))
+    (handler-case
+        (progn
+          (authorize-sync-request-payload journal
+                                          mismatched-payload
+                                          :now 150
+                                          :required-scope :sync)
+          (is nil "Auth with a mismatched actor should not authorize requests."))
+      (error (condition)
+        (is (search "actor" (string-downcase (princ-to-string condition)))
+            "Mismatched auth errors should explain the rejected actor.")))))
+
+(deftest sync-request-authorization-rejects-nonmembers ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "server"
+                                          :session-id "server-session"))
+         (payload (list :workspace-id "workspace-1"
+                        :actor-id "removed-user"
+                        :session-id "removed-session"
+                        :auth (list :token-id "token-1"
+                                    :workspace-id "workspace-1"
+                                    :actor-id "removed-user"
+                                    :session-id "removed-session"
+                                    :scopes (list :sync)
+                                    :issued-at 100
+                                    :expires-at 200))))
+    (record-workspace-member journal
+                             :actor-id "removed-user"
+                             :display-name "Removed User"
+                             :role :editor
+                             :status :removed
+                             :updated-at 99)
+    (handler-case
+        (progn
+          (authorize-sync-request-payload journal
+                                          payload
+                                          :now 150
+                                          :required-scope :sync)
+          (is nil "Removed members should not authorize sync requests."))
+      (error (condition)
+        (is (search "removed-user" (princ-to-string condition))
+            "Membership auth errors should identify the rejected actor.")))))
+
 (deftest journal-sync-request-payload-batches-local-sync-state ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"
                                           :actor-id "local-user"

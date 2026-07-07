@@ -222,6 +222,134 @@
       (error "Sync payload is missing required key ~S." key))
     value))
 
+(defun required-sync-authentication-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Sync authentication plist is missing required key ~S." key))
+    value))
+
+(defun ensure-sync-authentication-timestamp (timestamp)
+  (unless (and (integerp timestamp)
+               (not (minusp timestamp)))
+    (error "Sync authentication timestamps must be non-negative integers, got ~S."
+           timestamp))
+  timestamp)
+
+(defun ensure-sync-authentication-expiry (issued-at expires-at)
+  (when expires-at
+    (let ((expires-at (ensure-sync-authentication-timestamp expires-at)))
+      (when (< expires-at issued-at)
+        (error "Sync authentication expiry ~S precedes issue time ~S."
+               expires-at
+               issued-at))
+      expires-at)))
+
+(defun ensure-sync-authentication-scopes (scopes)
+  (unless (or (null scopes)
+              (listp scopes))
+    (error "Sync authentication scopes must be NIL or a list, got ~S." scopes))
+  (dolist (scope scopes)
+    (unless (keywordp scope)
+      (error "Sync authentication scopes must be keywords, got ~S." scope)))
+  scopes)
+
+(defun ensure-sync-authentication-metadata (metadata)
+  (unless (or (null metadata)
+              (listp metadata))
+    (error "Sync authentication metadata must be NIL or a plist, got ~S."
+           metadata))
+  metadata)
+
+(defclass sync-authentication ()
+  ((token-id
+    :initarg :token-id
+    :reader sync-authentication-token-id)
+   (workspace-id
+    :initarg :workspace-id
+    :reader sync-authentication-workspace-id)
+   (actor-id
+    :initarg :actor-id
+    :reader sync-authentication-actor-id)
+   (session-id
+    :initarg :session-id
+    :reader sync-authentication-session-id)
+   (scopes
+    :initarg :scopes
+    :reader sync-authentication-scopes
+    :initform nil)
+   (issued-at
+    :initarg :issued-at
+    :reader sync-authentication-issued-at)
+   (expires-at
+    :initarg :expires-at
+    :reader sync-authentication-expires-at
+    :initform nil)
+   (metadata
+    :initarg :metadata
+    :reader sync-authentication-metadata
+    :initform nil)))
+
+(defun make-sync-authentication (&key token-id
+                                   workspace-id
+                                   actor-id
+                                   session-id
+                                   scopes
+                                   (issued-at (get-universal-time))
+                                   expires-at
+                                   metadata)
+  (unless token-id
+    (error "Sync authentication requires a token id."))
+  (unless workspace-id
+    (error "Sync authentication requires a workspace id."))
+  (unless actor-id
+    (error "Sync authentication requires an actor id."))
+  (unless session-id
+    (error "Sync authentication requires a session id."))
+  (let ((issued-at (ensure-sync-authentication-timestamp issued-at)))
+    (make-instance 'sync-authentication
+                   :token-id token-id
+                   :workspace-id workspace-id
+                   :actor-id actor-id
+                   :session-id session-id
+                   :scopes (copy-list
+                            (ensure-sync-authentication-scopes scopes))
+                   :issued-at issued-at
+                   :expires-at (ensure-sync-authentication-expiry issued-at
+                                                                  expires-at)
+                   :metadata (copy-list
+                              (ensure-sync-authentication-metadata metadata)))))
+
+(defun sync-authentication-plist (authentication)
+  (list :token-id (sync-authentication-token-id authentication)
+        :workspace-id (sync-authentication-workspace-id authentication)
+        :actor-id (sync-authentication-actor-id authentication)
+        :session-id (sync-authentication-session-id authentication)
+        :scopes (copy-list (sync-authentication-scopes authentication))
+        :issued-at (sync-authentication-issued-at authentication)
+        :expires-at (sync-authentication-expires-at authentication)
+        :metadata (copy-list (sync-authentication-metadata authentication))))
+
+(defun make-sync-authentication-from-plist (plist)
+  (make-sync-authentication
+   :token-id (required-sync-authentication-plist-value plist :token-id)
+   :workspace-id (required-sync-authentication-plist-value plist :workspace-id)
+   :actor-id (required-sync-authentication-plist-value plist :actor-id)
+   :session-id (required-sync-authentication-plist-value plist :session-id)
+   :scopes (getf plist :scopes)
+   :issued-at (required-sync-authentication-plist-value plist :issued-at)
+   :expires-at (getf plist :expires-at)
+   :metadata (getf plist :metadata)))
+
+(defun sync-authentication-expired-p (authentication now)
+  (let ((expires-at (sync-authentication-expires-at authentication)))
+    (and expires-at
+         (> now expires-at))))
+
+(defun sync-authentication-has-scope-p (authentication scope)
+  (or (null scope)
+      (member scope (sync-authentication-scopes authentication))))
+
 (defun required-presence-plist-value (plist key)
   (multiple-value-bind (value presentp)
       (plist-value plist key)
@@ -1016,6 +1144,70 @@
 (defun find-journal-member (journal actor-id &optional default)
   (gethash actor-id (%journal-members journal) default))
 
+(defun sync-payload-authentication (payload)
+  (make-sync-authentication-from-plist
+   (required-sync-payload-value payload :auth)))
+
+(defun ensure-sync-authentication-matches-payload (authentication payload)
+  (let ((workspace-id (required-sync-payload-value payload :workspace-id))
+        (actor-id (required-sync-payload-value payload :actor-id))
+        (session-id (required-sync-payload-value payload :session-id)))
+    (unless (equal workspace-id
+                   (sync-authentication-workspace-id authentication))
+      (error "Sync authentication workspace ~S does not match payload workspace ~S."
+             (sync-authentication-workspace-id authentication)
+             workspace-id))
+    (unless (equal actor-id
+                   (sync-authentication-actor-id authentication))
+      (error "Sync authentication actor ~S does not match payload actor ~S."
+             (sync-authentication-actor-id authentication)
+             actor-id))
+    (unless (equal session-id
+                   (sync-authentication-session-id authentication))
+      (error "Sync authentication session ~S does not match payload session ~S."
+             (sync-authentication-session-id authentication)
+             session-id)))
+  authentication)
+
+(defun ensure-sync-authentication-current (authentication now)
+  (when (> (sync-authentication-issued-at authentication) now)
+    (error "Sync authentication token ~S was issued in the future at ~S."
+           (sync-authentication-token-id authentication)
+           (sync-authentication-issued-at authentication)))
+  (when (sync-authentication-expired-p authentication now)
+    (error "Sync authentication token ~S expired at ~S."
+           (sync-authentication-token-id authentication)
+           (sync-authentication-expires-at authentication)))
+  authentication)
+
+(defun ensure-sync-authentication-scope (authentication required-scope)
+  (unless (sync-authentication-has-scope-p authentication required-scope)
+    (error "Sync authentication token ~S lacks required scope ~S."
+           (sync-authentication-token-id authentication)
+           required-scope))
+  authentication)
+
+(defun ensure-sync-authentication-member (journal authentication)
+  (let* ((actor-id (sync-authentication-actor-id authentication))
+         (member (find-journal-member journal actor-id)))
+    (unless member
+      (error "Sync authentication actor ~S is not a workspace member."
+             actor-id))
+    (unless (eq :active (workspace-member-status member))
+      (error "Sync authentication actor ~S is not an active workspace member."
+             actor-id)))
+  authentication)
+
+(defun authorize-sync-request-payload (journal payload &key
+							 (now (get-universal-time))
+							 required-scope)
+  (ensure-sync-payload-workspace journal payload)
+  (let ((authentication (sync-payload-authentication payload)))
+    (ensure-sync-authentication-matches-payload authentication payload)
+    (ensure-sync-authentication-current authentication now)
+    (ensure-sync-authentication-scope authentication required-scope)
+    (ensure-sync-authentication-member journal authentication)))
+
 (defun workspace-member-newer-p (member existing-member)
   (or (null existing-member)
       (> (workspace-member-updated-at member)
@@ -1228,11 +1420,15 @@
         :operations (mapcar #'workspace-operation-plist
                             (journal-pending-operations journal))))
 
-(defun journal-sync-request-payload (journal &key presence comments members
-                                               attachments checkpoints)
+(defun journal-sync-request-payload (journal &key authentication presence
+                                               comments members attachments
+                                               checkpoints)
   (let ((presence (or presence (journal-local-presence journal))))
     (append
      (journal-pending-sync-payload journal)
+     (when authentication
+       (list :auth
+             (sync-authentication-plist authentication)))
      (when presence
        (list :presences
              (list (collaborator-presence-plist presence))))
