@@ -2000,6 +2000,223 @@
         (is (search "removed-user" (princ-to-string condition))
             "Membership auth errors should identify the rejected actor.")))))
 
+(deftest sync-coordinator-registers-workspace-members ()
+  (let* ((coordinator (make-sync-coordinator))
+         (journal (ensure-sync-coordinator-workspace coordinator
+                                                     "workspace-1"))
+         (member (sync-coordinator-register-member coordinator
+                                                   "workspace-1"
+                                                   "local-user"
+                                                   :display-name "Local User"
+                                                   :role :owner
+                                                   :status :active
+                                                   :updated-at 150)))
+    (is (typep coordinator 'sync-coordinator)
+        "Sync coordinator construction should return a coordinator object.")
+    (is (eq journal
+            (sync-coordinator-workspace-journal coordinator "workspace-1"))
+        "Sync coordinators should expose their server-side workspace journals.")
+    (is (eq member (find-journal-member journal "local-user"))
+        "Registering a coordinator member should record membership in the workspace journal.")
+    (is (eq :owner (workspace-member-role member))
+        "Coordinator membership registration should preserve explicit roles.")
+    (is (= 150 (workspace-member-updated-at member))
+        "Coordinator membership registration should preserve update timestamps.")))
+
+(deftest sync-coordinator-accepts-authorized-request ()
+  (let* ((coordinator (make-sync-coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "local-user"
+                                                 :session-id "local-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300))
+         (operation (record-local-operation client-journal
+                                            :set-slot
+                                            :target-id "paragraph-1"
+                                            :payload (list :slot :text
+                                                           :value "local")
+                                            :timestamp 151))
+         (presence (record-local-presence client-journal
+                                          :focus-id "paragraph-1"
+                                          :cursor-position 5
+                                          :status :editing
+                                          :updated-at 152))
+         (comment (record-local-comment client-journal
+                                        :id "comment-1"
+                                        :target-id "paragraph-1"
+                                        :body "Looks good."
+                                        :created-at 153
+                                        :updated-at 154))
+         (member (record-workspace-member client-journal
+                                          :actor-id "peer-user"
+                                          :display-name "Peer User"
+                                          :role :editor
+                                          :status :active
+                                          :updated-at 155))
+         (attachment (record-local-attachment client-journal
+                                              :id "attachment-1"
+                                              :target-id "paragraph-1"
+                                              :content-type "image/png"
+                                              :byte-size 2048
+                                              :digest "sha256:image"
+                                              :storage-ref "local://attachment-1"
+                                              :status :available
+                                              :created-at 156
+                                              :updated-at 157))
+         (checkpoint (record-local-checkpoint client-journal
+                                              :id "checkpoint-1"
+                                              :checkpoint-at 158
+                                              :storage-ref "local://checkpoint-1"
+                                              :byte-size 4096
+                                              :digest "sha256:checkpoint"
+                                              :status :available
+                                              :created-at 159
+                                              :updated-at 160)))
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "local-user"
+                                      :display-name "Local User"
+                                      :role :owner
+                                      :status :active
+                                      :updated-at 149)
+    (let* ((request (journal-sync-request-payload client-journal
+                                                  :authentication auth
+                                                  :comments (list comment)
+                                                  :members (list member)
+                                                  :attachments (list attachment)
+                                                  :checkpoints (list checkpoint)))
+           (response (handle-sync-request coordinator request :now 200)))
+      (is (equal "workspace-1" (getf response :workspace-id))
+          "Coordinator sync responses should identify the workspace.")
+      (is (equal (list (operation-id operation))
+                 (getf response :acknowledged-operation-ids))
+          "Coordinator sync responses should acknowledge accepted local operations.")
+      (is (journal-recorded-operation-p server-journal operation)
+          "Coordinator request handling should record accepted operations server-side.")
+      (is (equal (collaborator-presence-plist presence)
+                 (collaborator-presence-plist
+                  (find-journal-presence server-journal
+                                         "local-user"
+                                         "local-session")))
+          "Coordinator request handling should record accepted presence server-side.")
+      (is (find-journal-comment server-journal "comment-1")
+          "Coordinator request handling should record accepted comments server-side.")
+      (is (find-journal-member server-journal "peer-user")
+          "Coordinator request handling should record accepted membership changes server-side.")
+      (is (find-journal-attachment server-journal "attachment-1")
+          "Coordinator request handling should record accepted attachment metadata server-side.")
+      (is (find-journal-checkpoint server-journal "checkpoint-1")
+          "Coordinator request handling should record accepted checkpoint metadata server-side.")
+      (is (= 1 (journal-clock-position server-journal "local-user"))
+          "Coordinator request handling should merge client causal clocks server-side."))))
+
+(deftest sync-coordinator-distributes-remote-state ()
+  (let* ((coordinator (make-sync-coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "local-user"
+                                                 :session-id "local-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300))
+         (local-operation (record-local-operation client-journal
+                                                  :set-slot
+                                                  :target-id "paragraph-1"
+                                                  :payload (list :slot :text
+                                                                 :value "local")
+                                                  :timestamp 201))
+         (peer-operation (make-workspace-operation :id "peer-op-1"
+                                                   :type :set-slot
+                                                   :target-id "paragraph-1"
+                                                   :payload (list :slot :text
+                                                                  :value "peer")
+                                                   :actor-id "peer-user"
+                                                   :session-id "peer-session"
+                                                   :timestamp 202
+                                                   :clock '(("peer-user" . 1)))))
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "local-user"
+                                      :display-name "Local User"
+                                      :role :editor
+                                      :status :active
+                                      :updated-at 199)
+    (record-operation server-journal peer-operation)
+    (record-local-presence server-journal
+                           :actor-id "peer-user"
+                           :session-id "peer-session"
+                           :focus-id "paragraph-1"
+                           :cursor-position 9
+                           :status :editing
+                           :updated-at 203)
+    (let* ((request (journal-sync-request-payload client-journal
+                                                  :authentication auth))
+           (response (handle-sync-request coordinator request :now 200))
+           (operation-ids (mapcar (lambda (operation-plist)
+                                    (getf operation-plist :id))
+                                  (getf response :operations)))
+           (presence-actors (mapcar (lambda (presence-plist)
+                                      (getf presence-plist :actor-id))
+                                    (getf response :presences))))
+      (is (equal (list (operation-id local-operation))
+                 (getf response :acknowledged-operation-ids))
+          "Coordinator sync responses should acknowledge the caller's accepted operations.")
+      (is (equal (list "peer-op-1") operation-ids)
+          "Coordinator sync responses should distribute peer operations without echoing caller operations.")
+      (is (equal (list "peer-user") presence-actors)
+          "Coordinator sync responses should distribute peer presence without echoing the caller session."))))
+
+(deftest sync-coordinator-rejects-unauthorized-request ()
+  (let* ((coordinator (make-sync-coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "unknown-user"
+                                                 :session-id "unknown-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "unknown-user"
+                                         :session-id "unknown-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300)))
+    (record-local-operation client-journal
+                            :set-slot
+                            :target-id "paragraph-1"
+                            :payload (list :slot :text :value "local")
+                            :timestamp 250)
+    (record-local-presence client-journal
+                           :focus-id "paragraph-1"
+                           :cursor-position 3
+                           :status :editing
+                           :updated-at 251)
+    (handler-case
+        (progn
+          (handle-sync-request coordinator
+                               (journal-sync-request-payload client-journal
+                                                             :authentication auth)
+                               :now 200)
+          (is nil "Coordinator should reject sync requests from nonmembers."))
+      (error (condition)
+        (is (search "unknown-user" (princ-to-string condition))
+            "Coordinator membership errors should identify the rejected actor.")))
+    (is (null (journal-operations server-journal))
+        "Rejected coordinator requests should not record operations.")
+    (is (null (journal-presences server-journal))
+        "Rejected coordinator requests should not record presence.")))
+
 (deftest journal-sync-request-payload-batches-local-sync-state ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"
                                           :actor-id "local-user"

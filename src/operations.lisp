@@ -1720,6 +1720,116 @@
         :checkpoints
         (apply-checkpoint-sync-payload journal payload)))
 
+(defclass sync-coordinator ()
+  ((workspaces
+    :accessor %sync-coordinator-workspaces
+    :initform (make-hash-table :test #'equal))))
+
+(defun make-sync-coordinator ()
+  (make-instance 'sync-coordinator))
+
+(defun sync-coordinator-workspace-journal (coordinator workspace-id
+                                           &optional default)
+  (gethash workspace-id
+           (%sync-coordinator-workspaces coordinator)
+           default))
+
+(defun ensure-sync-coordinator-workspace (coordinator workspace-id
+                                          &key
+                                            (actor-id "sync-server")
+                                            (session-id "sync-server"))
+  (or (sync-coordinator-workspace-journal coordinator workspace-id)
+      (setf (gethash workspace-id
+                     (%sync-coordinator-workspaces coordinator))
+            (make-operation-journal :workspace-id workspace-id
+                                    :actor-id actor-id
+                                    :session-id session-id))))
+
+(defun sync-coordinator-register-member (coordinator workspace-id actor-id
+                                         &key display-name role status
+                                           updated-at metadata)
+  (record-workspace-member
+   (ensure-sync-coordinator-workspace coordinator workspace-id)
+   :actor-id actor-id
+   :display-name display-name
+   :role role
+   :status status
+   :updated-at updated-at
+   :metadata metadata))
+
+(defun sync-coordinator-record-operations (journal payload)
+  (ensure-sync-payload-workspace journal payload)
+  (let ((operations (sync-payload-operations payload)))
+    (dolist (operation operations)
+      (record-operation journal operation))
+    (mapcar #'operation-id operations)))
+
+(defun sync-coordinator-apply-request-payload (journal payload)
+  (merge-journal-clock journal (getf payload :clock))
+  (let ((acknowledged-operation-ids
+         (sync-coordinator-record-operations journal payload)))
+    (apply-presence-sync-payload journal payload)
+    (apply-comment-sync-payload journal payload)
+    (apply-membership-sync-payload journal payload)
+    (apply-attachment-sync-payload journal payload)
+    (apply-checkpoint-sync-payload journal payload)
+    acknowledged-operation-ids))
+
+(defun sync-coordinator-peer-operation-p (operation actor-id)
+  (not (equal actor-id (operation-actor-id operation))))
+
+(defun sync-coordinator-peer-presence-p (presence actor-id session-id)
+  (not (and (equal actor-id (collaborator-presence-actor-id presence))
+            (equal session-id (collaborator-presence-session-id presence)))))
+
+(defun sync-coordinator-response-payload (journal actor-id session-id
+                                          acknowledged-operation-ids)
+  (list :workspace-id (journal-workspace-id journal)
+        :actor-id (journal-actor-id journal)
+        :session-id (journal-session-id journal)
+        :clock (journal-vector-clock journal)
+        :acknowledged-operation-ids acknowledged-operation-ids
+        :operations (mapcar #'workspace-operation-plist
+                            (remove-if-not
+                             (lambda (operation)
+                               (sync-coordinator-peer-operation-p operation
+                                                                  actor-id))
+                             (journal-operations journal)))
+        :presences (mapcar #'collaborator-presence-plist
+                           (remove-if-not
+                            (lambda (presence)
+                              (sync-coordinator-peer-presence-p presence
+								actor-id
+								session-id))
+                            (journal-presences journal)))
+        :comments (mapcar #'collaboration-comment-plist
+                          (journal-comments journal))
+        :members (mapcar #'workspace-member-plist
+                         (journal-members journal))
+        :attachments (mapcar #'workspace-attachment-plist
+                             (journal-attachments journal))
+        :checkpoints (mapcar #'workspace-checkpoint-plist
+                             (journal-checkpoints journal))))
+
+(defun handle-sync-request (coordinator payload &key
+						  (now (get-universal-time)))
+  (let* ((workspace-id (required-sync-payload-value payload :workspace-id))
+         (actor-id (required-sync-payload-value payload :actor-id))
+         (session-id (required-sync-payload-value payload :session-id))
+         (journal (sync-coordinator-workspace-journal coordinator
+                                                      workspace-id)))
+    (unless journal
+      (error "Sync coordinator has no workspace ~S." workspace-id))
+    (authorize-sync-request-payload journal
+                                    payload
+                                    :now now
+                                    :required-scope :sync)
+    (sync-coordinator-response-payload
+     journal
+     actor-id
+     session-id
+     (sync-coordinator-apply-request-payload journal payload))))
+
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)
             (apply-workspace-operation registry operation))

@@ -123,6 +123,7 @@
    #:define-key-binding
    #:evaluate-code-block
    #:evaluate-repl-entry
+   #:ensure-sync-coordinator-workspace
    #:fail-journal-operation
    #:find-object
    #:begin-editing-focused-model
@@ -142,6 +143,7 @@
    #:find-journal-member
    #:find-journal-operation
    #:find-journal-presence
+   #:handle-sync-request
    #:invoke-command
    #:key-binding
    #:key-binding-context
@@ -225,6 +227,7 @@
    #:make-stack-frame-browser-block
    #:make-sdl2-backend
    #:make-table-block
+   #:make-sync-coordinator
    #:make-sync-authentication
    #:make-sync-authentication-from-plist
    #:make-task-item
@@ -357,6 +360,9 @@
    #:sync-authentication-session-id
    #:sync-authentication-token-id
    #:sync-authentication-workspace-id
+   #:sync-coordinator
+   #:sync-coordinator-register-member
+   #:sync-coordinator-workspace-journal
    #:table-block
    #:table-block-columns
    #:table-block-rows
