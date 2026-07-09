@@ -2574,6 +2574,81 @@
     (is (find-journal-checkpoint journal "checkpoint-remote-1")
         "Sync responses should store distributed workspace checkpoints.")))
 
+(deftest sync-response-payload-accepts-coordinated-storage-state ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session")))
+    (record-local-attachment journal
+                             :id "attachment-1"
+                             :target-id "paragraph-1"
+                             :content-type "image/png"
+                             :byte-size 2048
+                             :digest "sha256:image"
+                             :storage-ref "local://attachment-1"
+                             :status :available
+                             :created-at 201
+                             :updated-at 202)
+    (record-local-checkpoint journal
+                             :id "checkpoint-1"
+                             :checkpoint-at 210
+                             :storage-ref "local://checkpoint-1"
+                             :byte-size 4096
+                             :digest "sha256:checkpoint"
+                             :status :available
+                             :created-at 211
+                             :updated-at 212)
+    (let ((result
+           (apply-sync-response-payload
+            registry
+            journal
+            (list :workspace-id "workspace-1"
+                  :actor-id "sync-server"
+                  :session-id "sync-server"
+                  :clock '(("local-user" . 1))
+                  :attachments
+                  (list (list :id "attachment-1"
+                              :target-id "paragraph-1"
+                              :content-type "image/png"
+                              :byte-size 2048
+                              :digest "sha256:image"
+                              :storage-ref
+                              "server://workspace-1/attachments/attachment-1"
+                              :status :pending
+                              :actor-id "local-user"
+                              :session-id "local-session"
+                              :created-at 201
+                              :updated-at 202))
+                  :checkpoints
+                  (list (list :id "checkpoint-1"
+                              :checkpoint-at 210
+                              :storage-ref
+                              "server://workspace-1/checkpoints/checkpoint-1"
+                              :byte-size 4096
+                              :digest "sha256:checkpoint"
+                              :status :pending
+                              :actor-id "local-user"
+                              :session-id "local-session"
+                              :clock '(("local-user" . 1))
+                              :created-at 211
+                              :updated-at 212))))))
+      (is (= 1 (length (getf result :attachments)))
+          "Sync responses should accept coordinated attachment metadata.")
+      (is (= 1 (length (getf result :checkpoints)))
+          "Sync responses should accept coordinated checkpoint metadata."))
+    (let ((attachment (find-journal-attachment journal "attachment-1"))
+          (checkpoint (find-journal-checkpoint journal "checkpoint-1")))
+      (is (string= "server://workspace-1/attachments/attachment-1"
+                   (workspace-attachment-storage-ref attachment))
+          "Coordinator attachment refs should replace local attachment refs.")
+      (is (eq :pending (workspace-attachment-status attachment))
+          "Coordinator attachment status should replace local attachment status.")
+      (is (string= "server://workspace-1/checkpoints/checkpoint-1"
+                   (workspace-checkpoint-storage-ref checkpoint))
+          "Coordinator checkpoint refs should replace local checkpoint refs.")
+      (is (eq :pending (workspace-checkpoint-status checkpoint))
+          "Coordinator checkpoint status should replace local checkpoint status."))))
+
 (deftest sync-response-payload-rejects-other-workspaces ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"

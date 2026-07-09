@@ -1661,12 +1661,13 @@
   (mapcar #'make-workspace-attachment-from-plist
           (sync-payload-attachment-plists payload)))
 
-(defun apply-attachment-sync-payload (journal payload)
+(defun apply-attachment-sync-payload (journal payload &key force)
   (ensure-sync-payload-workspace journal payload)
   (loop for attachment in (sync-payload-attachments payload)
         for accepted-attachment = (update-journal-attachment
                                    journal
-                                   attachment)
+                                   attachment
+                                   :force force)
         when accepted-attachment
         collect accepted-attachment))
 
@@ -1677,12 +1678,13 @@
   (mapcar #'make-workspace-checkpoint-from-plist
           (sync-payload-checkpoint-plists payload)))
 
-(defun apply-checkpoint-sync-payload (journal payload)
+(defun apply-checkpoint-sync-payload (journal payload &key force)
   (ensure-sync-payload-workspace journal payload)
   (loop for checkpoint in (sync-payload-checkpoints payload)
         for accepted-checkpoint = (update-journal-checkpoint
                                    journal
-                                   checkpoint)
+                                   checkpoint
+                                   :force force)
         when accepted-checkpoint
         collect accepted-checkpoint))
 
@@ -1716,9 +1718,9 @@
         :members
         (apply-membership-sync-payload journal payload)
         :attachments
-        (apply-attachment-sync-payload journal payload)
+        (apply-attachment-sync-payload journal payload :force t)
         :checkpoints
-        (apply-checkpoint-sync-payload journal payload)))
+        (apply-checkpoint-sync-payload journal payload :force t)))
 
 (defclass sync-coordinator ()
   ((workspaces
