@@ -1764,6 +1764,78 @@
       (record-operation journal operation))
     (mapcar #'operation-id operations)))
 
+(defun sync-coordinator-storage-ref (journal kind id)
+  (format nil "server://~A/~A/~A"
+          (journal-workspace-id journal)
+          kind
+          id))
+
+(defun sync-coordinator-server-storage-ref-p (journal kind id storage-ref)
+  (equal storage-ref
+         (sync-coordinator-storage-ref journal kind id)))
+
+(defun sync-coordinator-coordinate-attachment (journal attachment)
+  (let ((storage-ref (workspace-attachment-storage-ref attachment))
+        (attachment-id (workspace-attachment-id attachment)))
+    (unless (sync-coordinator-server-storage-ref-p journal
+                                                   "attachments"
+                                                   attachment-id
+                                                   storage-ref)
+      (update-journal-attachment
+       journal
+       (make-workspace-attachment
+        :id attachment-id
+        :target-id (workspace-attachment-target-id attachment)
+        :content-type (workspace-attachment-content-type attachment)
+        :byte-size (workspace-attachment-byte-size attachment)
+        :digest (workspace-attachment-digest attachment)
+        :storage-ref (sync-coordinator-storage-ref
+                      journal
+                      "attachments"
+                      attachment-id)
+        :status :pending
+        :actor-id (workspace-attachment-actor-id attachment)
+        :session-id (workspace-attachment-session-id attachment)
+        :created-at (workspace-attachment-created-at attachment)
+        :updated-at (workspace-attachment-updated-at attachment)
+        :metadata (workspace-attachment-metadata attachment))
+       :force t))))
+
+(defun sync-coordinator-coordinate-attachments (journal attachments)
+  (dolist (attachment attachments)
+    (sync-coordinator-coordinate-attachment journal attachment)))
+
+(defun sync-coordinator-coordinate-checkpoint (journal checkpoint)
+  (let ((storage-ref (workspace-checkpoint-storage-ref checkpoint))
+        (checkpoint-id (workspace-checkpoint-id checkpoint)))
+    (unless (sync-coordinator-server-storage-ref-p journal
+                                                   "checkpoints"
+                                                   checkpoint-id
+                                                   storage-ref)
+      (update-journal-checkpoint
+       journal
+       (make-workspace-checkpoint
+        :id checkpoint-id
+        :checkpoint-at (workspace-checkpoint-checkpoint-at checkpoint)
+        :storage-ref (sync-coordinator-storage-ref
+                      journal
+                      "checkpoints"
+                      checkpoint-id)
+        :byte-size (workspace-checkpoint-byte-size checkpoint)
+        :digest (workspace-checkpoint-digest checkpoint)
+        :status :pending
+        :actor-id (workspace-checkpoint-actor-id checkpoint)
+        :session-id (workspace-checkpoint-session-id checkpoint)
+        :clock (workspace-checkpoint-clock checkpoint)
+        :created-at (workspace-checkpoint-created-at checkpoint)
+        :updated-at (workspace-checkpoint-updated-at checkpoint)
+        :metadata (workspace-checkpoint-metadata checkpoint))
+       :force t))))
+
+(defun sync-coordinator-coordinate-checkpoints (journal checkpoints)
+  (dolist (checkpoint checkpoints)
+    (sync-coordinator-coordinate-checkpoint journal checkpoint)))
+
 (defun sync-coordinator-apply-request-payload (journal payload)
   (merge-journal-clock journal (getf payload :clock))
   (let ((acknowledged-operation-ids
@@ -1771,8 +1843,12 @@
     (apply-presence-sync-payload journal payload)
     (apply-comment-sync-payload journal payload)
     (apply-membership-sync-payload journal payload)
-    (apply-attachment-sync-payload journal payload)
-    (apply-checkpoint-sync-payload journal payload)
+    (sync-coordinator-coordinate-attachments
+     journal
+     (apply-attachment-sync-payload journal payload))
+    (sync-coordinator-coordinate-checkpoints
+     journal
+     (apply-checkpoint-sync-payload journal payload))
     acknowledged-operation-ids))
 
 (defun sync-coordinator-peer-operation-p (operation actor-id)
