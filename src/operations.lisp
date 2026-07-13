@@ -1908,6 +1908,28 @@
      session-id
      (sync-coordinator-apply-request-payload journal payload))))
 
+(defun sync-journal-with-coordinator (registry journal coordinator authentication
+                                      &key
+                                        (now (get-universal-time))
+                                        presence
+                                        comments
+                                        members
+                                        attachments
+                                        checkpoints)
+  (let* ((request
+          (journal-sync-request-payload journal
+                                        :authentication authentication
+                                        :presence presence
+                                        :comments comments
+                                        :members members
+                                        :attachments attachments
+                                        :checkpoints checkpoints))
+         (response (handle-sync-request coordinator request :now now))
+         (result (apply-sync-response-payload registry journal response)))
+    (list :request request
+          :response response
+          :result result)))
+
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)
             (apply-workspace-operation registry operation))

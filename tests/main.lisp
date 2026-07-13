@@ -2649,6 +2649,89 @@
       (is (eq :pending (workspace-checkpoint-status checkpoint))
           "Coordinator checkpoint status should replace local checkpoint status."))))
 
+(deftest sync-journal-with-coordinator-round-trips-client-state ()
+  (let* ((coordinator (make-sync-coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (registry (make-object-registry))
+         (paragraph (make-paragraph :text "local" :registry registry))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "local-user"
+                                                 :session-id "local-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300))
+         (local-operation
+          (record-local-operation client-journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text
+                                                 :value "local draft")
+                                  :timestamp 201))
+         (peer-operation
+          (make-workspace-operation :id "peer-op-1"
+                                    :type :set-slot
+                                    :target-id (object-id paragraph)
+                                    :payload (list :slot :text
+                                                   :value "peer")
+                                    :actor-id "peer-user"
+                                    :session-id "peer-session"
+                                    :timestamp 202
+                                    :clock '(("peer-user" . 1))))
+         (attachment
+          (record-local-attachment client-journal
+                                   :id "attachment-1"
+                                   :target-id (object-id paragraph)
+                                   :content-type "image/png"
+                                   :byte-size 2048
+                                   :digest "sha256:image"
+                                   :storage-ref "local://attachment-1"
+                                   :status :available
+                                   :created-at 203
+                                   :updated-at 204)))
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "local-user"
+                                      :display-name "Local User"
+                                      :role :editor
+                                      :status :active
+                                      :updated-at 199)
+    (record-operation server-journal peer-operation)
+    (let* ((exchange
+            (sync-journal-with-coordinator
+             registry
+             client-journal
+             coordinator
+             auth
+             :now 200
+             :attachments (list attachment)))
+           (result (getf exchange :result))
+           (response (getf exchange :response))
+           (client-attachment
+            (find-journal-attachment client-journal "attachment-1")))
+      (is (equal (list (operation-id local-operation))
+                 (getf response :acknowledged-operation-ids))
+          "Sync exchange responses should acknowledge submitted local operations.")
+      (is (eq :acknowledged
+              (journal-operation-queue-status client-journal local-operation))
+          "Sync exchanges should acknowledge queued local operations client-side.")
+      (is (journal-recorded-operation-p server-journal local-operation)
+          "Sync exchanges should submit local operations to the coordinator.")
+      (is (equal (list paragraph)
+                 (getf result :applied-operations))
+          "Sync exchanges should apply distributed peer operations locally.")
+      (is (string= "peer" (paragraph-text paragraph))
+          "Sync exchanges should update local objects from peer operations.")
+      (is (string= "server://workspace-1/attachments/attachment-1"
+                   (workspace-attachment-storage-ref client-attachment))
+          "Sync exchanges should apply coordinated attachment refs locally.")
+      (is (eq :pending (workspace-attachment-status client-attachment))
+          "Sync exchanges should apply coordinated attachment status locally."))))
+
 (deftest sync-response-payload-rejects-other-workspaces ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"

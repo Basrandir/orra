@@ -350,6 +350,7 @@
    #:start-application
    #:start-demo
    #:stop-editing
+   #:sync-journal-with-coordinator
    #:sync-authentication
    #:sync-authentication-actor-id
    #:sync-authentication-expires-at
