@@ -121,8 +121,10 @@
    #:cross-reference-browser-block-symbol
    #:define-command
    #:define-key-binding
+   #:decode-sync-message
    #:evaluate-code-block
    #:evaluate-repl-entry
+   #:encode-sync-message
    #:ensure-sync-coordinator-workspace
    #:fail-journal-operation
    #:find-object
@@ -228,6 +230,7 @@
    #:make-sdl2-backend
    #:make-table-block
    #:make-local-sync-transport
+   #:make-sync-message
    #:make-sync-coordinator
    #:make-sync-authentication
    #:make-sync-authentication-from-plist
@@ -366,7 +369,11 @@
    #:sync-coordinator
    #:sync-coordinator-register-member
    #:sync-coordinator-workspace-journal
+   #:sync-message-payload
+   #:sync-message-type
+   #:sync-message-version
    #:sync-transport
+   #:sync-transport-send-message
    #:sync-transport-send-request
    #:table-block
    #:table-block-columns

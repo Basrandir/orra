@@ -2802,6 +2802,95 @@
       (is (string= "peer" (paragraph-text paragraph))
           "Transport sync exchanges should update local objects."))))
 
+(deftest sync-message-envelope-round-trips-through-string-codec ()
+  (let* ((payload (list :workspace-id "workspace-1"
+                        :actor-id "local-user"
+                        :session-id "session-1"
+                        :clock '(("local-user" . 2))
+                        :operations nil))
+         (message (make-sync-message :request payload))
+         (encoded (encode-sync-message message))
+         (decoded (decode-sync-message encoded :expected-type :request)))
+    (is (equal (list :kind :orra-sync-message
+                     :version (sync-message-version)
+                     :type :request
+                     :payload payload)
+               message)
+        "Sync messages should expose a stable versioned plist envelope.")
+    (is (stringp encoded)
+        "Sync message encoding should produce a transport-ready string.")
+    (is (equal message decoded)
+        "Sync message decoding should round-trip the message envelope.")
+    (is (equal payload (sync-message-payload decoded :expected-type :request))
+        "Sync message readers should expose the wrapped semantic payload.")))
+
+(deftest sync-message-envelope-rejects-unsupported-messages ()
+  (handler-case
+      (progn
+        (make-sync-message :unknown (list :workspace-id "workspace-1"))
+        (error "Expected invalid sync message type to be rejected."))
+    (error (condition)
+      (is (search "Unsupported sync message type"
+                  (princ-to-string condition))
+          "Invalid sync message types should produce an explanatory error.")))
+  (handler-case
+      (progn
+        (decode-sync-message
+         (with-output-to-string (stream)
+           (with-standard-io-syntax
+             (prin1 (list :kind :orra-sync-message
+                          :version (1+ (sync-message-version))
+                          :type :request
+                          :payload nil)
+                    stream))))
+        (error "Expected unsupported sync message versions to be rejected."))
+    (error (condition)
+      (is (search "Unsupported sync message version"
+                  (princ-to-string condition))
+          "Unsupported sync message versions should produce an explanatory error."))))
+
+(deftest local-sync-transport-exchanges-versioned-messages ()
+  (let* ((coordinator (make-sync-coordinator))
+         (transport (make-local-sync-transport coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "local-user"
+                                                 :session-id "local-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300))
+         (operation (record-local-operation client-journal
+                                            :set-slot
+                                            :target-id "paragraph-1"
+                                            :payload (list :slot :text
+                                                           :value "draft")
+                                            :timestamp 201))
+         (request-payload (journal-sync-request-payload client-journal
+                                                        :authentication auth))
+         (request-message (make-sync-message :request request-payload)))
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "local-user"
+                                      :display-name "Local User"
+                                      :role :editor
+                                      :status :active
+                                      :updated-at 199)
+    (let* ((response-message (sync-transport-send-message transport
+                                                          request-message
+                                                          :now 200))
+           (response-payload (sync-message-payload response-message
+                                                   :expected-type :response)))
+      (is (equal (list (operation-id operation))
+                 (getf response-payload :acknowledged-operation-ids))
+          "Local transports should return versioned response messages.")
+      (is (journal-recorded-operation-p server-journal operation)
+          "Local message transports should submit semantic operations."))))
+
 (deftest sync-response-payload-rejects-other-workspaces ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"

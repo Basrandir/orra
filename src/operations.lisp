@@ -28,8 +28,84 @@
 (defparameter *workspace-checkpoint-statuses*
   '(:pending :available :failed :deleted))
 
+(defparameter *sync-message-version* 1)
+
+(defparameter *sync-message-types*
+  '(:request :response))
+
 (defun workspace-operation-type-p (type)
   (not (null (member type *workspace-operation-types*))))
+
+(defun sync-message-version ()
+  *sync-message-version*)
+
+(defun ensure-sync-message-type (type)
+  (unless (member type *sync-message-types*)
+    (error "Unsupported sync message type ~S." type))
+  type)
+
+(defun ensure-sync-message-version (version)
+  (unless (and (integerp version)
+               (= version *sync-message-version*))
+    (error "Unsupported sync message version ~S; this build supports ~S."
+           version
+           *sync-message-version*))
+  version)
+
+(defun make-sync-message (type payload &key
+					 (version *sync-message-version*))
+  (list :kind :orra-sync-message
+        :version (ensure-sync-message-version version)
+        :type (ensure-sync-message-type type)
+        :payload payload))
+
+(defun ensure-sync-message (message &key expected-type)
+  (unless (listp message)
+    (error "Sync messages must be plists, got ~S." message))
+  (unless (eq :orra-sync-message (getf message :kind))
+    (error "Invalid sync message kind ~S." (getf message :kind)))
+  (ensure-sync-message-version (getf message :version))
+  (let ((type (ensure-sync-message-type (getf message :type))))
+    (when (and expected-type (not (eq expected-type type)))
+      (error "Expected sync message type ~S, got ~S."
+             expected-type
+             type)))
+  (multiple-value-bind (payload presentp)
+      (plist-value message :payload)
+    (declare (ignore payload))
+    (unless presentp
+      (error "Sync message is missing required key :PAYLOAD.")))
+  message)
+
+(defun sync-message-type (message)
+  (getf (ensure-sync-message message) :type))
+
+(defun sync-message-payload (message &key expected-type)
+  (getf (ensure-sync-message message :expected-type expected-type)
+        :payload))
+
+(defun encode-sync-message (message)
+  (with-output-to-string (stream)
+    (with-standard-io-syntax
+      (prin1 (ensure-sync-message message) stream))))
+
+(defun sync-message-whitespace-char-p (character)
+  (member character '(#\Space #\Tab #\Newline #\Return #\Page)))
+
+(defun sync-message-trailing-junk-p (string start)
+  (loop for index from start below (length string)
+        thereis (not (sync-message-whitespace-char-p
+                      (char string index)))))
+
+(defun decode-sync-message (string &key expected-type)
+  (let ((*read-eval* nil)
+        (string (string string)))
+    (multiple-value-bind (message position)
+        (read-from-string string)
+      (when (sync-message-trailing-junk-p string position)
+        (error "Sync message contains trailing data after position ~S."
+               position))
+      (ensure-sync-message message :expected-type expected-type))))
 
 (defun ensure-workspace-operation-type (type)
   (unless (workspace-operation-type-p type)
@@ -1910,6 +1986,8 @@
 
 (defclass sync-transport () ())
 
+(defgeneric sync-transport-send-message (transport message &key now))
+
 (defgeneric sync-transport-send-request (transport payload &key now))
 
 (defclass local-sync-transport (sync-transport)
@@ -1920,13 +1998,26 @@
 (defun make-local-sync-transport (coordinator)
   (make-instance 'local-sync-transport :coordinator coordinator))
 
-(defmethod sync-transport-send-request ((transport local-sync-transport)
+(defmethod sync-transport-send-request ((transport sync-transport)
                                         payload
                                         &key
                                           (now (get-universal-time)))
-  (handle-sync-request (local-sync-transport-coordinator transport)
-                       payload
-                       :now now))
+  (sync-message-payload
+   (sync-transport-send-message transport
+                                (make-sync-message :request payload)
+                                :now now)
+   :expected-type :response))
+
+(defmethod sync-transport-send-message ((transport local-sync-transport)
+                                        message
+                                        &key
+                                          (now (get-universal-time)))
+  (make-sync-message
+   :response
+   (handle-sync-request (local-sync-transport-coordinator transport)
+                        (sync-message-payload message
+                                              :expected-type :request)
+                        :now now)))
 
 (defun sync-journal-with-transport (registry journal transport authentication
                                     &key
