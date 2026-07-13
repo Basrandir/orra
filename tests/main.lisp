@@ -2732,6 +2732,76 @@
       (is (eq :pending (workspace-attachment-status client-attachment))
           "Sync exchanges should apply coordinated attachment status locally."))))
 
+(deftest sync-journal-with-transport-round-trips-client-state ()
+  (let* ((coordinator (make-sync-coordinator))
+         (transport (make-local-sync-transport coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (registry (make-object-registry))
+         (paragraph (make-paragraph :text "local" :registry registry))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "local-user"
+                                                 :session-id "local-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300))
+         (local-operation
+          (record-local-operation client-journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text
+                                                 :value "local draft")
+                                  :timestamp 201))
+         (peer-operation
+          (make-workspace-operation :id "peer-op-1"
+                                    :type :set-slot
+                                    :target-id (object-id paragraph)
+                                    :payload (list :slot :text
+                                                   :value "peer")
+                                    :actor-id "peer-user"
+                                    :session-id "peer-session"
+                                    :timestamp 202
+                                    :clock '(("peer-user" . 1)))))
+    (is (typep transport 'sync-transport)
+        "Local sync transports should implement the transport protocol.")
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "local-user"
+                                      :display-name "Local User"
+                                      :role :editor
+                                      :status :active
+                                      :updated-at 199)
+    (record-operation server-journal peer-operation)
+    (let* ((exchange
+            (sync-journal-with-transport
+             registry
+             client-journal
+             transport
+             auth
+             :now 200))
+           (request (getf exchange :request))
+           (response (getf exchange :response))
+           (result (getf exchange :result)))
+      (is (equal "workspace-1" (getf request :workspace-id))
+          "Transport sync exchanges should expose the submitted request.")
+      (is (equal (list (operation-id local-operation))
+                 (getf response :acknowledged-operation-ids))
+          "Transport sync exchanges should expose the coordinator response.")
+      (is (eq :acknowledged
+              (journal-operation-queue-status client-journal local-operation))
+          "Transport sync exchanges should acknowledge local operations.")
+      (is (journal-recorded-operation-p server-journal local-operation)
+          "Transport sync exchanges should submit local operations.")
+      (is (equal (list paragraph)
+                 (getf result :applied-operations))
+          "Transport sync exchanges should apply distributed operations.")
+      (is (string= "peer" (paragraph-text paragraph))
+          "Transport sync exchanges should update local objects."))))
+
 (deftest sync-response-payload-rejects-other-workspaces ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"

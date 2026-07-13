@@ -1908,14 +1908,34 @@
      session-id
      (sync-coordinator-apply-request-payload journal payload))))
 
-(defun sync-journal-with-coordinator (registry journal coordinator authentication
-                                      &key
-                                        (now (get-universal-time))
-                                        presence
-                                        comments
-                                        members
-                                        attachments
-                                        checkpoints)
+(defclass sync-transport () ())
+
+(defgeneric sync-transport-send-request (transport payload &key now))
+
+(defclass local-sync-transport (sync-transport)
+  ((coordinator
+    :initarg :coordinator
+    :reader local-sync-transport-coordinator)))
+
+(defun make-local-sync-transport (coordinator)
+  (make-instance 'local-sync-transport :coordinator coordinator))
+
+(defmethod sync-transport-send-request ((transport local-sync-transport)
+                                        payload
+                                        &key
+                                          (now (get-universal-time)))
+  (handle-sync-request (local-sync-transport-coordinator transport)
+                       payload
+                       :now now))
+
+(defun sync-journal-with-transport (registry journal transport authentication
+                                    &key
+                                      (now (get-universal-time))
+                                      presence
+                                      comments
+                                      members
+                                      attachments
+                                      checkpoints)
   (let* ((request
           (journal-sync-request-payload journal
                                         :authentication authentication
@@ -1924,11 +1944,30 @@
                                         :members members
                                         :attachments attachments
                                         :checkpoints checkpoints))
-         (response (handle-sync-request coordinator request :now now))
+         (response (sync-transport-send-request transport request :now now))
          (result (apply-sync-response-payload registry journal response)))
     (list :request request
           :response response
           :result result)))
+
+(defun sync-journal-with-coordinator (registry journal coordinator authentication
+                                      &key
+                                        (now (get-universal-time))
+                                        presence
+                                        comments
+                                        members
+                                        attachments
+                                        checkpoints)
+  (sync-journal-with-transport registry
+                               journal
+                               (make-local-sync-transport coordinator)
+                               authentication
+                               :now now
+                               :presence presence
+                               :comments comments
+                               :members members
+                               :attachments attachments
+                               :checkpoints checkpoints))
 
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)

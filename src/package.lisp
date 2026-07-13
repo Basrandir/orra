@@ -227,6 +227,7 @@
    #:make-stack-frame-browser-block
    #:make-sdl2-backend
    #:make-table-block
+   #:make-local-sync-transport
    #:make-sync-coordinator
    #:make-sync-authentication
    #:make-sync-authentication-from-plist
@@ -351,6 +352,7 @@
    #:start-demo
    #:stop-editing
    #:sync-journal-with-coordinator
+   #:sync-journal-with-transport
    #:sync-authentication
    #:sync-authentication-actor-id
    #:sync-authentication-expires-at
@@ -364,6 +366,8 @@
    #:sync-coordinator
    #:sync-coordinator-register-member
    #:sync-coordinator-workspace-journal
+   #:sync-transport
+   #:sync-transport-send-request
    #:table-block
    #:table-block-columns
    #:table-block-rows
