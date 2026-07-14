@@ -3005,6 +3005,87 @@
       (is (string= "peer" (paragraph-text paragraph))
           "Encoded transport sync should update local objects."))))
 
+(deftest encoded-sync-handler-returns-error-for-malformed-message ()
+  (let* ((encoded-response (handle-encoded-sync-message
+                            (make-sync-coordinator)
+                            "not-a-sync-message"
+                            :now 200))
+         (response-message (decode-sync-message encoded-response
+                                                :expected-type :error))
+         (response-payload (sync-message-payload response-message
+                                                 :expected-type :error)))
+    (is (eq :malformed-message (getf response-payload :code))
+        "Malformed encoded sync messages should return protocol error codes.")
+    (is (stringp (getf response-payload :message))
+        "Protocol error responses should carry printable diagnostic text.")
+    (is (not (getf response-payload :retryable))
+        "Malformed sync messages should not be marked retryable by default.")))
+
+(deftest encoded-sync-handler-returns-error-for-rejected-request ()
+  (let* ((coordinator (make-sync-coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "unknown-user"
+                                                 :session-id "unknown-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "unknown-user"
+                                         :session-id "unknown-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300)))
+    (record-local-operation client-journal
+                            :set-slot
+                            :target-id "paragraph-1"
+                            :payload (list :slot :text :value "draft")
+                            :timestamp 201)
+    (let* ((encoded-request
+            (encode-sync-message
+             (make-sync-message
+              :request
+              (journal-sync-request-payload client-journal
+                                            :authentication auth))))
+           (encoded-response (handle-encoded-sync-message
+                              coordinator
+                              encoded-request
+                              :now 200))
+           (response-message (decode-sync-message encoded-response
+                                                  :expected-type :error))
+           (response-payload (sync-message-payload response-message
+                                                   :expected-type :error)))
+      (is (eq :request-rejected (getf response-payload :code))
+          "Rejected encoded sync requests should return protocol error codes.")
+      (is (search "unknown-user" (getf response-payload :message))
+          "Rejected request errors should retain the coordinator diagnostic.")
+      (is (null (journal-operations server-journal))
+          "Rejected encoded sync requests should not mutate server operations."))))
+
+(deftest encoded-sync-transport-signals-protocol-errors ()
+  (let* ((transport
+          (make-encoded-sync-transport
+           (lambda (encoded-request &key now)
+             (declare (ignore encoded-request now))
+             (encode-sync-message
+              (make-sync-message
+               :error
+               (list :code :request-rejected
+                     :message "No sync access."
+                     :retryable nil))))))
+         (request-message (make-sync-message
+                           :request
+                           (list :workspace-id "workspace-1"
+                                 :actor-id "local-user"
+                                 :session-id "local-session"))))
+    (handler-case
+        (progn
+          (sync-transport-send-message transport request-message :now 200)
+          (is nil "Encoded transports should surface protocol errors."))
+      (error (condition)
+        (is (search "request-rejected"
+                    (string-downcase (princ-to-string condition)))
+            "Encoded transport protocol errors should identify the remote error code.")))))
+
 (deftest sync-response-payload-rejects-other-workspaces ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"

@@ -31,7 +31,7 @@
 (defparameter *sync-message-version* 1)
 
 (defparameter *sync-message-types*
-  '(:request :response))
+  '(:request :response :error))
 
 (defun workspace-operation-type-p (type)
   (not (null (member type *workspace-operation-types*))))
@@ -83,6 +83,27 @@
 (defun sync-message-payload (message &key expected-type)
   (getf (ensure-sync-message message :expected-type expected-type)
         :payload))
+
+(defun make-sync-error-payload (code condition
+                                &key
+                                  (retryable nil))
+  (list :code code
+        :message (princ-to-string condition)
+        :retryable retryable))
+
+(defun make-sync-error-message (code condition
+                                &key
+                                  (retryable nil))
+  (make-sync-message :error
+                     (make-sync-error-payload code
+                                              condition
+                                              :retryable retryable)))
+
+(defun signal-sync-error-message (message)
+  (let* ((payload (sync-message-payload message :expected-type :error))
+         (code (getf payload :code))
+         (diagnostic (getf payload :message)))
+    (error "Sync transport error ~A: ~A" code diagnostic)))
 
 (defun encode-sync-message (message)
   (with-output-to-string (stream)
@@ -1997,11 +2018,18 @@
 (defun handle-encoded-sync-message (coordinator encoded-message
                                     &key
                                       (now (get-universal-time)))
-  (encode-sync-message
-   (handle-sync-message coordinator
-                        (decode-sync-message encoded-message
-                                             :expected-type :request)
-                        :now now)))
+  (handler-case
+      (let ((request-message (decode-sync-message encoded-message
+                                                  :expected-type :request)))
+        (handler-case
+            (encode-sync-message
+             (handle-sync-message coordinator request-message :now now))
+          (error (condition)
+            (encode-sync-message
+             (make-sync-error-message :request-rejected condition)))))
+    (error (condition)
+      (encode-sync-message
+       (make-sync-error-message :malformed-message condition)))))
 
 (defclass sync-transport () ())
 
@@ -2058,7 +2086,10 @@
     (unless (stringp encoded-response)
       (error "Encoded sync transport expected a response string, got ~S."
              encoded-response))
-    (decode-sync-message encoded-response :expected-type :response)))
+    (let ((response-message (decode-sync-message encoded-response)))
+      (if (eq :error (sync-message-type response-message))
+          (signal-sync-error-message response-message)
+          (ensure-sync-message response-message :expected-type :response)))))
 
 (defun sync-journal-with-transport (registry journal transport authentication
                                     &key
