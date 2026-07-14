@@ -2891,6 +2891,120 @@
       (is (journal-recorded-operation-p server-journal operation)
           "Local message transports should submit semantic operations."))))
 
+(deftest encoded-sync-message-handler-round-trips-strings ()
+  (let* ((coordinator (make-sync-coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "local-user"
+                                                 :session-id "local-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300))
+         (operation (record-local-operation client-journal
+                                            :set-slot
+                                            :target-id "paragraph-1"
+                                            :payload (list :slot :text
+                                                           :value "draft")
+                                            :timestamp 201))
+         (request-message
+          (make-sync-message
+           :request
+           (journal-sync-request-payload client-journal
+                                         :authentication auth))))
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "local-user"
+                                      :display-name "Local User"
+                                      :role :editor
+                                      :status :active
+                                      :updated-at 199)
+    (let* ((encoded-response (handle-encoded-sync-message
+                              coordinator
+                              (encode-sync-message request-message)
+                              :now 200))
+           (response-message (decode-sync-message encoded-response
+                                                  :expected-type :response))
+           (response-payload (sync-message-payload response-message
+                                                   :expected-type :response)))
+      (is (stringp encoded-response)
+          "Encoded sync handlers should return encoded response strings.")
+      (is (equal (list (operation-id operation))
+                 (getf response-payload :acknowledged-operation-ids))
+          "Encoded sync handlers should preserve coordinator responses.")
+      (is (journal-recorded-operation-p server-journal operation)
+          "Encoded sync handlers should submit semantic operations."))))
+
+(deftest encoded-sync-transport-round-trips-client-state ()
+  (let* ((coordinator (make-sync-coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (saw-encoded-request nil)
+         (transport (make-encoded-sync-transport
+                     (lambda (encoded-request &key now)
+                       (setf saw-encoded-request (stringp encoded-request))
+                       (handle-encoded-sync-message coordinator
+                                                    encoded-request
+                                                    :now now))))
+         (registry (make-object-registry))
+         (paragraph (make-paragraph :text "local" :registry registry))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "local-user"
+                                                 :session-id "local-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300))
+         (local-operation
+          (record-local-operation client-journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text
+                                                 :value "local draft")
+                                  :timestamp 201))
+         (peer-operation
+          (make-workspace-operation :id "peer-op-1"
+                                    :type :set-slot
+                                    :target-id (object-id paragraph)
+                                    :payload (list :slot :text
+                                                   :value "peer")
+                                    :actor-id "peer-user"
+                                    :session-id "peer-session"
+                                    :timestamp 202
+                                    :clock '(("peer-user" . 1)))))
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "local-user"
+                                      :display-name "Local User"
+                                      :role :editor
+                                      :status :active
+                                      :updated-at 199)
+    (record-operation server-journal peer-operation)
+    (let ((exchange (sync-journal-with-transport registry
+                                                 client-journal
+                                                 transport
+                                                 auth
+                                                 :now 200)))
+      (is saw-encoded-request
+          "Encoded transports should pass encoded request strings to their exchange function.")
+      (is (eq :acknowledged
+              (journal-operation-queue-status client-journal local-operation))
+          "Encoded transport sync should acknowledge local operations.")
+      (is (journal-recorded-operation-p server-journal local-operation)
+          "Encoded transport sync should submit local operations.")
+      (is (equal (list paragraph)
+                 (getf (getf exchange :result) :applied-operations))
+          "Encoded transport sync should apply distributed operations.")
+      (is (string= "peer" (paragraph-text paragraph))
+          "Encoded transport sync should update local objects."))))
+
 (deftest sync-response-payload-rejects-other-workspaces ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"

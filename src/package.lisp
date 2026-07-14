@@ -145,6 +145,8 @@
    #:find-journal-member
    #:find-journal-operation
    #:find-journal-presence
+   #:handle-encoded-sync-message
+   #:handle-sync-message
    #:handle-sync-request
    #:invoke-command
    #:key-binding
@@ -209,6 +211,7 @@
    #:make-inspector-block
    #:make-list-block
    #:make-image-restored-application
+   #:make-encoded-sync-transport
    #:make-notebook
    #:make-null-backend
    #:make-operation-journal

@@ -1984,6 +1984,25 @@
      session-id
      (sync-coordinator-apply-request-payload journal payload))))
 
+(defun handle-sync-message (coordinator message
+                            &key
+                              (now (get-universal-time)))
+  (make-sync-message
+   :response
+   (handle-sync-request coordinator
+                        (sync-message-payload message
+                                              :expected-type :request)
+                        :now now)))
+
+(defun handle-encoded-sync-message (coordinator encoded-message
+                                    &key
+                                      (now (get-universal-time)))
+  (encode-sync-message
+   (handle-sync-message coordinator
+                        (decode-sync-message encoded-message
+                                             :expected-type :request)
+                        :now now)))
+
 (defclass sync-transport () ())
 
 (defgeneric sync-transport-send-message (transport message &key now))
@@ -1995,8 +2014,20 @@
     :initarg :coordinator
     :reader local-sync-transport-coordinator)))
 
+(defclass encoded-sync-transport (sync-transport)
+  ((exchange-function
+    :initarg :exchange-function
+    :reader encoded-sync-transport-exchange-function)))
+
 (defun make-local-sync-transport (coordinator)
   (make-instance 'local-sync-transport :coordinator coordinator))
+
+(defun make-encoded-sync-transport (exchange-function)
+  (unless (functionp exchange-function)
+    (error "Encoded sync transports require a function, got ~S."
+           exchange-function))
+  (make-instance 'encoded-sync-transport
+                 :exchange-function exchange-function))
 
 (defmethod sync-transport-send-request ((transport sync-transport)
                                         payload
@@ -2012,12 +2043,22 @@
                                         message
                                         &key
                                           (now (get-universal-time)))
-  (make-sync-message
-   :response
-   (handle-sync-request (local-sync-transport-coordinator transport)
-                        (sync-message-payload message
-                                              :expected-type :request)
-                        :now now)))
+  (handle-sync-message (local-sync-transport-coordinator transport)
+                       message
+                       :now now))
+
+(defmethod sync-transport-send-message ((transport encoded-sync-transport)
+                                        message
+                                        &key
+                                          (now (get-universal-time)))
+  (let ((encoded-response
+         (funcall (encoded-sync-transport-exchange-function transport)
+                  (encode-sync-message message)
+                  :now now)))
+    (unless (stringp encoded-response)
+      (error "Encoded sync transport expected a response string, got ~S."
+             encoded-response))
+    (decode-sync-message encoded-response :expected-type :response)))
 
 (defun sync-journal-with-transport (registry journal transport authentication
                                     &key
