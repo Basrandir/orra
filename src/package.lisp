@@ -174,6 +174,7 @@
    #:journal-attachments
    #:journal-checkpoint-sync-payload
    #:journal-checkpoints
+   #:journal-conflicts
    #:journal-comment-sync-payload
    #:journal-comments
    #:journal-failed-operations
@@ -369,6 +370,15 @@
    #:sync-authentication-session-id
    #:sync-authentication-token-id
    #:sync-authentication-workspace-id
+   #:sync-conflict
+   #:sync-conflict-created-at
+   #:sync-conflict-id
+   #:sync-conflict-local-operation-id
+   #:sync-conflict-plist
+   #:sync-conflict-remote-operation-id
+   #:sync-conflict-slot
+   #:sync-conflict-status
+   #:sync-conflict-target-id
    #:sync-coordinator
    #:sync-coordinator-register-member
    #:sync-coordinator-workspace-journal

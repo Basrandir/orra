@@ -211,6 +211,31 @@
      clock)
     (sort entries #'string< :key #'vector-clock-entry-sort-key)))
 
+(defun vector-clock-actor-position (clock actor-id &optional (default 0))
+  (let ((position default))
+    (map-vector-clock-entries
+     (lambda (entry-actor-id entry-position)
+       (when (equal actor-id entry-actor-id)
+         (setf position entry-position)))
+     clock)
+    position))
+
+(defun vector-clock<=p (left-clock right-clock)
+  (let ((dominatesp t))
+    (map-vector-clock-entries
+     (lambda (actor-id position)
+       (when (> position
+                (vector-clock-actor-position right-clock actor-id))
+         (setf dominatesp nil)))
+     left-clock)
+    dominatesp))
+
+(defun vector-clock-concurrent-p (left-clock right-clock)
+  (and left-clock
+       right-clock
+       (not (vector-clock<=p left-clock right-clock))
+       (not (vector-clock<=p right-clock left-clock))))
+
 (defclass workspace-operation ()
   ((id
     :initarg :id
@@ -311,6 +336,59 @@
 (defun make-workspace-operation-from-plist (plist)
   (apply #'make-workspace-operation
          (operation-plist-initargs plist)))
+
+(defclass sync-conflict ()
+  ((id
+    :initarg :id
+    :reader sync-conflict-id)
+   (target-id
+    :initarg :target-id
+    :reader sync-conflict-target-id)
+   (slot
+    :initarg :slot
+    :reader sync-conflict-slot)
+   (local-operation-id
+    :initarg :local-operation-id
+    :reader sync-conflict-local-operation-id)
+   (remote-operation-id
+    :initarg :remote-operation-id
+    :reader sync-conflict-remote-operation-id)
+   (status
+    :initarg :status
+    :reader sync-conflict-status
+    :initform :open)
+   (created-at
+    :initarg :created-at
+    :reader sync-conflict-created-at
+    :initform nil)))
+
+(defun make-sync-conflict (&key id
+                             target-id
+                             slot
+                             local-operation-id
+                             remote-operation-id
+                             (status :open)
+                             (created-at (get-universal-time)))
+  (make-instance 'sync-conflict
+                 :id (or id
+                         (format nil "conflict:~A:~A"
+                                 local-operation-id
+                                 remote-operation-id))
+                 :target-id target-id
+                 :slot slot
+                 :local-operation-id local-operation-id
+                 :remote-operation-id remote-operation-id
+                 :status status
+                 :created-at created-at))
+
+(defun sync-conflict-plist (conflict)
+  (list :id (sync-conflict-id conflict)
+        :target-id (sync-conflict-target-id conflict)
+        :slot (sync-conflict-slot conflict)
+        :local-operation-id (sync-conflict-local-operation-id conflict)
+        :remote-operation-id (sync-conflict-remote-operation-id conflict)
+        :status (sync-conflict-status conflict)
+        :created-at (sync-conflict-created-at conflict)))
 
 (defun required-sync-payload-value (payload key)
   (multiple-value-bind (value presentp)
@@ -1058,6 +1136,12 @@
     :initform (make-hash-table :test #'equal))
    (checkpoints
     :accessor %journal-checkpoints
+    :initform (make-hash-table :test #'equal))
+   (conflicts
+    :accessor %journal-conflicts
+    :initform nil)
+   (conflict-keys
+    :accessor %journal-conflict-keys
     :initform (make-hash-table :test #'equal))))
 
 (defun merge-journal-clock-position (journal actor-id position)
@@ -1099,6 +1183,38 @@
 
 (defun journal-operations (journal)
   (copy-list (%journal-operations journal)))
+
+(defun journal-conflicts (journal)
+  (copy-list (%journal-conflicts journal)))
+
+(defun sync-conflict-key (target-id slot local-operation-id remote-operation-id)
+  (list target-id slot local-operation-id remote-operation-id))
+
+(defun sync-conflict-record-key (conflict)
+  (sync-conflict-key (sync-conflict-target-id conflict)
+                     (sync-conflict-slot conflict)
+                     (sync-conflict-local-operation-id conflict)
+                     (sync-conflict-remote-operation-id conflict)))
+
+(defun record-sync-conflict (journal conflict)
+  (let ((key (sync-conflict-record-key conflict)))
+    (or (gethash key (%journal-conflict-keys journal))
+        (progn
+          (setf (%journal-conflicts journal)
+                (append (%journal-conflicts journal)
+                        (list conflict)))
+          (setf (gethash key (%journal-conflict-keys journal))
+                conflict)))))
+
+(defun sync-conflict-open-p (conflict)
+  (eq :open (sync-conflict-status conflict)))
+
+(defun operation-blocked-by-open-conflict-p (journal operation)
+  (some (lambda (conflict)
+          (and (sync-conflict-open-p conflict)
+               (equal (operation-id operation)
+                      (sync-conflict-remote-operation-id conflict))))
+        (journal-conflicts journal)))
 
 (defun journal-presence-key (actor-id session-id)
   (list actor-id session-id))
@@ -1596,6 +1712,39 @@
       (plist-value (operation-payload operation) key)
     (if presentp value default)))
 
+(defun set-slot-operation-p (operation)
+  (eq :set-slot (operation-type operation)))
+
+(defun operations-target-same-slot-p (left-operation right-operation)
+  (and (set-slot-operation-p left-operation)
+       (set-slot-operation-p right-operation)
+       (equal (operation-target-id left-operation)
+              (operation-target-id right-operation))
+       (equal (operation-payload-value left-operation :slot)
+              (operation-payload-value right-operation :slot))))
+
+(defun operations-concurrent-p (left-operation right-operation)
+  (vector-clock-concurrent-p (operation-clock left-operation)
+                             (operation-clock right-operation)))
+
+(defun conflicting-pending-local-operation (journal remote-operation)
+  (find-if (lambda (local-operation)
+             (and (operations-target-same-slot-p local-operation
+                                                 remote-operation)
+                  (operations-concurrent-p local-operation
+                                           remote-operation)))
+           (journal-pending-operations journal)))
+
+(defun record-operation-conflict (journal local-operation remote-operation)
+  (record-sync-conflict
+   journal
+   (make-sync-conflict
+    :target-id (operation-target-id remote-operation)
+    :slot (operation-payload-value remote-operation :slot)
+    :local-operation-id (operation-id local-operation)
+    :remote-operation-id (operation-id remote-operation)
+    :created-at (operation-timestamp remote-operation))))
+
 (defun target-object-for-operation (registry operation)
   (or (find-object registry (operation-target-id operation))
       (error "Operation ~A targets unknown object ~S."
@@ -1665,9 +1814,18 @@
 
 (defun apply-remote-operation (registry journal operation)
   (unless (journal-recorded-operation-p journal operation)
-    (let ((result (apply-workspace-operation registry operation)))
-      (record-operation journal operation)
-      result)))
+    (let ((conflicting-operation
+           (conflicting-pending-local-operation journal operation)))
+      (if conflicting-operation
+          (progn
+            (record-operation journal operation)
+            (record-operation-conflict journal
+                                       conflicting-operation
+                                       operation)
+            nil)
+          (let ((result (apply-workspace-operation registry operation)))
+            (record-operation journal operation)
+            result)))))
 
 (defun ensure-sync-payload-workspace (journal payload)
   (let ((payload-workspace-id (required-sync-payload-value payload :workspace-id))
@@ -2134,5 +2292,6 @@
 
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)
-            (apply-workspace-operation registry operation))
+            (unless (operation-blocked-by-open-conflict-p journal operation)
+              (apply-workspace-operation registry operation)))
           (journal-operations journal)))

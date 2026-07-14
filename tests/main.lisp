@@ -918,6 +918,111 @@
                (journal-vector-clock journal))
         "Duplicate remote operations should not advance causal state twice.")))
 
+(deftest concurrent-set-slot-operations-record-conflict ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (local-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text
+                                                 :value "local draft")))
+         (remote-operation
+          (make-workspace-operation
+           :id "conflicting-remote-op"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "peer draft")
+           :actor-id "peer-user"
+           :session-id "peer-session"
+           :clock '(("peer-user" . 1)))))
+    (setf (paragraph-text paragraph) "local draft")
+    (is (null (apply-remote-operation registry journal remote-operation))
+        "Conflicting remote operations should not overwrite pending local values.")
+    (is (string= "local draft" (paragraph-text paragraph))
+        "The local object value should remain visible after a conflict.")
+    (is (journal-recorded-operation-p journal remote-operation)
+        "Conflicting remote operations should still be recorded for convergence.")
+    (let ((conflicts (journal-conflicts journal)))
+      (is (= 1 (length conflicts))
+          "Concurrent same-slot operations should create one conflict record.")
+      (let ((conflict (first conflicts)))
+        (is (equal (object-id paragraph)
+                   (sync-conflict-target-id conflict))
+            "Conflict records should identify the semantic target object.")
+        (is (eq :text (sync-conflict-slot conflict))
+            "Conflict records should identify the semantic slot.")
+        (is (equal (operation-id local-operation)
+                   (sync-conflict-local-operation-id conflict))
+            "Conflict records should identify the pending local operation.")
+        (is (equal (operation-id remote-operation)
+                   (sync-conflict-remote-operation-id conflict))
+            "Conflict records should identify the remote operation.")))))
+
+(deftest remote-set-slot-applies-when-pending-local-slot-differs ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (remote-operation
+          (make-workspace-operation
+           :id "non-conflicting-remote-op"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :metadata
+                          :value (list :reviewed t))
+           :actor-id "peer-user"
+           :session-id "peer-session"
+           :clock '(("peer-user" . 1)))))
+    (record-local-operation journal
+                            :set-slot
+                            :target-id (object-id paragraph)
+                            :payload (list :slot :text
+                                           :value "local draft"))
+    (is (eq paragraph
+            (apply-remote-operation registry journal remote-operation))
+        "Remote operations for different slots should still apply.")
+    (is (equal (list :reviewed t)
+               (object-property paragraph :metadata))
+        "Non-conflicting remote values should update the target object.")
+    (is (null (journal-conflicts journal))
+        "Non-conflicting remote operations should not create conflict records.")))
+
+(deftest operation-journal-replay-skips-open-conflict-overwrites ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (local-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text
+                                                 :value "local draft")))
+         (remote-operation
+          (make-workspace-operation
+           :id "conflicting-replay-remote-op"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "peer draft")
+           :actor-id "peer-user"
+           :session-id "peer-session"
+           :clock '(("peer-user" . 1)))))
+    (declare (ignore local-operation))
+    (setf (paragraph-text paragraph) "local draft")
+    (apply-remote-operation registry journal remote-operation)
+    (setf (paragraph-text paragraph) "restored draft")
+    (is (equal (list paragraph nil)
+               (apply-operation-journal registry journal))
+        "Journal replay should expose skipped conflicted operations.")
+    (is (string= "local draft" (paragraph-text paragraph))
+        "Journal replay should preserve local values over open remote conflicts.")))
+
 (deftest local-operations-enter-pending-queue-until-acknowledged ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"
                                           :actor-id "local-user"
