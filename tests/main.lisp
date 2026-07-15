@@ -1023,6 +1023,90 @@
     (is (string= "local draft" (paragraph-text paragraph))
         "Journal replay should preserve local values over open remote conflicts.")))
 
+(deftest resolving-conflict-with-local-keeps-remote-suppressed ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (local-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text
+                                                 :value "local draft")))
+         (remote-operation
+          (make-workspace-operation
+           :id "local-resolution-remote-op"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "peer draft")
+           :actor-id "peer-user"
+           :session-id "peer-session"
+           :clock '(("peer-user" . 1)))))
+    (declare (ignore local-operation))
+    (setf (paragraph-text paragraph) "local draft")
+    (apply-remote-operation registry journal remote-operation)
+    (let ((conflict (first (journal-conflicts journal))))
+      (is (eq paragraph
+              (resolve-sync-conflict registry journal conflict :local
+                                     :resolved-at 42))
+          "Resolving toward local should return the affected object.")
+      (is (eq :resolved-local (sync-conflict-status conflict))
+          "Local conflict resolution should be recorded on the conflict.")
+      (is (= 42 (sync-conflict-resolved-at conflict))
+          "Local conflict resolution should record the resolution timestamp."))
+    (setf (paragraph-text paragraph) "restored draft")
+    (is (equal (list paragraph nil)
+               (apply-operation-journal registry journal))
+        "Replaying a locally resolved conflict should keep the remote write suppressed.")
+    (is (string= "local draft" (paragraph-text paragraph))
+        "Local conflict resolution should keep the local semantic slot value.")))
+
+(deftest resolving-conflict-with-remote-applies-remote-value ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (local-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text
+                                                 :value "local draft")))
+         (remote-operation
+          (make-workspace-operation
+           :id "remote-resolution-remote-op"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "peer draft")
+           :actor-id "peer-user"
+           :session-id "peer-session"
+           :clock '(("peer-user" . 1)))))
+    (setf (paragraph-text paragraph) "local draft")
+    (apply-remote-operation registry journal remote-operation)
+    (let ((conflict (first (journal-conflicts journal))))
+      (is (eq paragraph
+              (resolve-sync-conflict registry journal conflict :remote
+                                     :resolved-at 43))
+          "Resolving toward remote should apply and return the affected object.")
+      (is (eq :resolved-remote (sync-conflict-status conflict))
+          "Remote conflict resolution should be recorded on the conflict.")
+      (is (= 43 (sync-conflict-resolved-at conflict))
+          "Remote conflict resolution should record the resolution timestamp."))
+    (is (string= "peer draft" (paragraph-text paragraph))
+        "Remote conflict resolution should apply the remote semantic slot value.")
+    (is (eq :failed
+            (journal-operation-queue-status journal local-operation))
+        "Accepting remote should retire the losing local pending operation.")
+    (setf (paragraph-text paragraph) "restored draft")
+    (is (equal (list paragraph paragraph)
+               (apply-operation-journal registry journal))
+        "Replaying a remotely resolved conflict should include the remote write.")
+    (is (string= "peer draft" (paragraph-text paragraph))
+        "Journal replay should converge on the accepted remote slot value.")))
+
 (deftest local-operations-enter-pending-queue-until-acknowledged ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"
                                           :actor-id "local-user"

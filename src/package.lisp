@@ -142,6 +142,7 @@
    #:find-journal-attachment
    #:find-journal-checkpoint
    #:find-journal-comment
+   #:find-journal-conflict
    #:find-journal-member
    #:find-journal-operation
    #:find-journal-presence
@@ -313,6 +314,7 @@
    #:record-local-presence
    #:record-workspace-member
    #:record-operation
+   #:resolve-sync-conflict
    #:result-block
    #:result-block-environment
    #:result-block-evaluated-at
@@ -376,6 +378,7 @@
    #:sync-conflict-local-operation-id
    #:sync-conflict-plist
    #:sync-conflict-remote-operation-id
+   #:sync-conflict-resolved-at
    #:sync-conflict-slot
    #:sync-conflict-status
    #:sync-conflict-target-id

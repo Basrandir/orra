@@ -13,6 +13,9 @@
 (defparameter *journal-operation-queue-statuses*
   '(:pending :acknowledged :failed))
 
+(defparameter *sync-conflict-statuses*
+  '(:open :resolved-local :resolved-remote))
+
 (defparameter *collaboration-comment-statuses*
   '(:open :resolved :deleted))
 
@@ -136,6 +139,11 @@
 (defun ensure-journal-operation-queue-status (status)
   (unless (member status *journal-operation-queue-statuses*)
     (error "Unsupported operation queue status ~S." status))
+  status)
+
+(defun ensure-sync-conflict-status (status)
+  (unless (member status *sync-conflict-statuses*)
+    (error "Unsupported sync conflict status ~S." status))
   status)
 
 (defun ensure-collaboration-comment-status (status)
@@ -355,12 +363,22 @@
     :reader sync-conflict-remote-operation-id)
    (status
     :initarg :status
-    :reader sync-conflict-status
+    :accessor %sync-conflict-status
     :initform :open)
    (created-at
     :initarg :created-at
     :reader sync-conflict-created-at
+    :initform nil)
+   (resolved-at
+    :initarg :resolved-at
+    :accessor %sync-conflict-resolved-at
     :initform nil)))
+
+(defun sync-conflict-status (conflict)
+  (%sync-conflict-status conflict))
+
+(defun sync-conflict-resolved-at (conflict)
+  (%sync-conflict-resolved-at conflict))
 
 (defun make-sync-conflict (&key id
                              target-id
@@ -368,7 +386,8 @@
                              local-operation-id
                              remote-operation-id
                              (status :open)
-                             (created-at (get-universal-time)))
+                             (created-at (get-universal-time))
+                             resolved-at)
   (make-instance 'sync-conflict
                  :id (or id
                          (format nil "conflict:~A:~A"
@@ -378,8 +397,9 @@
                  :slot slot
                  :local-operation-id local-operation-id
                  :remote-operation-id remote-operation-id
-                 :status status
-                 :created-at created-at))
+                 :status (ensure-sync-conflict-status status)
+                 :created-at created-at
+                 :resolved-at resolved-at))
 
 (defun sync-conflict-plist (conflict)
   (list :id (sync-conflict-id conflict)
@@ -388,7 +408,8 @@
         :local-operation-id (sync-conflict-local-operation-id conflict)
         :remote-operation-id (sync-conflict-remote-operation-id conflict)
         :status (sync-conflict-status conflict)
-        :created-at (sync-conflict-created-at conflict)))
+        :created-at (sync-conflict-created-at conflict)
+        :resolved-at (sync-conflict-resolved-at conflict)))
 
 (defun required-sync-payload-value (payload key)
   (multiple-value-bind (value presentp)
@@ -1187,6 +1208,22 @@
 (defun journal-conflicts (journal)
   (copy-list (%journal-conflicts journal)))
 
+(defun sync-conflict-id-for (conflict-or-id)
+  (typecase conflict-or-id
+    (sync-conflict (sync-conflict-id conflict-or-id))
+    (t conflict-or-id)))
+
+(defun find-journal-conflict (journal conflict-or-id &optional default)
+  (or (find (sync-conflict-id-for conflict-or-id)
+            (journal-conflicts journal)
+            :key #'sync-conflict-id
+            :test #'equal)
+      default))
+
+(defun require-journal-conflict (journal conflict-or-id)
+  (or (find-journal-conflict journal conflict-or-id)
+      (error "Journal does not contain sync conflict ~S." conflict-or-id)))
+
 (defun sync-conflict-key (target-id slot local-operation-id remote-operation-id)
   (list target-id slot local-operation-id remote-operation-id))
 
@@ -1209,9 +1246,13 @@
 (defun sync-conflict-open-p (conflict)
   (eq :open (sync-conflict-status conflict)))
 
-(defun operation-blocked-by-open-conflict-p (journal operation)
+(defun sync-conflict-suppresses-remote-operation-p (conflict)
+  (member (sync-conflict-status conflict)
+          '(:open :resolved-local)))
+
+(defun operation-suppressed-by-conflict-p (journal operation)
   (some (lambda (conflict)
-          (and (sync-conflict-open-p conflict)
+          (and (sync-conflict-suppresses-remote-operation-p conflict)
                (equal (operation-id operation)
                       (sync-conflict-remote-operation-id conflict))))
         (journal-conflicts journal)))
@@ -1812,6 +1853,38 @@
      (error "Applying workspace operation type ~S is not implemented yet."
             (operation-type operation)))))
 
+(defun ensure-sync-conflict-resolution (resolution)
+  (unless (member resolution '(:local :remote))
+    (error "Unsupported sync conflict resolution ~S." resolution))
+  resolution)
+
+(defun resolve-sync-conflict (registry journal conflict-or-id resolution
+                              &key
+                                (resolved-at (get-universal-time)))
+  (let* ((conflict (require-journal-conflict journal conflict-or-id))
+         (local-operation
+          (require-journal-operation
+           journal
+           (sync-conflict-local-operation-id conflict)))
+         (remote-operation
+          (require-journal-operation
+           journal
+           (sync-conflict-remote-operation-id conflict))))
+    (unless (sync-conflict-open-p conflict)
+      (error "Sync conflict ~A is already ~S."
+             (sync-conflict-id conflict)
+             (sync-conflict-status conflict)))
+    (case (ensure-sync-conflict-resolution resolution)
+      (:local
+       (setf (%sync-conflict-status conflict) :resolved-local
+             (%sync-conflict-resolved-at conflict) resolved-at)
+       (apply-workspace-operation registry local-operation))
+      (:remote
+       (set-journal-operation-queue-status journal local-operation :failed)
+       (setf (%sync-conflict-status conflict) :resolved-remote
+             (%sync-conflict-resolved-at conflict) resolved-at)
+       (apply-workspace-operation registry remote-operation)))))
+
 (defun apply-remote-operation (registry journal operation)
   (unless (journal-recorded-operation-p journal operation)
     (let ((conflicting-operation
@@ -2292,6 +2365,6 @@
 
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)
-            (unless (operation-blocked-by-open-conflict-p journal operation)
+            (unless (operation-suppressed-by-conflict-p journal operation)
               (apply-workspace-operation registry operation)))
           (journal-operations journal)))
