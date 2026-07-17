@@ -823,6 +823,50 @@
       (is (equal (list created) (children-of section))
           "Create-object should update the parent child list."))))
 
+(deftest apply-workspace-operation-inserts-text-range ()
+  (let* ((registry (make-object-registry))
+         (paragraph (make-paragraph :text "hello world"
+                                    :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-insert-op-1"
+           :type :insert-text-range
+           :target-id (object-id paragraph)
+           :payload (list :offset 5 :text ", remote")
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 220)))
+    (is (eq paragraph
+            (apply-workspace-operation registry operation))
+        "Insert-text-range should return the target text object.")
+    (is (string= "hello, remote world" (paragraph-text paragraph))
+        "Insert-text-range should splice text into the target text slot.")))
+
+(deftest apply-workspace-operation-deletes-code-text-range ()
+  (let* ((registry (make-object-registry))
+         (result (make-result-block :value 42
+                                    :presentation "=> 42"
+                                    :registry registry))
+         (block (make-code-block :source "(+ 20 220)"
+                                 :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-delete-op-1"
+           :type :delete-text-range
+           :target-id (object-id block)
+           :payload (list :slot :source :offset 7 :length 1)
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 221)))
+    (setf (code-block-result block) result)
+    (is (eq block
+            (apply-workspace-operation registry operation))
+        "Delete-text-range should return the target text object.")
+    (is (string= "(+ 20 20)" (code-block-source block))
+        "Delete-text-range should remove the requested text span.")
+    (is (eq :stale (result-block-status result))
+        "Deleting source text should use code block source replacement and invalidate results.")))
+
 (deftest apply-remote-operation-records-and-dedupes ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"))

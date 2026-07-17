@@ -1966,6 +1966,101 @@
      (set-object-property object slot value)
      object)))
 
+(defun default-text-range-slot (object operation)
+  (typecase object
+    (paragraph :text)
+    (code-block :source)
+    (otherwise
+     (error "Operation ~A requires :SLOT for text range target ~S."
+            (operation-id operation)
+            (object-kind object)))))
+
+(defun operation-text-range-slot (object operation)
+  (or (operation-payload-value operation :slot)
+      (default-text-range-slot object operation)))
+
+(defun semantic-object-slot-value (object slot)
+  (typecase object
+    (paragraph
+     (case slot
+       (:text (paragraph-text object))
+       (otherwise (object-property object slot))))
+    (code-block
+     (case slot
+       (:source (code-block-source object))
+       (:language (code-block-language object))
+       (otherwise (object-property object slot))))
+    (workspace
+     (case slot
+       (:title (workspace-title object))
+       (:current-notebook (workspace-current-notebook object))
+       (otherwise (object-property object slot))))
+    (notebook
+     (case slot
+       (:title (notebook-title object))
+       (otherwise (object-property object slot))))
+    (section
+     (case slot
+       (:title (section-title object))
+       (otherwise (object-property object slot))))
+    (otherwise
+     (object-property object slot))))
+
+(defun ensure-text-range-position (operation key maximum)
+  (let ((position (required-operation-payload-value operation key)))
+    (unless (and (integerp position)
+                 (<= 0 position maximum))
+      (error "Operation ~A payload key ~S must be an integer in [0, ~A], got ~S."
+             (operation-id operation)
+             key
+             maximum
+             position))
+    position))
+
+(defun insert-string-range (string offset text)
+  (concatenate 'string
+               (subseq string 0 offset)
+               text
+               (subseq string offset)))
+
+(defun delete-string-range (string offset range-length)
+  (concatenate 'string
+               (subseq string 0 offset)
+               (subseq string (+ offset range-length))))
+
+(defun apply-insert-text-range-operation (registry operation)
+  (let* ((object (target-object-for-operation registry operation))
+         (slot (operation-text-range-slot object operation))
+         (current-text (normalize-display-string
+                        (semantic-object-slot-value object slot)))
+         (offset (ensure-text-range-position operation
+                                             :offset
+                                             (length current-text)))
+         (text (normalize-display-string
+                (required-operation-payload-value operation :text))))
+    (set-semantic-object-slot object
+                              slot
+                              (insert-string-range current-text offset text))))
+
+(defun apply-delete-text-range-operation (registry operation)
+  (let* ((object (target-object-for-operation registry operation))
+         (slot (operation-text-range-slot object operation))
+         (current-text (normalize-display-string
+                        (semantic-object-slot-value object slot)))
+         (offset (ensure-text-range-position operation
+                                             :offset
+                                             (length current-text)))
+         (range-length (required-operation-payload-value operation :length)))
+    (unless (and (integerp range-length)
+                 (<= 0 range-length (- (length current-text) offset)))
+      (error "Operation ~A payload key :LENGTH must fit text from offset ~A, got ~S."
+             (operation-id operation)
+             offset
+             range-length))
+    (set-semantic-object-slot object
+                              slot
+                              (delete-string-range current-text offset range-length))))
+
 (defun created-object-for-operation (registry operation)
   (let* ((target-id (ensure-operation-target-id operation))
          (kind (required-operation-payload-value operation :kind))
@@ -2017,6 +2112,10 @@
      (apply-create-object-operation registry operation))
     (:set-slot
      (apply-set-slot-operation registry operation))
+    (:insert-text-range
+     (apply-insert-text-range-operation registry operation))
+    (:delete-text-range
+     (apply-delete-text-range-operation registry operation))
     (otherwise
      (error "Applying workspace operation type ~S is not implemented yet."
             (operation-type operation)))))
