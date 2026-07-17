@@ -794,6 +794,35 @@
     (is (string= "remote text" (paragraph-text paragraph))
         "Applying a set-slot operation should mutate the target model slot.")))
 
+(deftest apply-workspace-operation-creates-target-object ()
+  (let* ((registry (make-object-registry))
+         (section (make-section :title "Remote Section"
+                                :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-create-op-1"
+           :type :create-object
+           :target-id "paragraph-remote-1"
+           :payload (list :kind :paragraph
+                          :slots (list :text "created remotely")
+                          :parent-id (object-id section))
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 210)))
+    (let ((created (apply-workspace-operation registry operation)))
+      (is (typep created 'paragraph)
+          "Create-object should instantiate the requested notebook object kind.")
+      (is (string= "paragraph-remote-1" (object-id created))
+          "Create-object should use the operation target as stable object identity.")
+      (is (eq created (find-object registry "paragraph-remote-1"))
+          "Create-object should register created objects for later operations.")
+      (is (string= "created remotely" (paragraph-text created))
+          "Create-object should initialize semantic slots from the payload.")
+      (is (eq section (parent-of created))
+          "Create-object should attach the created object to its semantic parent.")
+      (is (equal (list created) (children-of section))
+          "Create-object should update the parent child list."))))
+
 (deftest apply-remote-operation-records-and-dedupes ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"))
@@ -850,6 +879,40 @@
         "Journal replay should return each operation application result.")
     (is (string= "second replay value" (paragraph-text paragraph))
         "Journal replay should apply operations in append order.")))
+
+(deftest operation-journal-replays-create-before-slot-update ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"))
+         (section (make-section :title "Replay Section"
+                                :registry registry)))
+    (record-operation
+     journal
+     (make-workspace-operation
+      :id "replay-create-op-1"
+      :type :create-object
+      :target-id "paragraph-replay-1"
+      :payload (list :kind :paragraph
+                     :slots (list :text "initial replay")
+                     :parent-id (object-id section))
+      :timestamp 310))
+    (record-operation
+     journal
+     (make-workspace-operation
+      :id "replay-create-op-2"
+      :type :set-slot
+      :target-id "paragraph-replay-1"
+      :payload (list :slot :text :value "updated replay")
+      :timestamp 311))
+    (let ((created (apply-operation-journal registry journal)))
+      (is (= 2 (length created))
+          "Journal replay should return each create/update application result.")
+      (let ((paragraph (find-object registry "paragraph-replay-1")))
+        (is (typep paragraph 'paragraph)
+            "Journal replay should materialize created objects before later updates.")
+        (is (string= "updated replay" (paragraph-text paragraph))
+            "Journal replay should apply later slot updates to created objects.")
+        (is (eq section (parent-of paragraph))
+            "Journal replay should preserve semantic parent links for created objects.")))))
 
 (deftest local-operations-carry-journal-identity-and-clock ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"

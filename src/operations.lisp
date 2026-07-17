@@ -1810,6 +1810,15 @@
       (plist-value (operation-payload operation) key)
     (if presentp value default)))
 
+(defun required-operation-payload-value (operation key)
+  (multiple-value-bind (value presentp)
+      (plist-value (operation-payload operation) key)
+    (unless presentp
+      (error "Operation ~A is missing required payload key ~S."
+             (operation-id operation)
+             key))
+    value))
+
 (defun set-slot-operation-p (operation)
   (eq :set-slot (operation-type operation)))
 
@@ -1848,6 +1857,71 @@
       (error "Operation ~A targets unknown object ~S."
              (operation-id operation)
              (operation-target-id operation))))
+
+(defun ensure-operation-target-id (operation)
+  (or (operation-target-id operation)
+      (error "Operation ~A requires a target object id."
+             (operation-id operation))))
+
+(defun make-semantic-object-for-operation (kind id)
+  (case kind
+    (:workspace
+     (make-instance 'workspace :id id :kind :workspace))
+    (:notebook
+     (make-instance 'notebook :id id :kind :notebook))
+    (:section
+     (make-instance 'section :id id :kind :section))
+    (:paragraph
+     (make-instance 'paragraph :id id :kind :paragraph))
+    (:code-block
+     (make-instance 'code-block :id id :kind :code-block))
+    (:quote-block
+     (make-instance 'quote-block :id id :kind :quote-block))
+    (:reference-block
+     (make-instance 'reference-block :id id :kind :reference-block))
+    (:list-block
+     (make-instance 'list-block :id id :kind :list-block))
+    (:table-block
+     (make-instance 'table-block :id id :kind :table-block))
+    (:task-list
+     (make-instance 'task-list :id id :kind :task-list))
+    (:result-block
+     (make-instance 'result-block :id id :kind :result-block))
+    (:repl-block
+     (make-instance 'repl-block :id id :kind :repl-block))
+    (:repl-entry
+     (make-instance 'repl-entry :id id :kind :repl-entry))
+    (otherwise
+     (error "Unsupported create-object kind ~S." kind))))
+
+(defun ensure-plist-payload (operation key)
+  (let ((value (operation-payload-value operation key)))
+    (unless (or (null value) (listp value))
+      (error "Operation ~A payload key ~S must be a plist, got ~S."
+             (operation-id operation)
+             key
+             value))
+    value))
+
+(defun apply-semantic-slots (object slots)
+  (loop for (slot value) on slots by #'cddr
+        do (set-semantic-object-slot object slot value))
+  object)
+
+(defun apply-object-properties (object properties)
+  (loop for (key value) on properties by #'cddr
+        do (set-object-property object key value))
+  object)
+
+(defun apply-object-metadata (object metadata)
+  (loop for (key value) on metadata by #'cddr
+        do (set-object-metadata object key value))
+  object)
+
+(defun attach-child-once (parent child)
+  (unless (member child (children-of parent))
+    (append-child parent child))
+  child)
 
 (defun set-workspace-slot (workspace slot value)
   (case slot
@@ -1892,6 +1966,41 @@
      (set-object-property object slot value)
      object)))
 
+(defun created-object-for-operation (registry operation)
+  (let* ((target-id (ensure-operation-target-id operation))
+         (kind (required-operation-payload-value operation :kind))
+         (existing-object (find-object registry target-id)))
+    (cond
+      ((and existing-object
+            (not (eq kind (object-kind existing-object))))
+       (error "Operation ~A cannot create ~S object ~S over existing ~S."
+              (operation-id operation)
+              kind
+              target-id
+              (object-kind existing-object)))
+      (existing-object existing-object)
+      (t
+       (register-object registry
+                        (make-semantic-object-for-operation kind target-id))))))
+
+(defun apply-create-object-operation (registry operation)
+  (let ((object (created-object-for-operation registry operation)))
+    (apply-semantic-slots object
+                          (ensure-plist-payload operation :slots))
+    (apply-object-properties object
+                             (ensure-plist-payload operation :properties))
+    (apply-object-metadata object
+                           (ensure-plist-payload operation :metadata))
+    (let ((parent-id (operation-payload-value operation :parent-id)))
+      (when parent-id
+        (attach-child-once
+         (or (find-object registry parent-id)
+             (error "Create-object operation ~A references unknown parent ~S."
+                    (operation-id operation)
+                    parent-id))
+         object)))
+    object))
+
 (defun apply-set-slot-operation (registry operation)
   (let ((slot (operation-payload-value operation :slot)))
     (unless slot
@@ -1904,6 +2013,8 @@
 
 (defun apply-workspace-operation (registry operation)
   (case (operation-type operation)
+    (:create-object
+     (apply-create-object-operation registry operation))
     (:set-slot
      (apply-set-slot-operation registry operation))
     (otherwise
