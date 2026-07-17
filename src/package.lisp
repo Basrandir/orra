@@ -125,6 +125,7 @@
    #:evaluate-code-block
    #:evaluate-repl-entry
    #:encode-sync-message
+   #:apply-conflict-sync-payload
    #:ensure-sync-coordinator-workspace
    #:fail-journal-operation
    #:find-object
@@ -175,6 +176,7 @@
    #:journal-attachments
    #:journal-checkpoint-sync-payload
    #:journal-checkpoints
+   #:journal-conflict-sync-payload
    #:journal-conflicts
    #:journal-comment-sync-payload
    #:journal-comments
@@ -239,6 +241,7 @@
    #:make-sync-coordinator
    #:make-sync-authentication
    #:make-sync-authentication-from-plist
+   #:make-sync-conflict-from-plist
    #:make-task-item
    #:make-task-list
    #:make-text-cell

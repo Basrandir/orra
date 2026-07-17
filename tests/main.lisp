@@ -1107,6 +1107,92 @@
     (is (string= "peer draft" (paragraph-text paragraph))
         "Journal replay should converge on the accepted remote slot value.")))
 
+(deftest local-conflict-sync-payload-is-serializer-friendly ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (paragraph (make-paragraph :text "draft" :registry registry))
+         (local-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id (object-id paragraph)
+                                  :payload (list :slot :text
+                                                 :value "local draft")
+                                  :timestamp 50))
+         (remote-operation
+          (make-workspace-operation
+           :id "conflict-payload-remote-op"
+           :type :set-slot
+           :target-id (object-id paragraph)
+           :payload (list :slot :text :value "peer draft")
+           :actor-id "peer-user"
+           :session-id "peer-session"
+           :timestamp 51
+           :clock '(("peer-user" . 1)))))
+    (declare (ignore local-operation))
+    (setf (paragraph-text paragraph) "local draft")
+    (apply-remote-operation registry journal remote-operation)
+    (let* ((conflict (first (journal-conflicts journal)))
+           (payload (journal-conflict-sync-payload journal conflict)))
+      (is (eq conflict
+              (find-journal-conflict journal (sync-conflict-id conflict)))
+          "Local conflicts should be visible in the journal by conflict id.")
+      (is (equal (list :workspace-id "workspace-1"
+                       :actor-id "local-user"
+                       :session-id "local-session"
+                       :conflict (sync-conflict-plist conflict))
+                 payload)
+          "Conflict sync payloads should contain serializer-friendly conflict plists."))))
+
+(deftest conflict-sync-payload-updates-remote-conflict ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (open-payload
+          (list :workspace-id "workspace-1"
+                :conflict
+                (list :id "conflict-1"
+                      :target-id "paragraph-1"
+                      :slot :text
+                      :local-operation-id "local-op-1"
+                      :remote-operation-id "remote-op-1"
+                      :status :open
+                      :created-at 100
+                      :resolved-at nil)))
+         (resolved-payload
+          (list :workspace-id "workspace-1"
+                :conflict
+                (list :id "conflict-1"
+                      :target-id "paragraph-1"
+                      :slot :text
+                      :local-operation-id "local-op-1"
+                      :remote-operation-id "remote-op-1"
+                      :status :resolved-remote
+                      :created-at 100
+                      :resolved-at 110))))
+    (let ((applied (apply-conflict-sync-payload journal open-payload)))
+      (is (= 1 (length applied))
+          "Conflict sync should return newly accepted conflict records.")
+      (is (eq :open
+              (sync-conflict-status
+               (find-journal-conflict journal "conflict-1")))
+          "Conflict sync should record open remote conflicts."))
+    (let ((applied (apply-conflict-sync-payload journal resolved-payload)))
+      (is (= 1 (length applied))
+          "Conflict sync should accept newer resolution records.")
+      (let ((conflict (find-journal-conflict journal "conflict-1")))
+        (is (eq :resolved-remote (sync-conflict-status conflict))
+            "Newer conflict records should update conflict resolution status.")
+        (is (= 110 (sync-conflict-resolved-at conflict))
+            "Newer conflict records should update resolution timestamps.")))
+    (apply-conflict-sync-payload journal open-payload)
+    (let ((conflict (find-journal-conflict journal "conflict-1")))
+      (is (eq :resolved-remote (sync-conflict-status conflict))
+          "Open conflict payloads should not downgrade resolved conflicts.")
+      (is (= 110 (sync-conflict-resolved-at conflict))
+          "Open conflict payloads should not erase resolution timestamps."))))
+
 (deftest local-operations-enter-pending-queue-until-acknowledged ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"
                                           :actor-id "local-user"
@@ -2267,7 +2353,21 @@
                                               :digest "sha256:checkpoint"
                                               :status :available
                                               :created-at 159
-                                              :updated-at 160)))
+                                              :updated-at 160))
+         (conflict
+          (first
+           (apply-conflict-sync-payload
+            client-journal
+            (list :workspace-id "workspace-1"
+                  :conflict
+                  (list :id "conflict-1"
+                        :target-id "paragraph-1"
+                        :slot :text
+                        :local-operation-id (operation-id operation)
+                        :remote-operation-id "peer-op-1"
+                        :status :resolved-local
+                        :created-at 161
+                        :resolved-at 162))))))
     (sync-coordinator-register-member coordinator
                                       "workspace-1"
                                       "local-user"
@@ -2280,7 +2380,8 @@
                                                   :comments (list comment)
                                                   :members (list member)
                                                   :attachments (list attachment)
-                                                  :checkpoints (list checkpoint)))
+                                                  :checkpoints (list checkpoint)
+                                                  :conflicts (list conflict)))
            (response (handle-sync-request coordinator request :now 200)))
       (is (equal "workspace-1" (getf response :workspace-id))
           "Coordinator sync responses should identify the workspace.")
@@ -2303,6 +2404,8 @@
           "Coordinator request handling should record accepted attachment metadata server-side.")
       (is (find-journal-checkpoint server-journal "checkpoint-1")
           "Coordinator request handling should record accepted checkpoint metadata server-side.")
+      (is (find-journal-conflict server-journal "conflict-1")
+          "Coordinator request handling should record accepted conflict metadata server-side.")
       (is (= 1 (journal-clock-position server-journal "local-user"))
           "Coordinator request handling should merge client causal clocks server-side."))))
 
@@ -2350,6 +2453,18 @@
                            :cursor-position 9
                            :status :editing
                            :updated-at 203)
+    (apply-conflict-sync-payload
+     server-journal
+     (list :workspace-id "workspace-1"
+           :conflict
+           (list :id "peer-conflict-1"
+                 :target-id "paragraph-1"
+                 :slot :text
+                 :local-operation-id "local-op-1"
+                 :remote-operation-id "peer-op-1"
+                 :status :open
+                 :created-at 204
+                 :resolved-at nil)))
     (let* ((request (journal-sync-request-payload client-journal
                                                   :authentication auth))
            (response (handle-sync-request coordinator request :now 200))
@@ -2358,14 +2473,19 @@
                                   (getf response :operations)))
            (presence-actors (mapcar (lambda (presence-plist)
                                       (getf presence-plist :actor-id))
-                                    (getf response :presences))))
+                                    (getf response :presences)))
+           (conflict-ids (mapcar (lambda (conflict-plist)
+                                   (getf conflict-plist :id))
+                                 (getf response :conflicts))))
       (is (equal (list (operation-id local-operation))
                  (getf response :acknowledged-operation-ids))
           "Coordinator sync responses should acknowledge the caller's accepted operations.")
       (is (equal (list "peer-op-1") operation-ids)
           "Coordinator sync responses should distribute peer operations without echoing caller operations.")
       (is (equal (list "peer-user") presence-actors)
-          "Coordinator sync responses should distribute peer presence without echoing the caller session."))))
+          "Coordinator sync responses should distribute peer presence without echoing the caller session.")
+      (is (equal (list "peer-conflict-1") conflict-ids)
+          "Coordinator sync responses should distribute shared conflict records."))))
 
 (deftest sync-coordinator-rejects-unauthorized-request ()
   (let* ((coordinator (make-sync-coordinator))
@@ -2621,13 +2741,28 @@
                                    :digest "sha256:checkpoint"
                                    :status :pending
                                    :created-at 809
-                                   :updated-at 810)))
+                                   :updated-at 810))
+         (conflict
+          (first
+           (apply-conflict-sync-payload
+            journal
+            (list :workspace-id "workspace-1"
+                  :conflict
+                  (list :id "conflict-1"
+                        :target-id "paragraph-1"
+                        :slot :text
+                        :local-operation-id (operation-id second-operation)
+                        :remote-operation-id "remote-op-1"
+                        :status :open
+                        :created-at 811
+                        :resolved-at nil))))))
     (acknowledge-journal-operation journal first-operation)
     (let ((payload (journal-sync-request-payload journal
                                                  :comments (list comment)
                                                  :members (list member)
                                                  :attachments (list attachment)
-                                                 :checkpoints (list checkpoint))))
+                                                 :checkpoints (list checkpoint)
+                                                 :conflicts (list conflict))))
       (is (equal "workspace-1" (getf payload :workspace-id))
           "Sync request envelopes should identify the workspace.")
       (is (equal "local-user" (getf payload :actor-id))
@@ -2654,7 +2789,10 @@
           "Sync request envelopes should batch selected workspace attachments.")
       (is (equal (list (workspace-checkpoint-plist checkpoint))
                  (getf payload :checkpoints))
-          "Sync request envelopes should batch selected workspace checkpoints."))))
+          "Sync request envelopes should batch selected workspace checkpoints.")
+      (is (equal (list (sync-conflict-plist conflict))
+                 (getf payload :conflicts))
+          "Sync request envelopes should batch selected conflict records."))))
 
 (deftest sync-response-payload-applies-distributed-state ()
   (let* ((registry (make-object-registry))
@@ -2762,6 +2900,34 @@
         "Sync responses should store distributed workspace attachments.")
     (is (find-journal-checkpoint journal "checkpoint-remote-1")
         "Sync responses should store distributed workspace checkpoints.")))
+
+(deftest sync-response-payload-applies-distributed-conflicts ()
+  (let* ((registry (make-object-registry))
+         (journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (payload
+          (list :workspace-id "workspace-1"
+                :clock '(("peer-user" . 2))
+                :conflicts
+                (list (list :id "conflict-remote-1"
+                            :target-id "paragraph-1"
+                            :slot :text
+                            :local-operation-id "local-op-1"
+                            :remote-operation-id "remote-op-1"
+                            :status :resolved-local
+                            :created-at 100
+                            :resolved-at 120)))))
+    (let ((result (apply-sync-response-payload registry journal payload)))
+      (is (= 1 (length (getf result :conflicts)))
+          "Sync responses should return accepted conflict records."))
+    (let ((conflict (find-journal-conflict journal "conflict-remote-1")))
+      (is conflict
+          "Sync responses should store distributed conflict records.")
+      (is (eq :resolved-local (sync-conflict-status conflict))
+          "Sync responses should preserve distributed conflict resolution status.")
+      (is (= 120 (sync-conflict-resolved-at conflict))
+          "Sync responses should preserve distributed conflict resolution timestamps."))))
 
 (deftest sync-response-payload-accepts-coordinated-storage-state ()
   (let* ((registry (make-object-registry))

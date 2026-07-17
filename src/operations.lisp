@@ -411,6 +411,26 @@
         :created-at (sync-conflict-created-at conflict)
         :resolved-at (sync-conflict-resolved-at conflict)))
 
+(defun required-sync-conflict-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Sync conflict plist is missing required key ~S." key))
+    value))
+
+(defun make-sync-conflict-from-plist (plist)
+  (make-sync-conflict
+   :id (required-sync-conflict-plist-value plist :id)
+   :target-id (required-sync-conflict-plist-value plist :target-id)
+   :slot (required-sync-conflict-plist-value plist :slot)
+   :local-operation-id
+   (required-sync-conflict-plist-value plist :local-operation-id)
+   :remote-operation-id
+   (required-sync-conflict-plist-value plist :remote-operation-id)
+   :status (getf plist :status :open)
+   :created-at (required-sync-conflict-plist-value plist :created-at)
+   :resolved-at (getf plist :resolved-at)))
+
 (defun required-sync-payload-value (payload key)
   (multiple-value-bind (value presentp)
       (plist-value payload key)
@@ -1233,15 +1253,48 @@
                      (sync-conflict-local-operation-id conflict)
                      (sync-conflict-remote-operation-id conflict)))
 
-(defun record-sync-conflict (journal conflict)
+(defun sync-conflict-resolved-p (conflict)
+  (not (sync-conflict-open-p conflict)))
+
+(defun sync-conflict-resolution-newer-p (conflict existing-conflict)
+  (and (sync-conflict-resolved-p conflict)
+       (or (sync-conflict-open-p existing-conflict)
+           (let ((resolved-at (sync-conflict-resolved-at conflict))
+                 (existing-resolved-at
+                  (sync-conflict-resolved-at existing-conflict)))
+             (and resolved-at
+                  (or (null existing-resolved-at)
+                      (> resolved-at existing-resolved-at)))))))
+
+(defun update-existing-sync-conflict (existing-conflict conflict)
+  (setf (%sync-conflict-status existing-conflict)
+        (sync-conflict-status conflict)
+        (%sync-conflict-resolved-at existing-conflict)
+        (sync-conflict-resolved-at conflict))
+  existing-conflict)
+
+(defun update-journal-conflict (journal conflict &key force)
   (let ((key (sync-conflict-record-key conflict)))
-    (or (gethash key (%journal-conflict-keys journal))
-        (progn
-          (setf (%journal-conflicts journal)
-                (append (%journal-conflicts journal)
-                        (list conflict)))
-          (setf (gethash key (%journal-conflict-keys journal))
-                conflict)))))
+    (let ((existing-conflict (gethash key (%journal-conflict-keys journal))))
+      (cond
+        ((null existing-conflict)
+         (setf (%journal-conflicts journal)
+               (append (%journal-conflicts journal)
+                       (list conflict)))
+         (setf (gethash key (%journal-conflict-keys journal))
+               conflict))
+        ((or force
+             (sync-conflict-resolution-newer-p conflict existing-conflict))
+         (update-existing-sync-conflict existing-conflict conflict))))))
+
+(defun record-sync-conflict (journal conflict)
+  (update-journal-conflict journal conflict))
+
+(defun journal-conflict-sync-payload (journal conflict)
+  (list :workspace-id (journal-workspace-id journal)
+        :actor-id (journal-actor-id journal)
+        :session-id (journal-session-id journal)
+        :conflict (sync-conflict-plist conflict)))
 
 (defun sync-conflict-open-p (conflict)
   (eq :open (sync-conflict-status conflict)))
@@ -1676,7 +1729,7 @@
 
 (defun journal-sync-request-payload (journal &key authentication presence
                                                comments members attachments
-                                               checkpoints)
+                                               checkpoints conflicts)
   (let ((presence (or presence (journal-local-presence journal))))
     (append
      (journal-pending-sync-payload journal)
@@ -1690,6 +1743,10 @@
        (list :comments
              (mapcar #'collaboration-comment-plist
                      (ensure-list comments))))
+     (when conflicts
+       (list :conflicts
+             (mapcar #'sync-conflict-plist
+                     (ensure-list conflicts))))
      (when members
        (list :members
              (mapcar #'workspace-member-plist
@@ -1968,6 +2025,23 @@
         when accepted-comment
         collect accepted-comment))
 
+(defun sync-payload-conflict-plists (payload)
+  (sync-payload-entry-plists payload :conflict :conflicts))
+
+(defun sync-payload-conflicts (payload)
+  (mapcar #'make-sync-conflict-from-plist
+          (sync-payload-conflict-plists payload)))
+
+(defun apply-conflict-sync-payload (journal payload &key force)
+  (ensure-sync-payload-workspace journal payload)
+  (loop for conflict in (sync-payload-conflicts payload)
+        for accepted-conflict = (update-journal-conflict
+                                 journal
+                                 conflict
+                                 :force force)
+        when accepted-conflict
+        collect accepted-conflict))
+
 (defun sync-payload-member-plists (payload)
   (sync-payload-entry-plists payload :member :members))
 
@@ -2043,6 +2117,8 @@
         (apply-presence-sync-payload journal payload)
         :comments
         (apply-comment-sync-payload journal payload)
+        :conflicts
+        (apply-conflict-sync-payload journal payload)
         :members
         (apply-membership-sync-payload journal payload)
         :attachments
@@ -2172,6 +2248,7 @@
          (sync-coordinator-record-operations journal payload)))
     (apply-presence-sync-payload journal payload)
     (apply-comment-sync-payload journal payload)
+    (apply-conflict-sync-payload journal payload)
     (apply-membership-sync-payload journal payload)
     (sync-coordinator-coordinate-attachments
      journal
@@ -2210,6 +2287,8 @@
                             (journal-presences journal)))
         :comments (mapcar #'collaboration-comment-plist
                           (journal-comments journal))
+        :conflicts (mapcar #'sync-conflict-plist
+                           (journal-conflicts journal))
         :members (mapcar #'workspace-member-plist
                          (journal-members journal))
         :attachments (mapcar #'workspace-attachment-plist
@@ -2329,7 +2408,8 @@
                                       comments
                                       members
                                       attachments
-                                      checkpoints)
+                                      checkpoints
+                                      conflicts)
   (let* ((request
           (journal-sync-request-payload journal
                                         :authentication authentication
@@ -2337,7 +2417,8 @@
                                         :comments comments
                                         :members members
                                         :attachments attachments
-                                        :checkpoints checkpoints))
+                                        :checkpoints checkpoints
+                                        :conflicts conflicts))
          (response (sync-transport-send-request transport request :now now))
          (result (apply-sync-response-payload registry journal response)))
     (list :request request
@@ -2351,7 +2432,8 @@
                                         comments
                                         members
                                         attachments
-                                        checkpoints)
+                                        checkpoints
+                                        conflicts)
   (sync-journal-with-transport registry
                                journal
                                (make-local-sync-transport coordinator)
@@ -2361,7 +2443,8 @@
                                :comments comments
                                :members members
                                :attachments attachments
-                               :checkpoints checkpoints))
+                               :checkpoints checkpoints
+                               :conflicts conflicts))
 
 (defun apply-operation-journal (registry journal)
   (mapcar (lambda (operation)
