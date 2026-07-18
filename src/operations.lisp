@@ -1923,6 +1923,80 @@
     (append-child parent child))
   child)
 
+(defun semantic-child-ids (parent)
+  (mapcar #'object-id (children-of parent)))
+
+(defun ensure-operation-child-ids (operation)
+  (let ((child-ids (required-operation-payload-value operation :child-ids)))
+    (unless (listp child-ids)
+      (error "Operation ~A payload key :CHILD-IDS must be a list, got ~S."
+             (operation-id operation)
+             child-ids))
+    (unless (= (length child-ids)
+               (length (remove-duplicates child-ids :test #'equal)))
+      (error "Operation ~A payload key :CHILD-IDS contains duplicates: ~S."
+             (operation-id operation)
+             child-ids))
+    child-ids))
+
+(defun ensure-child-id-permutation (parent operation child-ids)
+  (let ((current-child-ids (semantic-child-ids parent)))
+    (unless (and (= (length child-ids)
+                    (length current-child-ids))
+                 (null (set-difference child-ids
+                                       current-child-ids
+                                       :test #'equal))
+                 (null (set-difference current-child-ids
+                                       child-ids
+                                       :test #'equal)))
+      (error "Operation ~A child ids ~S are not a permutation of target children ~S."
+             (operation-id operation)
+             child-ids
+             current-child-ids)))
+  child-ids)
+
+(defun reorderable-child-for-id (registry operation parent child-id)
+  (let ((child (find-object registry child-id)))
+    (unless child
+      (error "Operation ~A references unknown child object ~S."
+             (operation-id operation)
+             child-id))
+    (unless (eq parent (parent-of child))
+      (error "Operation ~A child object ~S is not parented by target ~S."
+             (operation-id operation)
+             child-id
+             (object-id parent)))
+    child))
+
+(defun set-semantic-children (parent children)
+  (typecase parent
+    (workspace
+     (setf (workspace-notebooks parent) children)
+     (unless (member (workspace-current-notebook parent) children)
+       (setf (workspace-current-notebook parent) (first children))))
+    (composite-node
+     (setf (children-of parent) children))
+    (otherwise
+     (error "Object ~S cannot have reordered semantic children."
+            (object-kind parent))))
+  (dolist (child children)
+    (setf (parent-of child) parent))
+  parent)
+
+(defun apply-reorder-children-operation (registry operation)
+  (let* ((parent (target-object-for-operation registry operation))
+         (child-ids (ensure-child-id-permutation
+                     parent
+                     operation
+                     (ensure-operation-child-ids operation)))
+         (children (mapcar (lambda (child-id)
+                             (reorderable-child-for-id registry
+                                                       operation
+                                                       parent
+                                                       child-id))
+                           child-ids)))
+    (set-semantic-children parent children)))
+
 (defun set-workspace-slot (workspace slot value)
   (case slot
     (:title (setf (workspace-title workspace) (normalize-display-string value)))
@@ -2112,6 +2186,8 @@
      (apply-create-object-operation registry operation))
     (:set-slot
      (apply-set-slot-operation registry operation))
+    (:reorder-children
+     (apply-reorder-children-operation registry operation))
     (:insert-text-range
      (apply-insert-text-range-operation registry operation))
     (:delete-text-range

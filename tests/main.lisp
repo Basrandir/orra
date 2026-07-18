@@ -867,6 +867,43 @@
     (is (eq :stale (result-block-status result))
         "Deleting source text should use code block source replacement and invalidate results.")))
 
+(deftest apply-workspace-operation-reorders-children ()
+  (let* ((registry (make-object-registry))
+         (section (make-section :title "Remote Section"
+                                :registry registry))
+         (first-paragraph (make-paragraph :text "first"
+                                          :registry registry))
+         (block (make-code-block :source "(+ 1 2)"
+                                 :registry registry))
+         (last-paragraph (make-paragraph :text "last"
+                                         :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-reorder-op-1"
+           :type :reorder-children
+           :target-id (object-id section)
+           :payload (list :child-ids (list (object-id block)
+                                           (object-id last-paragraph)
+                                           (object-id first-paragraph)))
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 230)))
+    (append-child section first-paragraph)
+    (append-child section block)
+    (append-child section last-paragraph)
+    (is (eq section
+            (apply-workspace-operation registry operation))
+        "Reorder-children should return the target parent object.")
+    (is (equal (list block last-paragraph first-paragraph)
+               (children-of section))
+        "Reorder-children should order children by stable object id payload.")
+    (is (eq section (parent-of first-paragraph))
+        "Reordered children should keep parent links intact.")
+    (is (eq section (parent-of block))
+        "Reordered code children should keep parent links intact.")
+    (is (eq section (parent-of last-paragraph))
+        "Reordered trailing children should keep parent links intact.")))
+
 (deftest apply-remote-operation-records-and-dedupes ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"))
