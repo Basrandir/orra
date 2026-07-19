@@ -1903,6 +1903,15 @@
              value))
     value))
 
+(defun ensure-required-plist-payload (operation key)
+  (let ((value (required-operation-payload-value operation key)))
+    (unless (or (null value) (listp value))
+      (error "Operation ~A payload key ~S must be a plist, got ~S."
+             (operation-id operation)
+             key
+             value))
+    value))
+
 (defun apply-semantic-slots (object slots)
   (loop for (slot value) on slots by #'cddr
         do (set-semantic-object-slot object slot value))
@@ -2180,6 +2189,11 @@
      slot
      (operation-payload-value operation :value))))
 
+(defun apply-attach-metadata-operation (registry operation)
+  (apply-object-metadata
+   (target-object-for-operation registry operation)
+   (ensure-required-plist-payload operation :metadata)))
+
 (defun apply-workspace-operation (registry operation)
   (case (operation-type operation)
     (:create-object
@@ -2192,6 +2206,8 @@
      (apply-insert-text-range-operation registry operation))
     (:delete-text-range
      (apply-delete-text-range-operation registry operation))
+    (:attach-metadata
+     (apply-attach-metadata-operation registry operation))
     (otherwise
      (error "Applying workspace operation type ~S is not implemented yet."
             (operation-type operation)))))

@@ -904,6 +904,33 @@
     (is (eq section (parent-of last-paragraph))
         "Reordered trailing children should keep parent links intact.")))
 
+(deftest apply-workspace-operation-attaches-metadata ()
+  (let* ((registry (make-object-registry))
+         (paragraph (make-paragraph :text "draft"
+                                    :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-metadata-op-1"
+           :type :attach-metadata
+           :target-id (object-id paragraph)
+           :payload (list :metadata (list :reviewed-p t
+                                          :tags (list "sync" "review")
+                                          :origin "peer"))
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 240)))
+    (is (eq paragraph
+            (apply-workspace-operation registry operation))
+        "Attach-metadata should return the target object.")
+    (is (eql t (gethash :reviewed-p (object-metadata paragraph)))
+        "Attach-metadata should write boolean metadata values.")
+    (is (equal (list "sync" "review")
+               (gethash :tags (object-metadata paragraph)))
+        "Attach-metadata should write structured metadata values.")
+    (is (string= "peer"
+                 (gethash :origin (object-metadata paragraph)))
+        "Attach-metadata should write string metadata values.")))
+
 (deftest apply-remote-operation-records-and-dedupes ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"))
