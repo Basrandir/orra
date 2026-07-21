@@ -1986,6 +1986,59 @@
         :label (operation-link-label operation)
         :metadata (operation-link-metadata operation)))
 
+(defun code-block-target-for-operation (registry operation)
+  (let ((object (target-object-for-operation registry operation)))
+    (unless (typep object 'code-block)
+      (error "Evaluate-cell operation ~A targets non-code object ~S."
+             (operation-id operation)
+             (object-id object)))
+    object))
+
+(defun evaluation-result-id-for-operation (operation)
+  (let ((result-id (required-operation-payload-value operation :result-id)))
+    (unless result-id
+      (error "Evaluate-cell operation ~A requires a non-nil :RESULT-ID payload."
+             (operation-id operation)))
+    result-id))
+
+(defun evaluation-result-block-for-operation (registry operation)
+  (let* ((result-id (evaluation-result-id-for-operation operation))
+         (existing-result (find-object registry result-id)))
+    (cond
+      ((and existing-result
+            (not (typep existing-result 'result-block)))
+       (error "Evaluate-cell operation ~A cannot use non-result object ~S."
+              (operation-id operation)
+              result-id))
+      (existing-result existing-result)
+      (t
+       (register-object
+        registry
+        (make-semantic-object-for-operation :result-block result-id))))))
+
+(defun apply-evaluation-result-payload (result operation block)
+  (setf (result-block-value result)
+        (operation-payload-value operation :value))
+  (setf (result-block-presentation result)
+        (normalize-display-string
+         (operation-payload-value operation :presentation "")))
+  (setf (result-block-input-source result)
+        (normalize-display-string
+         (operation-payload-value operation
+                                  :input-source
+                                  (code-block-source block))))
+  (setf (result-block-input-forms result)
+        (operation-payload-value operation :input-forms))
+  (setf (result-block-package result)
+        (normalize-display-string
+         (operation-payload-value operation :package-name "")))
+  (setf (result-block-evaluated-at result)
+        (operation-payload-value operation :evaluated-at))
+  (setf (result-block-environment result)
+        (operation-payload-value operation :environment))
+  (set-result-block-status result
+                           (operation-payload-value operation :status :ok)))
+
 (defun attach-child-once (parent child)
   (unless (member child (children-of parent))
     (append-child parent child))
@@ -2266,6 +2319,13 @@
                                operation)
     source))
 
+(defun apply-evaluate-cell-operation (registry operation)
+  (let ((block (code-block-target-for-operation registry operation))
+        (result (evaluation-result-block-for-operation registry operation)))
+    (apply-evaluation-result-payload result operation block)
+    (setf (code-block-result block) result)
+    result))
+
 (defun apply-workspace-operation (registry operation)
   (case (operation-type operation)
     (:create-object
@@ -2282,6 +2342,8 @@
      (apply-attach-metadata-operation registry operation))
     (:link-object
      (apply-link-object-operation registry operation))
+    (:evaluate-cell
+     (apply-evaluate-cell-operation registry operation))
     (otherwise
      (error "Applying workspace operation type ~S is not implemented yet."
             (operation-type operation)))))

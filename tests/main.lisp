@@ -971,6 +971,55 @@
       (is (eq :references (getf backlink :relation))
           "Link-object should keep source and target relation metadata aligned."))))
 
+(deftest apply-workspace-operation-applies-evaluation-result ()
+  (let* ((registry (make-object-registry))
+         (block (make-code-block :source "(+ 999 1)"
+                                 :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-eval-op-1"
+           :type :evaluate-cell
+           :target-id (object-id block)
+           :payload (list :result-id "remote-result-1"
+                          :status :ok
+                          :value 42
+                          :presentation "42"
+                          :input-source "(+ 20 22)"
+                          :input-forms '((+ 20 22))
+                          :package-name "COMMON-LISP-USER"
+                          :evaluated-at 400
+                          :environment (list :package "COMMON-LISP-USER"
+                                             :language :common-lisp))
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 260)))
+    (let ((result (apply-workspace-operation registry operation)))
+      (is (typep result 'result-block)
+          "Evaluate-cell should materialize a result block.")
+      (is (string= "remote-result-1" (object-id result))
+          "Evaluate-cell should use the result id supplied by the operation.")
+      (is (eq result (find-object registry "remote-result-1"))
+          "Evaluate-cell should register the result block for later operations.")
+      (is (eq result (code-block-result block))
+          "Evaluate-cell should attach the result to the target code block.")
+      (is (eq :ok (result-block-status result))
+          "Evaluate-cell should preserve captured result status.")
+      (is (= 42 (result-block-value result))
+          "Evaluate-cell should preserve captured result value without re-evaluating source.")
+      (is (string= "42" (result-block-presentation result))
+          "Evaluate-cell should preserve captured result presentation.")
+      (is (string= "(+ 20 22)" (result-block-input-source result))
+          "Evaluate-cell should preserve captured input source.")
+      (is (equal '((+ 20 22)) (result-block-input-forms result))
+          "Evaluate-cell should preserve captured input forms.")
+      (is (string= "COMMON-LISP-USER" (result-block-package result))
+          "Evaluate-cell should preserve captured package metadata.")
+      (is (= 400 (result-block-evaluated-at result))
+          "Evaluate-cell should preserve captured evaluation timestamp.")
+      (is (equal (list :package "COMMON-LISP-USER" :language :common-lisp)
+                 (result-block-environment result))
+          "Evaluate-cell should preserve captured evaluation environment."))))
+
 (deftest apply-remote-operation-records-and-dedupes ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"))
