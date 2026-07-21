@@ -387,6 +387,8 @@
    #:sync-conflict-target-id
    #:sync-coordinator
    #:sync-coordinator-register-member
+   #:sync-coordinator-update-attachment-storage
+   #:sync-coordinator-update-checkpoint-storage
    #:sync-coordinator-workspace-journal
    #:sync-message-payload
    #:sync-message-type

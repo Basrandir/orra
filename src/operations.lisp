@@ -1565,6 +1565,10 @@
 (defun find-journal-attachment (journal attachment-id &optional default)
   (gethash attachment-id (%journal-attachments journal) default))
 
+(defun require-journal-attachment (journal attachment-id)
+  (or (find-journal-attachment journal attachment-id)
+      (error "Journal does not contain attachment ~S." attachment-id)))
+
 (defun workspace-attachment-newer-p (attachment existing-attachment)
   (or (null existing-attachment)
       (> (workspace-attachment-updated-at attachment)
@@ -1628,6 +1632,10 @@
 
 (defun find-journal-checkpoint (journal checkpoint-id &optional default)
   (gethash checkpoint-id (%journal-checkpoints journal) default))
+
+(defun require-journal-checkpoint (journal checkpoint-id)
+  (or (find-journal-checkpoint journal checkpoint-id)
+      (error "Journal does not contain checkpoint ~S." checkpoint-id)))
 
 (defun workspace-checkpoint-newer-p (checkpoint existing-checkpoint)
   (or (null existing-checkpoint)
@@ -2617,6 +2625,80 @@
 (defun sync-coordinator-server-storage-ref-p (journal kind id storage-ref)
   (equal storage-ref
          (sync-coordinator-storage-ref journal kind id)))
+
+(defun sync-coordinator-require-workspace (coordinator workspace-id)
+  (or (sync-coordinator-workspace-journal coordinator workspace-id)
+      (error "Sync coordinator has no workspace ~S." workspace-id)))
+
+(defun sync-coordinator-update-attachment-storage
+    (coordinator workspace-id attachment-id status
+     &key
+       (storage-ref nil storage-ref-p)
+       (byte-size nil byte-size-p)
+       (digest nil digest-p)
+       (updated-at (get-universal-time))
+       (metadata nil metadata-p))
+  (let* ((journal (sync-coordinator-require-workspace coordinator workspace-id))
+         (attachment (require-journal-attachment journal attachment-id)))
+    (update-journal-attachment
+     journal
+     (make-workspace-attachment
+      :id (workspace-attachment-id attachment)
+      :target-id (workspace-attachment-target-id attachment)
+      :content-type (workspace-attachment-content-type attachment)
+      :byte-size (if byte-size-p
+                     byte-size
+                     (workspace-attachment-byte-size attachment))
+      :digest (if digest-p
+                  digest
+                  (workspace-attachment-digest attachment))
+      :storage-ref (if storage-ref-p
+                       storage-ref
+                       (workspace-attachment-storage-ref attachment))
+      :status status
+      :actor-id (workspace-attachment-actor-id attachment)
+      :session-id (workspace-attachment-session-id attachment)
+      :created-at (workspace-attachment-created-at attachment)
+      :updated-at updated-at
+      :metadata (if metadata-p
+                    metadata
+                    (workspace-attachment-metadata attachment)))
+     :force t)))
+
+(defun sync-coordinator-update-checkpoint-storage
+    (coordinator workspace-id checkpoint-id status
+     &key
+       (storage-ref nil storage-ref-p)
+       (byte-size nil byte-size-p)
+       (digest nil digest-p)
+       (updated-at (get-universal-time))
+       (metadata nil metadata-p))
+  (let* ((journal (sync-coordinator-require-workspace coordinator workspace-id))
+         (checkpoint (require-journal-checkpoint journal checkpoint-id)))
+    (update-journal-checkpoint
+     journal
+     (make-workspace-checkpoint
+      :id (workspace-checkpoint-id checkpoint)
+      :checkpoint-at (workspace-checkpoint-checkpoint-at checkpoint)
+      :storage-ref (if storage-ref-p
+                       storage-ref
+                       (workspace-checkpoint-storage-ref checkpoint))
+      :byte-size (if byte-size-p
+                     byte-size
+                     (workspace-checkpoint-byte-size checkpoint))
+      :digest (if digest-p
+                  digest
+                  (workspace-checkpoint-digest checkpoint))
+      :status status
+      :actor-id (workspace-checkpoint-actor-id checkpoint)
+      :session-id (workspace-checkpoint-session-id checkpoint)
+      :clock (workspace-checkpoint-clock checkpoint)
+      :created-at (workspace-checkpoint-created-at checkpoint)
+      :updated-at updated-at
+      :metadata (if metadata-p
+                    metadata
+                    (workspace-checkpoint-metadata checkpoint)))
+     :force t)))
 
 (defun sync-coordinator-coordinate-attachment (journal attachment)
   (let ((storage-ref (workspace-attachment-storage-ref attachment))

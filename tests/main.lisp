@@ -2945,6 +2945,118 @@
                   (find-journal-checkpoint server-journal "checkpoint-1")))
         "Coordinator checkpoint storage should not trust foreign server refs.")))
 
+(deftest sync-coordinator-updates-coordinated-storage-status ()
+  (let* ((coordinator (make-sync-coordinator))
+         (server-journal (ensure-sync-coordinator-workspace coordinator
+                                                            "workspace-1"))
+         (client-journal (make-operation-journal :workspace-id "workspace-1"
+                                                 :actor-id "local-user"
+                                                 :session-id "local-session"))
+         (peer-journal (make-operation-journal :workspace-id "workspace-1"
+                                               :actor-id "peer-user"
+                                               :session-id "peer-session"))
+         (auth (make-sync-authentication :token-id "token-1"
+                                         :workspace-id "workspace-1"
+                                         :actor-id "local-user"
+                                         :session-id "local-session"
+                                         :scopes (list :sync)
+                                         :issued-at 100
+                                         :expires-at 300))
+         (peer-auth (make-sync-authentication :token-id "token-2"
+                                              :workspace-id "workspace-1"
+                                              :actor-id "peer-user"
+                                              :session-id "peer-session"
+                                              :scopes (list :sync)
+                                              :issued-at 100
+                                              :expires-at 300)))
+    (record-local-attachment client-journal
+                             :id "attachment-1"
+                             :target-id "paragraph-1"
+                             :content-type "image/png"
+                             :byte-size 2048
+                             :digest "sha256:image"
+                             :storage-ref "local://attachment-1"
+                             :status :available
+                             :created-at 201
+                             :updated-at 202)
+    (record-local-checkpoint client-journal
+                             :id "checkpoint-1"
+                             :checkpoint-at 210
+                             :storage-ref "local://checkpoint-1"
+                             :byte-size 4096
+                             :digest "sha256:checkpoint"
+                             :status :available
+                             :created-at 211
+                             :updated-at 212)
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "local-user"
+                                      :display-name "Local User"
+                                      :role :editor
+                                      :status :active
+                                      :updated-at 199)
+    (sync-coordinator-register-member coordinator
+                                      "workspace-1"
+                                      "peer-user"
+                                      :display-name "Peer User"
+                                      :role :editor
+                                      :status :active
+                                      :updated-at 199)
+    (handle-sync-request coordinator
+                         (journal-sync-request-payload
+                          client-journal
+                          :authentication auth
+                          :attachments (journal-attachments client-journal)
+                          :checkpoints (journal-checkpoints client-journal))
+                         :now 200)
+    (sync-coordinator-update-attachment-storage coordinator
+                                                "workspace-1"
+                                                "attachment-1"
+                                                :available
+                                                :updated-at 250
+                                                :metadata
+                                                (list :stored-by "blob-store"))
+    (sync-coordinator-update-checkpoint-storage coordinator
+						"workspace-1"
+						"checkpoint-1"
+						:failed
+						:updated-at 251
+						:metadata
+						(list :reason "digest mismatch"))
+    (let* ((attachment (find-journal-attachment server-journal
+                                                "attachment-1"))
+           (checkpoint (find-journal-checkpoint server-journal
+                                                "checkpoint-1"))
+           (response
+            (handle-sync-request
+             coordinator
+             (journal-sync-request-payload peer-journal
+                                           :authentication peer-auth)
+             :now 260)))
+      (is (eq :available (workspace-attachment-status attachment))
+          "Coordinator storage updates should mark attachments available after byte transfer.")
+      (is (= 250 (workspace-attachment-updated-at attachment))
+          "Coordinator attachment storage updates should set the server update timestamp.")
+      (is (string= "server://workspace-1/attachments/attachment-1"
+                   (workspace-attachment-storage-ref attachment))
+          "Coordinator attachment storage updates should preserve coordinated storage refs.")
+      (is (equal (list :stored-by "blob-store")
+                 (workspace-attachment-metadata attachment))
+          "Coordinator attachment storage updates should expose storage metadata.")
+      (is (eq :failed (workspace-checkpoint-status checkpoint))
+          "Coordinator storage updates should mark failed checkpoint transfers.")
+      (is (= 251 (workspace-checkpoint-updated-at checkpoint))
+          "Coordinator checkpoint storage updates should set the server update timestamp.")
+      (is (equal (list :reason "digest mismatch")
+                 (workspace-checkpoint-metadata checkpoint))
+          "Coordinator checkpoint storage updates should expose failure metadata.")
+      (is (equal (list (workspace-attachment-plist attachment))
+                 (getf response :attachments))
+          "Coordinator responses should distribute updated attachment storage state.")
+      (is (equal (list (workspace-checkpoint-plist checkpoint))
+                 (getf response :checkpoints))
+          "Coordinator responses should distribute updated checkpoint storage state."))))
+
 (deftest journal-sync-request-payload-batches-local-sync-state ()
   (let* ((journal (make-operation-journal :workspace-id "workspace-1"
                                           :actor-id "local-user"
