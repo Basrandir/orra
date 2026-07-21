@@ -931,6 +931,46 @@
                  (gethash :origin (object-metadata paragraph)))
         "Attach-metadata should write string metadata values.")))
 
+(deftest apply-workspace-operation-links-objects ()
+  (let* ((registry (make-object-registry))
+         (source (make-paragraph :text "source"
+                                 :registry registry))
+         (target (make-code-block :source "(+ 1 2)"
+                                  :registry registry))
+         (operation
+          (make-workspace-operation
+           :id "remote-link-op-1"
+           :type :link-object
+           :target-id (object-id source)
+           :payload (list :target-id (object-id target)
+                          :relation :references
+                          :label "supporting code"
+                          :metadata (list :origin "peer"))
+           :actor-id "peer-1"
+           :session-id "session-2"
+           :timestamp 250)))
+    (is (eq source
+            (apply-workspace-operation registry operation))
+        "Link-object should return the source object.")
+    (let ((link (first (gethash :links (object-metadata source))))
+          (backlink (first (gethash :backlinks (object-metadata target)))))
+      (is (string= "remote-link-op-1" (getf link :id))
+          "Link-object should store the operation id as link identity.")
+      (is (string= (object-id target) (getf link :target-id))
+          "Link-object should record the linked target id on the source.")
+      (is (eq :references (getf link :relation))
+          "Link-object should record the semantic relation.")
+      (is (string= "supporting code" (getf link :label))
+          "Link-object should preserve a display label for future lenses.")
+      (is (equal (list :origin "peer") (getf link :metadata))
+          "Link-object should preserve structured relation metadata.")
+      (is (string= "remote-link-op-1" (getf backlink :id))
+          "Link-object should create a matching backlink identity.")
+      (is (string= (object-id source) (getf backlink :source-id))
+          "Link-object should record the source id on the target backlink.")
+      (is (eq :references (getf backlink :relation))
+          "Link-object should keep source and target relation metadata aligned."))))
+
 (deftest apply-remote-operation-records-and-dedupes ()
   (let* ((registry (make-object-registry))
          (journal (make-operation-journal :workspace-id "workspace-1"))

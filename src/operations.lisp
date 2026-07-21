@@ -1927,6 +1927,65 @@
         do (set-object-metadata object key value))
   object)
 
+(defun metadata-entry-list (object key operation)
+  (let ((entries (gethash key (object-metadata object))))
+    (unless (or (null entries) (listp entries))
+      (error "Operation ~A expected metadata key ~S on object ~S to contain a list, got ~S."
+             (operation-id operation)
+             key
+             (object-id object)
+             entries))
+    entries))
+
+(defun replace-metadata-entry-by-id (entries entry)
+  (cons entry
+        (remove (getf entry :id)
+                entries
+                :key (lambda (current-entry)
+                       (getf current-entry :id))
+                :test #'equal)))
+
+(defun put-object-metadata-entry (object key entry operation)
+  (set-object-metadata
+   object
+   key
+   (replace-metadata-entry-by-id
+    (metadata-entry-list object key operation)
+    entry))
+  object)
+
+(defun operation-link-target-object (registry operation)
+  (let ((target-id (required-operation-payload-value operation :target-id)))
+    (or (find-object registry target-id)
+        (error "Link-object operation ~A references unknown target object ~S."
+               (operation-id operation)
+               target-id))))
+
+(defun operation-link-relation (operation)
+  (or (operation-payload-value operation :relation)
+      :related))
+
+(defun operation-link-label (operation)
+  (normalize-display-string
+   (operation-payload-value operation :label "")))
+
+(defun operation-link-metadata (operation)
+  (ensure-plist-payload operation :metadata))
+
+(defun link-entry-for-operation (operation target)
+  (list :id (operation-id operation)
+        :target-id (object-id target)
+        :relation (operation-link-relation operation)
+        :label (operation-link-label operation)
+        :metadata (operation-link-metadata operation)))
+
+(defun backlink-entry-for-operation (operation source)
+  (list :id (operation-id operation)
+        :source-id (object-id source)
+        :relation (operation-link-relation operation)
+        :label (operation-link-label operation)
+        :metadata (operation-link-metadata operation)))
+
 (defun attach-child-once (parent child)
   (unless (member child (children-of parent))
     (append-child parent child))
@@ -2194,6 +2253,19 @@
    (target-object-for-operation registry operation)
    (ensure-required-plist-payload operation :metadata)))
 
+(defun apply-link-object-operation (registry operation)
+  (let ((source (target-object-for-operation registry operation))
+        (target (operation-link-target-object registry operation)))
+    (put-object-metadata-entry source
+                               :links
+                               (link-entry-for-operation operation target)
+                               operation)
+    (put-object-metadata-entry target
+                               :backlinks
+                               (backlink-entry-for-operation operation source)
+                               operation)
+    source))
+
 (defun apply-workspace-operation (registry operation)
   (case (operation-type operation)
     (:create-object
@@ -2208,6 +2280,8 @@
      (apply-delete-text-range-operation registry operation))
     (:attach-metadata
      (apply-attach-metadata-operation registry operation))
+    (:link-object
+     (apply-link-object-operation registry operation))
     (otherwise
      (error "Applying workspace operation type ~S is not implemented yet."
             (operation-type operation)))))
