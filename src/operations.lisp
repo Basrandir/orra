@@ -1813,6 +1813,95 @@
       (set-journal-operation-queue-status journal operation :pending)
       operation)))
 
+(defun required-operation-journal-plist-value (plist key)
+  (multiple-value-bind (value presentp)
+      (plist-value plist key)
+    (unless presentp
+      (error "Operation journal plist is missing required key ~S." key))
+    value))
+
+(defun operation-journal-queue-status-plists (journal)
+  (loop for operation in (journal-operations journal)
+        for status = (journal-operation-queue-status journal operation)
+        when status
+        collect (list :operation-id (operation-id operation)
+                      :status status)))
+
+(defun operation-journal-plist (journal)
+  (list :workspace-id (journal-workspace-id journal)
+        :actor-id (journal-actor-id journal)
+        :session-id (journal-session-id journal)
+        :next-sequence (journal-next-sequence journal)
+        :clock (journal-vector-clock journal)
+        :operations (mapcar #'workspace-operation-plist
+                            (journal-operations journal))
+        :queue-statuses (operation-journal-queue-status-plists journal)
+        :presences (mapcar #'collaborator-presence-plist
+                           (journal-presences journal))
+        :comments (mapcar #'collaboration-comment-plist
+                          (journal-comments journal))
+        :members (mapcar #'workspace-member-plist
+                         (journal-members journal))
+        :attachments (mapcar #'workspace-attachment-plist
+                             (journal-attachments journal))
+        :checkpoints (mapcar #'workspace-checkpoint-plist
+                             (journal-checkpoints journal))
+        :conflicts (mapcar #'sync-conflict-plist
+                           (journal-conflicts journal))))
+
+(defun restore-journal-queue-status (journal status-plist)
+  (set-journal-operation-queue-status
+   journal
+   (required-operation-journal-plist-value status-plist :operation-id)
+   (required-operation-journal-plist-value status-plist :status)))
+
+(defun make-operation-journal-from-plist (plist)
+  (let ((journal
+         (make-operation-journal
+          :workspace-id
+          (required-operation-journal-plist-value plist :workspace-id)
+          :actor-id (getf plist :actor-id)
+          :session-id (getf plist :session-id)
+          :next-sequence (getf plist :next-sequence 1)
+          :clock (getf plist :clock))))
+    (dolist (operation-plist (getf plist :operations))
+      (record-operation journal
+                        (make-workspace-operation-from-plist
+                         operation-plist)))
+    (dolist (status-plist (getf plist :queue-statuses))
+      (restore-journal-queue-status journal status-plist))
+    (dolist (presence-plist (getf plist :presences))
+      (update-journal-presence
+       journal
+       (make-collaborator-presence-from-plist presence-plist)
+       :force t))
+    (dolist (comment-plist (getf plist :comments))
+      (update-journal-comment
+       journal
+       (make-collaboration-comment-from-plist comment-plist)
+       :force t))
+    (dolist (member-plist (getf plist :members))
+      (update-journal-member
+       journal
+       (make-workspace-member-from-plist member-plist)
+       :force t))
+    (dolist (attachment-plist (getf plist :attachments))
+      (update-journal-attachment
+       journal
+       (make-workspace-attachment-from-plist attachment-plist)
+       :force t))
+    (dolist (checkpoint-plist (getf plist :checkpoints))
+      (update-journal-checkpoint
+       journal
+       (make-workspace-checkpoint-from-plist checkpoint-plist)
+       :force t))
+    (dolist (conflict-plist (getf plist :conflicts))
+      (update-journal-conflict
+       journal
+       (make-sync-conflict-from-plist conflict-plist)
+       :force t))
+    journal))
+
 (defun operation-payload-value (operation key &optional default)
   (multiple-value-bind (value presentp)
       (plist-value (operation-payload operation) key)

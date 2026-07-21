@@ -242,6 +242,7 @@
    #:make-sync-authentication
    #:make-sync-authentication-from-plist
    #:make-sync-conflict-from-plist
+   #:make-operation-journal-from-plist
    #:make-task-item
    #:make-task-list
    #:make-text-cell
@@ -282,6 +283,7 @@
    #:operation-clock
    #:operation-id
    #:operation-journal
+   #:operation-journal-plist
    #:operation-payload
    #:operation-sequence
    #:operation-session-id

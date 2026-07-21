@@ -776,6 +776,136 @@
       (is (= 2 (length (journal-operations journal)))
           "Journal reads should not expose mutable journal storage."))))
 
+(deftest operation-journal-plist-round-trips-sync-state ()
+  (let* ((journal (make-operation-journal :workspace-id "workspace-1"
+                                          :actor-id "local-user"
+                                          :session-id "local-session"))
+         (pending-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text
+                                                 :value "pending")
+                                  :timestamp 101))
+         (acknowledged-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text
+                                                 :value "acknowledged")
+                                  :timestamp 102))
+         (failed-operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text
+                                                 :value "failed")
+                                  :timestamp 103))
+         (remote-operation
+          (make-workspace-operation :id "remote-op-1"
+                                    :type :set-slot
+                                    :target-id "paragraph-1"
+                                    :payload (list :slot :text
+                                                   :value "remote")
+                                    :actor-id "peer-user"
+                                    :session-id "peer-session"
+                                    :timestamp 104
+                                    :clock '(("peer-user" . 4))
+                                    :sequence 9)))
+    (record-operation journal remote-operation)
+    (acknowledge-journal-operation journal acknowledged-operation)
+    (fail-journal-operation journal failed-operation)
+    (record-local-presence journal
+                           :focus-id "paragraph-1"
+                           :cursor-position 5
+                           :status :editing
+                           :updated-at 105
+                           :metadata (list :color "blue"))
+    (record-local-comment journal
+                          :id "comment-1"
+                          :target-id "paragraph-1"
+                          :body "Persist review note."
+                          :created-at 106
+                          :updated-at 107
+                          :metadata (list :severity :info))
+    (record-workspace-member journal
+                             :actor-id "local-user"
+                             :display-name "Local User"
+                             :role :owner
+                             :status :active
+                             :updated-at 108)
+    (record-local-attachment journal
+                             :id "attachment-1"
+                             :target-id "paragraph-1"
+                             :content-type "image/png"
+                             :byte-size 4096
+                             :digest "sha256:image"
+                             :storage-ref "server://workspace-1/attachments/attachment-1"
+                             :status :available
+                             :created-at 109
+                             :updated-at 110)
+    (record-local-checkpoint journal
+                             :id "checkpoint-1"
+                             :checkpoint-at 111
+                             :storage-ref "server://workspace-1/checkpoints/checkpoint-1"
+                             :byte-size 8192
+                             :digest "sha256:checkpoint"
+                             :status :available
+                             :created-at 112
+                             :updated-at 113)
+    (apply-conflict-sync-payload
+     journal
+     (list :workspace-id "workspace-1"
+           :conflict
+           (list :id "conflict-1"
+                 :target-id "paragraph-1"
+                 :slot :text
+                 :local-operation-id (operation-id pending-operation)
+                 :remote-operation-id (operation-id remote-operation)
+                 :status :open
+                 :created-at 114
+                 :resolved-at nil)))
+    (let* ((payload (operation-journal-plist journal))
+           (restored (make-operation-journal-from-plist payload)))
+      (is (equal payload
+                 (operation-journal-plist restored))
+          "Journal snapshots should round-trip as deterministic plists.")
+      (is (= 4 (journal-next-sequence restored))
+          "Restored journals should preserve the next local sequence.")
+      (is (equal (list (operation-id pending-operation)
+                       (operation-id acknowledged-operation)
+                       (operation-id failed-operation)
+                       (operation-id remote-operation))
+                 (mapcar #'operation-id (journal-operations restored)))
+          "Restored journals should preserve operation append order.")
+      (is (eq :pending
+              (journal-operation-queue-status restored pending-operation))
+          "Restored journals should preserve pending queue entries.")
+      (is (eq :acknowledged
+              (journal-operation-queue-status restored acknowledged-operation))
+          "Restored journals should preserve acknowledged queue entries.")
+      (is (eq :failed
+              (journal-operation-queue-status restored failed-operation))
+          "Restored journals should preserve failed queue entries.")
+      (is (null (journal-operation-queue-status restored remote-operation))
+          "Restored remote operations should stay outside the local queue.")
+      (is (= 3 (journal-clock-position restored "local-user"))
+          "Restored journals should preserve local vector clocks.")
+      (is (= 4 (journal-clock-position restored "peer-user"))
+          "Restored journals should preserve merged peer vector clocks.")
+      (is (find-journal-presence restored "local-user" "local-session")
+          "Restored journals should preserve presence state.")
+      (is (find-journal-comment restored "comment-1")
+          "Restored journals should preserve comments.")
+      (is (find-journal-member restored "local-user")
+          "Restored journals should preserve workspace membership.")
+      (is (find-journal-attachment restored "attachment-1")
+          "Restored journals should preserve attachment metadata.")
+      (is (find-journal-checkpoint restored "checkpoint-1")
+          "Restored journals should preserve checkpoint metadata.")
+      (is (find-journal-conflict restored "conflict-1")
+          "Restored journals should preserve conflict records."))))
+
 (deftest apply-workspace-operation-sets-target-slot ()
   (let* ((registry (make-object-registry))
          (paragraph (make-paragraph :text "draft" :registry registry))
