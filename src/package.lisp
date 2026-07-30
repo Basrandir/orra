@@ -206,6 +206,7 @@
    #:list-block-ordered-p
    #:load-workspace
    #:load-workspace-into-application
+   #:load-operation-journal-from-file
    #:load-workspace-from-file
    #:make-application
    #:make-code-block

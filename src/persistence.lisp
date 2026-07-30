@@ -404,17 +404,32 @@
            (decode-value (getf record :environment) object-table))))
   object)
 
-(defun workspace-file-payload (workspace &key registry (mode :save) timestamp)
+(defun workspace-operation-journal-payload (workspace journal)
+  (let ((payload (operation-journal-plist journal)))
+    (unless (equal (getf payload :workspace-id)
+                   (object-id workspace))
+      (error "Operation journal workspace ~S does not match workspace ~S."
+             (getf payload :workspace-id)
+             (object-id workspace)))
+    payload))
+
+(defun workspace-file-payload (workspace &key registry (mode :save) timestamp
+                                           journal)
   (let* ((objects (if registry
                       (remove-if-not #'persistable-object-p
                                      (registry-objects-list registry))
                       (collect-workspace-objects workspace)))
          (timestamp (or timestamp (get-universal-time)))
-         (payload (list :version *workspace-file-version*
-                        :mode mode
-                        :saved-at timestamp
-                        :workspace-id (object-id workspace)
-                        :objects (mapcar #'serialize-object-record objects))))
+         (payload (append
+                   (list :version *workspace-file-version*
+                         :mode mode
+                         :saved-at timestamp
+                         :workspace-id (object-id workspace)
+                         :objects (mapcar #'serialize-object-record objects))
+                   (when journal
+                     (list :operation-journal
+                           (workspace-operation-journal-payload workspace
+                                                                journal))))))
     (case mode
       (:archive
        (append payload (list :archived-at timestamp)))
@@ -466,26 +481,49 @@
       (t
        (error "Unsupported workspace file version ~A." version)))))
 
-(defun save-workspace-to-file (workspace path &key registry (mode :save))
+(defun save-workspace-to-file (workspace path &key registry (mode :save)
+						journal)
   (write-workspace-payload-to-file
    (workspace-file-payload workspace
                            :registry registry
-                           :mode mode)
+                           :mode mode
+                           :journal journal)
    path))
 
-(defun clone-workspace-to-file (workspace path &key registry)
-  (save-workspace-to-file workspace path :registry registry :mode :clone))
+(defun clone-workspace-to-file (workspace path &key registry journal)
+  (save-workspace-to-file workspace path
+                          :registry registry
+                          :mode :clone
+                          :journal journal))
 
-(defun archive-workspace-to-file (workspace path &key registry)
-  (save-workspace-to-file workspace path :registry registry :mode :archive))
+(defun archive-workspace-to-file (workspace path &key registry journal)
+  (save-workspace-to-file workspace path
+                          :registry registry
+                          :mode :archive
+                          :journal journal))
 
-(defun checkpoint-workspace-to-file (workspace path &key registry timestamp)
+(defun checkpoint-workspace-to-file (workspace path &key registry timestamp
+                                                      journal)
   (write-workspace-payload-to-file
    (workspace-file-payload workspace
                            :registry registry
                            :mode :checkpoint
-                           :timestamp timestamp)
+                           :timestamp timestamp
+                           :journal journal)
    path))
+
+(defun load-operation-journal-from-file (path)
+  (let* ((payload (migrate-workspace-payload
+                   (read-workspace-payload-from-file path)))
+         (journal-payload (getf payload :operation-journal)))
+    (when journal-payload
+      (let ((journal (make-operation-journal-from-plist journal-payload)))
+        (unless (equal (journal-workspace-id journal)
+                       (getf payload :workspace-id))
+          (error "Operation journal workspace ~S does not match workspace file ~S."
+                 (journal-workspace-id journal)
+                 (getf payload :workspace-id)))
+        journal))))
 
 (defun workspace-checkpoint-record (path)
   (handler-case

@@ -5644,6 +5644,78 @@
         (when (probe-file path)
           (delete-file path))))))
 
+(deftest workspace-persistence-round-trips-operation-journal ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (workspace (application-workspace application))
+         (journal (make-operation-journal
+                   :workspace-id (object-id workspace)
+                   :actor-id "local-user"
+                   :session-id "local-session"))
+         (operation
+          (record-local-operation journal
+                                  :set-slot
+                                  :target-id "paragraph-1"
+                                  :payload (list :slot :text
+                                                 :value "durable draft")
+                                  :timestamp 100)))
+    (record-local-presence journal
+                           :focus-id "paragraph-1"
+                           :cursor-position 7
+                           :status :editing
+                           :updated-at 101
+                           :metadata (list :color "amber"))
+    (record-local-comment journal
+                          :id "comment-1"
+                          :target-id "paragraph-1"
+                          :body "Persist this review note."
+                          :created-at 102
+                          :updated-at 103
+                          :metadata (list :kind :review))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace
+                                     path
+                                     :registry (application-registry application)
+                                     :journal journal)
+             (let* ((payload (read-persisted-payload path))
+                    (serialized-journal (getf payload :operation-journal))
+                    (restored-journal (load-operation-journal-from-file path)))
+               (is (equal (operation-journal-plist journal)
+                          serialized-journal)
+                   "Workspace saves should embed operation journal snapshots.")
+               (is (equal (operation-journal-plist journal)
+                          (operation-journal-plist restored-journal))
+                   "Persisted operation journals should load deterministically.")
+               (is (eq :pending
+                       (journal-operation-queue-status restored-journal
+                                                       operation))
+                   "Persisted journals should preserve pending queue state.")
+               (is (find-journal-presence restored-journal
+                                          "local-user"
+                                          "local-session")
+                   "Persisted journals should preserve local presence state.")
+               (is (find-journal-comment restored-journal "comment-1")
+                   "Persisted journals should preserve comment state."))
+             (checkpoint-workspace-to-file workspace
+                                           path
+                                           :registry
+                                           (application-registry application)
+                                           :timestamp 200
+                                           :journal journal)
+             (let ((payload (read-persisted-payload path))
+                   (restored-journal
+                    (load-operation-journal-from-file path)))
+               (is (eq :checkpoint (getf payload :mode))
+                   "Checkpoint saves should preserve checkpoint mode.")
+               (is (= 200 (getf payload :checkpoint-at))
+                   "Checkpoint saves should preserve checkpoint timestamps.")
+               (is (equal (operation-journal-plist journal)
+                          (operation-journal-plist restored-journal))
+                   "Checkpoint saves should embed operation journal snapshots.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application
