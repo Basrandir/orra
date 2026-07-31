@@ -5955,6 +5955,108 @@
                       (find-object peer-registry (object-id block))))
             "Replaying a code edit should converge on the local source.")))))
 
+(deftest code-evaluation-records-replayable-result-operation ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (block (invoke-command application
+                                'append-code-block
+                                "(+ 20 22)"))
+         (result (invoke-command application
+                                 'evaluate-code-block
+                                 (object-id block)))
+         (operations (journal-operations journal))
+         (evaluation-operation (second operations)))
+    (is (equal '(:create-object :evaluate-cell)
+               (mapcar #'operation-type operations))
+        "Code evaluation should follow creation with one semantic operation.")
+    (is (equal (object-id block)
+               (operation-target-id evaluation-operation))
+        "Evaluation operations should target the evaluated code block.")
+    (is (equal (list :result-id (object-id result)
+                     :status :ok
+                     :value 42
+                     :presentation "42"
+                     :input-source "(+ 20 22)"
+                     :input-forms '((+ 20 22))
+                     :package-name (package-name *package*)
+                     :evaluated-at (result-block-evaluated-at result)
+                     :environment (list :package (package-name *package*)
+                                        :language :common-lisp))
+               (operation-payload evaluation-operation))
+        "Evaluation operations should capture the complete reproducible result.")
+    (is (eq :pending
+            (journal-operation-queue-status journal evaluation-operation))
+        "Local evaluations should remain pending until synchronized.")
+    (let* ((peer-registry (make-object-registry))
+           (parent (parent-of block))
+           (peer-parent (make-instance 'section
+                                       :id (object-id parent)
+                                       :kind :section
+                                       :title "Peer Section")))
+      (register-object peer-registry peer-parent)
+      (dolist (operation operations)
+        (apply-workspace-operation peer-registry operation))
+      (let* ((peer-block (find-object peer-registry (object-id block)))
+             (peer-result (code-block-result peer-block)))
+        (is (typep peer-result 'result-block)
+            "Peer replay should materialize the captured result block.")
+        (is (string= (object-id result) (object-id peer-result))
+            "Peer replay should preserve result identity.")
+        (is (eq :ok (result-block-status peer-result))
+            "Peer replay should preserve successful evaluation status.")
+        (is (= 42 (result-block-value peer-result))
+            "Peer replay should use the captured value without evaluating source.")
+        (is (equal (result-block-environment result)
+                   (result-block-environment peer-result))
+            "Peer replay should preserve evaluation environment metadata.")))))
+
+(deftest failed-code-evaluation-records-replayable-result-operation ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (block (invoke-command application
+                                'append-code-block
+                                "missing-collaboration-value"))
+         (result (invoke-command application
+                                 'evaluate-code-block
+                                 (object-id block)))
+         (evaluation-operation
+          (find :evaluate-cell
+                (journal-operations journal)
+                :key #'operation-type)))
+    (is evaluation-operation
+        "Failed evaluations should still record a semantic operation.")
+    (is (eq :error (getf (operation-payload evaluation-operation) :status))
+        "Failed evaluation operations should capture error status.")
+    (is (string= (result-block-presentation result)
+                 (getf (operation-payload evaluation-operation)
+                       :presentation))
+        "Failed evaluation operations should capture the displayed diagnostic.")
+    (is (string= "UNBOUND-VARIABLE"
+                 (getf (getf (operation-payload evaluation-operation)
+                             :environment)
+                       :condition-type))
+        "Failed evaluation operations should preserve condition metadata.")
+    (let* ((peer-registry (make-object-registry))
+           (parent (parent-of block))
+           (peer-parent (make-instance 'section
+                                       :id (object-id parent)
+                                       :kind :section
+                                       :title "Peer Section")))
+      (register-object peer-registry peer-parent)
+      (dolist (operation (journal-operations journal))
+        (apply-workspace-operation peer-registry operation))
+      (let ((peer-result
+             (code-block-result
+              (find-object peer-registry (object-id block)))))
+        (is (eq :error (result-block-status peer-result))
+            "Peer replay should preserve failed evaluation status.")
+        (is (string= (result-block-presentation result)
+                     (result-block-presentation peer-result))
+            "Peer replay should preserve the captured evaluation diagnostic.")
+        (is (equal (result-block-environment result)
+                   (result-block-environment peer-result))
+            "Peer replay should preserve captured condition metadata.")))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application

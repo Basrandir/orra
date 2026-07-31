@@ -1145,6 +1145,24 @@
             (make-result-block
              :registry (application-registry application)))))
 
+(defun evaluation-result-operation-payload (result)
+  (list :result-id (object-id result)
+        :status (result-block-status result)
+        :value (copy-tree (result-block-value result))
+        :presentation (result-block-presentation result)
+        :input-source (result-block-input-source result)
+        :input-forms (copy-tree (result-block-input-forms result))
+        :package-name (result-block-package result)
+        :evaluated-at (result-block-evaluated-at result)
+        :environment (copy-tree (result-block-environment result))))
+
+(defun record-application-code-evaluation (application block result)
+  (record-local-operation
+   (ensure-application-operation-journal application)
+   :evaluate-cell
+   :target-id (object-id block)
+   :payload (evaluation-result-operation-payload result)))
+
 (defun store-code-block-result (application block status presentation
                                 &key value input-source input-forms
                                   package-name evaluated-at environment)
@@ -1157,7 +1175,9 @@
                         :input-forms input-forms
                         :package-name package-name
                         :evaluated-at evaluated-at
-                        :environment environment)))
+                        :environment environment)
+    (record-application-code-evaluation application block result)
+    result))
 
 (defun store-result-block (result status presentation
                            &key value input-source input-forms
