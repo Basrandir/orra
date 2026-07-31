@@ -5716,6 +5716,88 @@
         (when (probe-file path)
           (delete-file path))))))
 
+(deftest application-owns-workspace-operation-journal ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (workspace (application-workspace application))
+         (journal (application-operation-journal application)))
+    (is (typep journal 'operation-journal)
+        "Applications should own an operation journal.")
+    (is (string= (object-id workspace)
+                 (journal-workspace-id journal))
+        "Application journals should belong to the active workspace.")
+    (is (stringp (journal-actor-id journal))
+        "Application journals should have a local actor identity.")
+    (is (stringp (journal-session-id journal))
+        "Application journals should have a local session identity.")))
+
+(deftest application-save-and-load-preserve-operation-journal ()
+  (let* ((source (make-application :backend (make-null-backend)))
+         (source-journal (application-operation-journal source))
+         (target-id (object-id (focused-model source)))
+         (operation
+          (record-local-operation source-journal
+                                  :set-slot
+                                  :target-id target-id
+                                  :payload (list :slot :text
+                                                 :value "queued edit")
+                                  :timestamp 100)))
+    (record-local-presence source-journal
+                           :focus-id target-id
+                           :cursor-position 4
+                           :status :editing
+                           :updated-at 101)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (invoke-command source 'save-workspace path)
+             (let ((loaded (make-application :backend (make-null-backend))))
+               (invoke-command loaded 'load-workspace path)
+               (let ((loaded-journal
+                      (application-operation-journal loaded)))
+                 (is (equal (operation-journal-plist source-journal)
+                            (operation-journal-plist loaded-journal))
+                     "Application save/load should restore collaboration state.")
+                 (is (eq :pending
+                         (journal-operation-queue-status loaded-journal
+                                                         operation))
+                     "Application save/load should restore pending operations."))))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest application-load-without-journal-creates-workspace-journal ()
+  (let* ((source (make-application :backend (make-null-backend)))
+         (loaded (make-application :backend (make-null-backend)))
+         (previous-journal (application-operation-journal loaded))
+         (actor-id (journal-actor-id previous-journal))
+         (session-id (journal-session-id previous-journal)))
+    (record-local-operation previous-journal
+                            :set-slot
+                            :target-id "discarded-target"
+                            :payload (list :slot :text :value "discarded")
+                            :timestamp 100)
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file
+              (application-workspace source)
+              path
+              :registry (application-registry source))
+             (invoke-command loaded 'load-workspace path)
+             (let ((journal (application-operation-journal loaded)))
+               (is (not (eq previous-journal journal))
+                   "Loading a journal-free workspace should replace stale state.")
+               (is (string= (object-id (application-workspace loaded))
+                            (journal-workspace-id journal))
+                   "Replacement journals should belong to the loaded workspace.")
+               (is (string= actor-id (journal-actor-id journal))
+                   "Journal-free loads should preserve local actor identity.")
+               (is (string= session-id (journal-session-id journal))
+                   "Journal-free loads should preserve local session identity.")
+               (is (null (journal-operations journal))
+                   "Journal-free loads should not retain operations from the prior workspace.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application
@@ -5906,6 +5988,13 @@
            (invoke-command source
                            'append-paragraph
                            "recovered checkpoint paragraph")
+           (let ((target-id (object-id (focused-model source))))
+             (record-local-operation
+              (application-operation-journal source)
+              :set-slot
+              :target-id target-id
+              :payload (list :slot :text :value "queued recovery edit")
+              :timestamp 299))
            (maybe-checkpoint-workspace source :now 300 :force t)
            (invoke-command application
                            'append-paragraph
@@ -5922,6 +6011,11 @@
                      (application-workspace application)
                      "unrecovered paragraph"))
                "Recovery should replace the current workspace.")
+           (is (= 1
+                  (length
+                   (journal-pending-operations
+                    (application-operation-journal application))))
+               "Recovery should restore pending collaboration operations.")
            (is (probe-file (application-last-checkpoint-path application))
                "Recovery should remember the checkpoint path it loaded."))
       (delete-test-directory directory))))

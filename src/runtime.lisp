@@ -15,6 +15,10 @@
    (workspace
     :initarg :workspace
     :accessor application-workspace)
+   (operation-journal
+    :initarg :operation-journal
+    :accessor application-operation-journal
+    :initform nil)
    (backend
     :initarg :backend
     :accessor application-backend)
@@ -82,6 +86,27 @@
     :initarg :last-checkpoint-path
     :accessor application-last-checkpoint-path
     :initform nil)))
+
+(defun operation-journal-for-workspace (workspace &key journal actor-id
+                                                    session-id)
+  (let ((journal
+         (or journal
+             (make-operation-journal
+              :workspace-id (object-id workspace)
+              :actor-id (or actor-id (fresh-id "actor"))
+              :session-id (or session-id (fresh-id "session"))))))
+    (unless (equal (journal-workspace-id journal)
+                   (object-id workspace))
+      (error "Operation journal workspace ~S does not match workspace ~S."
+             (journal-workspace-id journal)
+             (object-id workspace)))
+    journal))
+
+(defun ensure-application-operation-journal (application)
+  (or (application-operation-journal application)
+      (setf (application-operation-journal application)
+            (operation-journal-for-workspace
+             (application-workspace application)))))
 
 (defun mark-application-dirty (application &key (region :full))
   (setf (application-dirty-p application) t)
@@ -155,7 +180,10 @@
   (checkpoint-workspace-to-file (application-workspace application)
                                 path
                                 :registry (application-registry application)
-                                :timestamp timestamp)
+                                :timestamp timestamp
+                                :journal
+                                (ensure-application-operation-journal
+                                 application))
   (setf (application-last-checkpoint-at application) timestamp)
   (setf (application-last-checkpoint-path application) path)
   (record-application-event application
@@ -1311,9 +1339,15 @@
               :environment condition-environment)))))))
 
 (defun make-application (&key backend workspace save-path checkpoint-directory
+                           operation-journal actor-id session-id
                            (checkpoint-interval 300))
   (let* ((registry (make-object-registry))
          (workspace (or workspace (make-scratch-workspace registry)))
+         (operation-journal
+          (operation-journal-for-workspace workspace
+                                           :journal operation-journal
+                                           :actor-id actor-id
+                                           :session-id session-id))
          (application (make-instance 'application
                                      :registry registry
                                      :commands (make-hash-table :test #'equal)
@@ -1321,6 +1355,7 @@
                                      :editor-state-table
                                      (make-hash-table :test #'equal)
                                      :workspace workspace
+                                     :operation-journal operation-journal
                                      :backend (or backend (make-null-backend))
                                      :save-path save-path
                                      :checkpoint-directory checkpoint-directory
@@ -1390,20 +1425,30 @@
 
 (defun load-workspace-into-application (application path &key
 							   (update-save-path-p t))
-  (let ((registry (make-object-registry)))
-    (setf (application-registry application) registry)
-    (setf (application-editor-state-table application)
-          (make-hash-table :test #'equal))
-    (setf (application-workspace application)
-          (load-workspace-from-file path :registry registry))
-    (install-defined-commands application)
-    (when update-save-path-p
-      (setf (application-save-path application) path))
-    (setf (application-viewport-y application) 0)
-    (rebuild-root-cell application)
-    (ensure-valid-focus application)
-    (rebuild-root-cell application)
-    application))
+  (let* ((registry (make-object-registry))
+         (current-journal
+          (ensure-application-operation-journal application)))
+    (multiple-value-bind (workspace loaded-journal)
+        (load-workspace-from-file path :registry registry)
+      (let ((journal
+             (operation-journal-for-workspace
+              workspace
+              :journal loaded-journal
+              :actor-id (journal-actor-id current-journal)
+              :session-id (journal-session-id current-journal))))
+        (setf (application-registry application) registry)
+        (setf (application-editor-state-table application)
+              (make-hash-table :test #'equal))
+        (setf (application-workspace application) workspace)
+        (setf (application-operation-journal application) journal)
+        (install-defined-commands application)
+        (when update-save-path-p
+          (setf (application-save-path application) path))
+        (setf (application-viewport-y application) 0)
+        (rebuild-root-cell application)
+        (ensure-valid-focus application)
+        (rebuild-root-cell application)
+        application))))
 
 (defun recover-workspace-from-checkpoint (application &optional path)
   (let* ((checkpoint-path
@@ -2227,19 +2272,27 @@
     (setf (application-save-path application) target)
     (save-workspace-to-file (application-workspace application)
                             target
-                            :registry (application-registry application))))
+                            :registry (application-registry application)
+                            :journal
+                            (ensure-application-operation-journal
+                             application))))
 
 (define-command clone-workspace (application path)
   "Persist a loadable copy of the current workspace without changing the save path."
   (clone-workspace-to-file (application-workspace application)
                            path
-                           :registry (application-registry application)))
+                           :registry (application-registry application)
+                           :journal
+                           (ensure-application-operation-journal application)))
 
 (define-command archive-workspace (application path)
   "Persist a loadable archive snapshot of the current workspace."
   (archive-workspace-to-file (application-workspace application)
                              path
-                             :registry (application-registry application)))
+                             :registry (application-registry application)
+                             :journal
+                             (ensure-application-operation-journal
+                              application)))
 
 (define-command checkpoint-workspace (application &optional path)
   "Persist a loadable checkpoint snapshot of the current workspace."

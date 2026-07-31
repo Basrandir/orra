@@ -512,10 +512,8 @@
                            :journal journal)
    path))
 
-(defun load-operation-journal-from-file (path)
-  (let* ((payload (migrate-workspace-payload
-                   (read-workspace-payload-from-file path)))
-         (journal-payload (getf payload :operation-journal)))
+(defun operation-journal-from-workspace-payload (payload)
+  (let ((journal-payload (getf payload :operation-journal)))
     (when journal-payload
       (let ((journal (make-operation-journal-from-plist journal-payload)))
         (unless (equal (journal-workspace-id journal)
@@ -524,6 +522,11 @@
                  (journal-workspace-id journal)
                  (getf payload :workspace-id)))
         journal))))
+
+(defun load-operation-journal-from-file (path)
+  (operation-journal-from-workspace-payload
+   (migrate-workspace-payload
+    (read-workspace-payload-from-file path))))
 
 (defun workspace-checkpoint-record (path)
   (handler-case
@@ -572,4 +575,5 @@
     (let ((workspace (gethash (getf payload :workspace-id) object-table)))
       (unless (typep workspace 'workspace)
         (error "The file ~A does not describe a workspace." path))
-      workspace)))
+      (values workspace
+              (operation-journal-from-workspace-payload payload)))))

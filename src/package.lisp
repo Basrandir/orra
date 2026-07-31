@@ -15,6 +15,7 @@
    #:application-keymap
    #:application-last-checkpoint-at
    #:application-last-checkpoint-path
+   #:application-operation-journal
    #:application-registry
    #:application-root-cell
    #:application-save-path
