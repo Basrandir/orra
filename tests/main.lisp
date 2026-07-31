@@ -5798,6 +5798,71 @@
         (when (probe-file path)
           (delete-file path))))))
 
+(deftest append-text-and-code-blocks-record-replayable-create-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (paragraph (invoke-command application
+                                    'append-paragraph
+                                    "created locally"))
+         (block (invoke-command application
+                                'append-code-block
+                                "(+ 20 22)"
+                                :common-lisp))
+         (operations (journal-operations journal))
+         (paragraph-operation (first operations))
+         (block-operation (second operations))
+         (parent (parent-of paragraph)))
+    (is (= 2 (length operations))
+        "Appending text and code blocks should record two operations.")
+    (is (eq :create-object (operation-type paragraph-operation))
+        "Appending a paragraph should record a create-object operation.")
+    (is (string= (object-id paragraph)
+                 (operation-target-id paragraph-operation))
+        "Paragraph creation should retain the new object identity.")
+    (is (equal (list :kind :paragraph
+                     :slots (list :text "created locally")
+                     :parent-id (object-id parent))
+               (operation-payload paragraph-operation))
+        "Paragraph creation should record semantic slots and parent identity.")
+    (is (eq :pending
+            (journal-operation-queue-status journal paragraph-operation))
+        "Paragraph creation should enter the local pending queue.")
+    (is (eq :create-object (operation-type block-operation))
+        "Appending a code block should record a create-object operation.")
+    (is (string= (object-id block)
+                 (operation-target-id block-operation))
+        "Code block creation should retain the new object identity.")
+    (is (equal (list :kind :code-block
+                     :slots (list :language :common-lisp
+                                  :source "(+ 20 22)")
+                     :parent-id (object-id parent))
+               (operation-payload block-operation))
+        "Code creation should record language, source, and parent identity.")
+    (is (eq :pending
+            (journal-operation-queue-status journal block-operation))
+        "Code creation should enter the local pending queue.")
+    (let* ((peer-registry (make-object-registry))
+           (peer-parent (make-instance 'section
+                                       :id (object-id parent)
+                                       :kind :section
+                                       :title "Peer Section")))
+      (register-object peer-registry peer-parent)
+      (let ((peer-paragraph
+             (apply-workspace-operation peer-registry paragraph-operation))
+            (peer-block
+             (apply-workspace-operation peer-registry block-operation)))
+        (is (string= "created locally"
+                     (paragraph-text peer-paragraph))
+            "Recorded paragraph creation should replay its text.")
+        (is (string= "(+ 20 22)"
+                     (code-block-source peer-block))
+            "Recorded code creation should replay its source.")
+        (is (eq :common-lisp (code-block-language peer-block))
+            "Recorded code creation should replay its language.")
+        (is (equal (list peer-paragraph peer-block)
+                   (children-of peer-parent))
+            "Replayed creations should preserve append order.")))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application
@@ -5984,17 +6049,20 @@
          (let* ((source (make-application :checkpoint-directory directory))
                 (application (make-application
                               :save-path "active-workspace.sexp"
-                              :checkpoint-directory directory)))
+                              :checkpoint-directory directory))
+                (recovery-operation nil))
            (invoke-command source
                            'append-paragraph
                            "recovered checkpoint paragraph")
            (let ((target-id (object-id (focused-model source))))
-             (record-local-operation
-              (application-operation-journal source)
-              :set-slot
-              :target-id target-id
-              :payload (list :slot :text :value "queued recovery edit")
-              :timestamp 299))
+             (setf recovery-operation
+                   (record-local-operation
+                    (application-operation-journal source)
+                    :set-slot
+                    :target-id target-id
+                    :payload (list :slot :text
+                                   :value "queued recovery edit")
+                    :timestamp 299)))
            (maybe-checkpoint-workspace source :now 300 :force t)
            (invoke-command application
                            'append-paragraph
@@ -6011,10 +6079,11 @@
                      (application-workspace application)
                      "unrecovered paragraph"))
                "Recovery should replace the current workspace.")
-           (is (= 1
-                  (length
-                   (journal-pending-operations
-                    (application-operation-journal application))))
+           (is (find (operation-id recovery-operation)
+                     (journal-pending-operations
+                      (application-operation-journal application))
+                     :key #'operation-id
+                     :test #'string=)
                "Recovery should restore pending collaboration operations.")
            (is (probe-file (application-last-checkpoint-path application))
                "Recovery should remember the checkpoint path it loaded."))

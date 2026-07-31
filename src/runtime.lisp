@@ -108,6 +108,15 @@
             (operation-journal-for-workspace
              (application-workspace application)))))
 
+(defun record-application-object-creation (application object parent slots)
+  (record-local-operation
+   (ensure-application-operation-journal application)
+   :create-object
+   :target-id (object-id object)
+   :payload (list :kind (object-kind object)
+                  :slots (copy-tree slots)
+                  :parent-id (object-id parent))))
+
 (defun mark-application-dirty (application &key (region :full))
   (setf (application-dirty-p application) t)
   (when region
@@ -1950,6 +1959,11 @@
                    registry))
          (paragraph (make-paragraph :text text :registry registry)))
     (append-child section paragraph)
+    (record-application-object-creation
+     application
+     paragraph
+     section
+     (list :text (paragraph-text paragraph)))
     (rebuild-root-cell application)
     paragraph))
 
@@ -1964,6 +1978,12 @@
                  :source source
                  :registry registry)))
     (append-child section block)
+    (record-application-object-creation
+     application
+     block
+     section
+     (list :language (code-block-language block)
+           :source (code-block-source block)))
     (rebuild-root-cell application)
     block))
 
