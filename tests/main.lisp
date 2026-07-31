@@ -5863,6 +5863,98 @@
                    (children-of peer-parent))
             "Replayed creations should preserve append order.")))))
 
+(deftest paragraph-editing-records-replayable-text-range-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (paragraph (invoke-command application
+                                    'append-paragraph
+                                    "hello world")))
+    (setf (orra::application-focused-model-id application)
+          (object-id paragraph))
+    (begin-editing-focused-model application)
+    (move-active-buffer-cursor-end application)
+    (loop repeat 5
+          do (move-active-buffer-cursor-left application
+                                             :extend-selection t))
+    (insert-into-active-buffer application "Orra")
+    (undo-active-buffer-edit application)
+    (redo-active-buffer-edit application)
+    (stop-editing application)
+    (let ((operations (journal-operations journal)))
+      (is (equal '(:create-object
+                   :delete-text-range
+                   :insert-text-range
+                   :delete-text-range
+                   :insert-text-range
+                   :delete-text-range
+                   :insert-text-range)
+                 (mapcar #'operation-type operations))
+          "Replacement, undo, and redo should record ordered range operations.")
+      (is (equal (list :slot :text :offset 6 :length 5)
+                 (operation-payload (second operations)))
+          "Selection replacement should first delete the selected paragraph text.")
+      (is (equal (list :slot :text :offset 6 :text "Orra")
+                 (operation-payload (third operations)))
+          "Selection replacement should insert replacement text at the same offset.")
+      (is (equal (list :slot :text :offset 6 :length 4)
+                 (operation-payload (fourth operations)))
+          "Undo should delete the replacement text as a new operation.")
+      (is (equal (list :slot :text :offset 6 :text "world")
+                 (operation-payload (fifth operations)))
+          "Undo should restore the original text as a new operation.")
+      (is (every (lambda (operation)
+                   (eq :pending
+                       (journal-operation-queue-status journal operation)))
+                 operations)
+          "Locally recorded text edits should remain pending until synchronized.")
+      (let* ((peer-registry (make-object-registry))
+             (parent (parent-of paragraph))
+             (peer-parent (make-instance 'section
+                                         :id (object-id parent)
+                                         :kind :section
+                                         :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (operation operations)
+          (apply-workspace-operation peer-registry operation))
+        (let ((peer-paragraph
+               (find-object peer-registry (object-id paragraph))))
+          (is (string= "hello Orra" (paragraph-text peer-paragraph))
+              "Replaying replacement, undo, and redo should converge on local text."))))))
+
+(deftest code-editing-records-source-range-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (block (invoke-command application
+                                'append-code-block
+                                "(+ 1 2)")))
+    (setf (orra::application-focused-model-id application)
+          (object-id block))
+    (begin-editing-focused-model application)
+    (move-active-buffer-cursor-end application)
+    (insert-into-active-buffer application " ")
+    (stop-editing application)
+    (let* ((operations (journal-operations journal))
+           (insert-operation (second operations)))
+      (is (equal '(:create-object :insert-text-range)
+                 (mapcar #'operation-type operations))
+          "Code insertion should follow creation with one range operation.")
+      (is (equal (list :slot :source :offset 7 :text " ")
+                 (operation-payload insert-operation))
+          "Code edits should explicitly target the source slot.")
+      (let* ((peer-registry (make-object-registry))
+             (parent (parent-of block))
+             (peer-parent (make-instance 'section
+                                         :id (object-id parent)
+                                         :kind :section
+                                         :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (operation operations)
+          (apply-workspace-operation peer-registry operation))
+        (is (string= "(+ 1 2) "
+                     (code-block-source
+                      (find-object peer-registry (object-id block))))
+            "Replaying a code edit should converge on the local source.")))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application

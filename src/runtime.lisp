@@ -785,47 +785,98 @@
             (subseq new-content prefix (- new-length suffix))
             (not (string= old-content new-content)))))
 
-(defun sync-code-buffer-content-to-model
-    (block new-content &key previous-content edit-start edit-end replacement)
-  (let ((old-source (code-block-source block)))
-    (unless (string= old-source new-content)
-      (multiple-value-bind (dirty-start dirty-end dirty-replacement changedp)
-          (cond
-            ((and edit-start edit-end replacement)
-             (values edit-start edit-end replacement t))
-            ((and previous-content
-                  (string= (string previous-content) old-source))
-             (string-edit-diff previous-content new-content))
-            (t
-             (values 0 (length old-source) new-content t)))
-        (when changedp
-          (replace-code-block-source-incrementally
-           block
-           new-content
-           dirty-start
-           dirty-end
-           :replacement dirty-replacement
-           :previous-info (code-block-parse-info block))))))
-  block)
+(defun text-edit-hint-valid-p (old-content new-content edit-start edit-end
+                               replacement)
+  (and (integerp edit-start)
+       (integerp edit-end)
+       (<= 0 edit-start edit-end (length old-content))
+       (stringp replacement)
+       (string= new-content
+                (concatenate 'string
+                             (subseq old-content 0 edit-start)
+                             replacement
+                             (subseq old-content edit-end)))))
+
+(defun resolve-text-edit-diff
+    (old-content new-content &key previous-content edit-start edit-end
+                               replacement)
+  (cond
+    ((string= old-content new-content)
+     (values 0 0 "" nil))
+    ((text-edit-hint-valid-p old-content
+                             new-content
+                             edit-start
+                             edit-end
+                             replacement)
+     (values edit-start edit-end replacement t))
+    ((and previous-content
+          (string= (string previous-content) old-content))
+     (string-edit-diff previous-content new-content))
+    (t
+     (string-edit-diff old-content new-content))))
+
+(defun editable-model-text-slot (model)
+  (typecase model
+    (paragraph :text)
+    (code-block :source)
+    (t
+     (error "Model ~A does not have an editable text slot." model))))
+
+(defun record-application-text-replacement
+    (application model edit-start edit-end replacement)
+  (let ((journal (ensure-application-operation-journal application))
+        (slot (editable-model-text-slot model))
+        (target-id (object-id model)))
+    (when (< edit-start edit-end)
+      (record-local-operation
+       journal
+       :delete-text-range
+       :target-id target-id
+       :payload (list :slot slot
+                      :offset edit-start
+                      :length (- edit-end edit-start))))
+    (unless (zerop (length replacement))
+      (record-local-operation
+       journal
+       :insert-text-range
+       :target-id target-id
+       :payload (list :slot slot
+                      :offset edit-start
+                      :text replacement)))))
 
 (defun sync-active-buffer-to-model
     (application &key previous-content edit-start edit-end replacement)
   (when (editing-active-p application)
     (let ((model (active-editor-model application)))
       (when (editable-model-p model)
-        (let ((content (text-buffer-content
-                        (application-active-text-buffer application))))
-          (if (typep model 'code-block)
-              (progn
-                (sync-code-buffer-content-to-model
-                 model
-                 content
-                 :previous-content previous-content
-                 :edit-start edit-start
-                 :edit-end edit-end
-                 :replacement replacement)
-                (sync-active-buffer-structure-selection application))
-              (setf (editable-model-string model) content))))))
+        (let ((old-content (editable-model-string model))
+              (new-content (text-buffer-content
+                            (application-active-text-buffer application))))
+          (multiple-value-bind (dirty-start dirty-end dirty-replacement changedp)
+              (resolve-text-edit-diff
+               old-content
+               new-content
+               :previous-content previous-content
+               :edit-start edit-start
+               :edit-end edit-end
+               :replacement replacement)
+            (when changedp
+              (if (typep model 'code-block)
+                  (replace-code-block-source-incrementally
+                   model
+                   new-content
+                   dirty-start
+                   dirty-end
+                   :replacement dirty-replacement
+                   :previous-info (code-block-parse-info model))
+                  (setf (editable-model-string model) new-content))
+              (record-application-text-replacement application
+                                                   model
+                                                   dirty-start
+                                                   dirty-end
+                                                   dirty-replacement)))
+          (when (typep model 'code-block)
+            (sync-active-buffer-structure-selection application))))))
   application)
 
 (defun begin-editing-model (application model)
