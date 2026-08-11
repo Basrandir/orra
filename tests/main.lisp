@@ -6057,6 +6057,90 @@
                    (result-block-environment peer-result))
             "Peer replay should preserve captured condition metadata.")))))
 
+(deftest rich-block-creation-records-replayable-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (quote (invoke-command application
+                                'append-quote-block
+                                "Lisp is a medium."
+                                "Orra"))
+         (list-block (invoke-command application
+                                     'append-list-block
+                                     '("one" "two")
+                                     t))
+         (table (invoke-command application
+                                'append-table-block
+                                '("Name" "Value")
+                                '(("language" "Common Lisp"))))
+         (tasks (invoke-command application
+                                'append-task-list
+                                (list "draft"
+                                      (make-task-item :text "ship"
+                                                      :done t))))
+         (objects (list quote list-block table tasks))
+         (operations (journal-operations journal))
+         (parent (parent-of quote)))
+    (is (equal '(:create-object :create-object :create-object :create-object)
+               (mapcar #'operation-type operations))
+        "Rich block commands should record one creation operation each.")
+    (is (equal (mapcar #'object-id objects)
+               (mapcar #'operation-target-id operations))
+        "Rich block operations should preserve local object identities.")
+    (is (equal (list (list :kind :quote-block
+                           :slots (list :text "Lisp is a medium."
+                                        :attribution "Orra")
+                           :parent-id (object-id parent))
+                     (list :kind :list-block
+                           :slots (list :items '("one" "two")
+                                        :ordered-p t)
+                           :parent-id (object-id parent))
+                     (list :kind :table-block
+                           :slots (list :columns '("Name" "Value")
+                                        :rows '(("language" "Common Lisp")))
+                           :parent-id (object-id parent))
+                     (list :kind :task-list
+                           :slots (list :items
+                                        (list (make-task-item :text "draft")
+                                              (make-task-item :text "ship"
+                                                              :done t)))
+                           :parent-id (object-id parent)))
+               (mapcar #'operation-payload operations))
+        "Rich block operations should capture normalized semantic slots.")
+    (is (every (lambda (operation)
+                 (eq :pending
+                     (journal-operation-queue-status journal operation)))
+               operations)
+        "Locally created rich blocks should remain pending until synchronized.")
+    (let ((peer-registry (make-object-registry))
+          (peer-parent (make-instance 'section
+                                      :id (object-id parent)
+                                      :kind :section
+                                      :title "Peer Section")))
+      (register-object peer-registry peer-parent)
+      (dolist (operation operations)
+        (apply-workspace-operation peer-registry operation))
+      (let ((peer-quote (find-object peer-registry (object-id quote)))
+            (peer-list (find-object peer-registry (object-id list-block)))
+            (peer-table (find-object peer-registry (object-id table)))
+            (peer-tasks (find-object peer-registry (object-id tasks))))
+        (is (string= "Lisp is a medium." (quote-block-text peer-quote))
+            "Peer replay should preserve quote text.")
+        (is (string= "Orra" (quote-block-attribution peer-quote))
+            "Peer replay should preserve quote attribution.")
+        (is (and (equal '("one" "two") (list-block-items peer-list))
+                 (list-block-ordered-p peer-list))
+            "Peer replay should preserve ordered list semantics.")
+        (is (equal '(("language" "Common Lisp"))
+                   (table-block-rows peer-table))
+            "Peer replay should preserve normalized table data.")
+        (is (equal (list (make-task-item :text "draft")
+                         (make-task-item :text "ship" :done t))
+                   (task-list-items peer-tasks))
+            "Peer replay should preserve normalized task state.")
+        (is (equal (list peer-quote peer-list peer-table peer-tasks)
+                   (children-of peer-parent))
+            "Peer replay should preserve rich block append order.")))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application

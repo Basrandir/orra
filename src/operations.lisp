@@ -2247,6 +2247,35 @@
     (otherwise (set-object-property block slot value)))
   block)
 
+(defun set-quote-block-slot (block slot value)
+  (case slot
+    (:text (setf (quote-block-text block) (normalize-display-string value)))
+    (:attribution
+     (setf (quote-block-attribution block) (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-list-block-slot (block slot value)
+  (case slot
+    (:items (setf (list-block-items block) (normalize-display-strings value)))
+    (:ordered-p (setf (list-block-ordered-p block) (not (null value))))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-table-block-slot (block slot value)
+  (case slot
+    (:columns
+     (setf (table-block-columns block) (normalize-display-strings value)))
+    (:rows (setf (table-block-rows block) (normalize-table-rows value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-task-list-slot (block slot value)
+  (case slot
+    (:items (setf (task-list-items block) (normalize-task-items value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
 (defun set-semantic-object-slot (object slot value)
   (typecase object
     (workspace (set-workspace-slot object slot value))
@@ -2254,6 +2283,10 @@
     (section (set-section-slot object slot value))
     (paragraph (set-paragraph-slot object slot value))
     (code-block (set-code-block-slot object slot value))
+    (quote-block (set-quote-block-slot object slot value))
+    (list-block (set-list-block-slot object slot value))
+    (table-block (set-table-block-slot object slot value))
+    (task-list (set-task-list-slot object slot value))
     (t
      (set-object-property object slot value)
      object)))
@@ -2294,6 +2327,25 @@
     (section
      (case slot
        (:title (section-title object))
+       (otherwise (object-property object slot))))
+    (quote-block
+     (case slot
+       (:text (quote-block-text object))
+       (:attribution (quote-block-attribution object))
+       (otherwise (object-property object slot))))
+    (list-block
+     (case slot
+       (:items (list-block-items object))
+       (:ordered-p (list-block-ordered-p object))
+       (otherwise (object-property object slot))))
+    (table-block
+     (case slot
+       (:columns (table-block-columns object))
+       (:rows (table-block-rows object))
+       (otherwise (object-property object slot))))
+    (task-list
+     (case slot
+       (:items (task-list-items object))
        (otherwise (object-property object slot))))
     (otherwise
      (object-property object slot))))

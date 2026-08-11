@@ -2108,6 +2108,12 @@
                  :attribution attribution
                  :registry registry)))
     (append-child section block)
+    (record-application-object-creation
+     application
+     block
+     section
+     (list :text (quote-block-text block)
+           :attribution (quote-block-attribution block)))
     (rebuild-root-cell application)
     block))
 
@@ -2227,6 +2233,12 @@
                  :ordered-p ordered-p
                  :registry registry)))
     (append-child section block)
+    (record-application-object-creation
+     application
+     block
+     section
+     (list :items (list-block-items block)
+           :ordered-p (list-block-ordered-p block)))
     (rebuild-root-cell application)
     block))
 
@@ -2241,6 +2253,12 @@
                  :rows rows
                  :registry registry)))
     (append-child section block)
+    (record-application-object-creation
+     application
+     block
+     section
+     (list :columns (table-block-columns block)
+           :rows (table-block-rows block)))
     (rebuild-root-cell application)
     block))
 
@@ -2254,6 +2272,11 @@
                  :items items
                  :registry registry)))
     (append-child section block)
+    (record-application-object-creation
+     application
+     block
+     section
+     (list :items (task-list-items block)))
     (rebuild-root-cell application)
     block))
 
