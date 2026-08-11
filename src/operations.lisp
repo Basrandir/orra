@@ -1976,6 +1976,22 @@
      (make-instance 'quote-block :id id :kind :quote-block))
     (:reference-block
      (make-instance 'reference-block :id id :kind :reference-block))
+    (:inspector-block
+     (make-instance 'inspector-block :id id :kind :inspector-block))
+    (:source-browser-block
+     (make-instance 'source-browser-block :id id :kind :source-browser-block))
+    (:cross-reference-browser-block
+     (make-instance 'cross-reference-browser-block
+                    :id id
+                    :kind :cross-reference-browser-block))
+    (:stack-frame-browser-block
+     (make-instance 'stack-frame-browser-block
+                    :id id
+                    :kind :stack-frame-browser-block))
+    (:condition-browser-block
+     (make-instance 'condition-browser-block
+                    :id id
+                    :kind :condition-browser-block))
     (:list-block
      (make-instance 'list-block :id id :kind :list-block))
     (:table-block
@@ -2009,9 +2025,9 @@
              value))
     value))
 
-(defun apply-semantic-slots (object slots)
+(defun apply-semantic-slots (registry object slots)
   (loop for (slot value) on slots by #'cddr
-        do (set-semantic-object-slot object slot value))
+        do (set-semantic-object-slot object slot value registry))
   object)
 
 (defun apply-object-properties (object properties)
@@ -2276,7 +2292,99 @@
     (otherwise (set-object-property block slot value)))
   block)
 
-(defun set-semantic-object-slot (object slot value)
+(defun semantic-target-object (registry object slot target-id)
+  (unless registry
+    (error "Setting semantic slot ~S on ~S requires an object registry."
+           slot
+           (object-id object)))
+  (or (find-object registry target-id)
+      (error "Semantic slot ~S on ~S references unknown object ~S."
+             slot
+             (object-id object)
+             target-id)))
+
+(defun semantic-result-target-object (registry object slot target-id)
+  (let ((target (semantic-target-object registry object slot target-id)))
+    (unless (typep target 'result-block)
+      (error "Semantic slot ~S on ~S requires a result block, got ~S."
+             slot
+             (object-id object)
+             (object-kind target)))
+    target))
+
+(defun set-reference-block-slot (block slot value registry)
+  (case slot
+    (:target-id
+     (setf (reference-block-target block)
+           (semantic-target-object registry block slot value)))
+    (:label
+     (setf (reference-block-label block) (normalize-display-string value)))
+    (:note
+     (setf (reference-block-note block) (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-inspector-block-slot (block slot value registry)
+  (case slot
+    (:target-id
+     (setf (inspector-block-target block)
+           (semantic-target-object registry block slot value)))
+    (:label
+     (setf (inspector-block-label block) (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-source-browser-block-slot (block slot value)
+  (case slot
+    (:package-name
+     (setf (source-browser-block-package block)
+           (normalize-display-string value)))
+    (:symbol-name
+     (setf (source-browser-block-symbol block)
+           (normalize-display-string value)))
+    (:label
+     (setf (source-browser-block-label block)
+           (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-cross-reference-browser-block-slot (block slot value)
+  (case slot
+    (:package-name
+     (setf (cross-reference-browser-block-package block)
+           (normalize-display-string value)))
+    (:symbol-name
+     (setf (cross-reference-browser-block-symbol block)
+           (normalize-display-string value)))
+    (:label
+     (setf (cross-reference-browser-block-label block)
+           (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-stack-frame-browser-block-slot (block slot value registry)
+  (case slot
+    (:target-id
+     (setf (stack-frame-browser-block-target block)
+           (semantic-result-target-object registry block slot value)))
+    (:label
+     (setf (stack-frame-browser-block-label block)
+           (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-condition-browser-block-slot (block slot value registry)
+  (case slot
+    (:target-id
+     (setf (condition-browser-block-target block)
+           (semantic-result-target-object registry block slot value)))
+    (:label
+     (setf (condition-browser-block-label block)
+           (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-semantic-object-slot (object slot value &optional registry)
   (typecase object
     (workspace (set-workspace-slot object slot value))
     (notebook (set-notebook-slot object slot value))
@@ -2287,6 +2395,15 @@
     (list-block (set-list-block-slot object slot value))
     (table-block (set-table-block-slot object slot value))
     (task-list (set-task-list-slot object slot value))
+    (reference-block (set-reference-block-slot object slot value registry))
+    (inspector-block (set-inspector-block-slot object slot value registry))
+    (source-browser-block (set-source-browser-block-slot object slot value))
+    (cross-reference-browser-block
+     (set-cross-reference-browser-block-slot object slot value))
+    (stack-frame-browser-block
+     (set-stack-frame-browser-block-slot object slot value registry))
+    (condition-browser-block
+     (set-condition-browser-block-slot object slot value registry))
     (t
      (set-object-property object slot value)
      object)))
@@ -2347,6 +2464,43 @@
      (case slot
        (:items (task-list-items object))
        (otherwise (object-property object slot))))
+    (reference-block
+     (case slot
+       (:target-id (and (reference-block-target object)
+                        (object-id (reference-block-target object))))
+       (:label (reference-block-label object))
+       (:note (reference-block-note object))
+       (otherwise (object-property object slot))))
+    (inspector-block
+     (case slot
+       (:target-id (and (inspector-block-target object)
+                        (object-id (inspector-block-target object))))
+       (:label (inspector-block-label object))
+       (otherwise (object-property object slot))))
+    (source-browser-block
+     (case slot
+       (:package-name (source-browser-block-package object))
+       (:symbol-name (source-browser-block-symbol object))
+       (:label (source-browser-block-label object))
+       (otherwise (object-property object slot))))
+    (cross-reference-browser-block
+     (case slot
+       (:package-name (cross-reference-browser-block-package object))
+       (:symbol-name (cross-reference-browser-block-symbol object))
+       (:label (cross-reference-browser-block-label object))
+       (otherwise (object-property object slot))))
+    (stack-frame-browser-block
+     (case slot
+       (:target-id (and (stack-frame-browser-block-target object)
+                        (object-id (stack-frame-browser-block-target object))))
+       (:label (stack-frame-browser-block-label object))
+       (otherwise (object-property object slot))))
+    (condition-browser-block
+     (case slot
+       (:target-id (and (condition-browser-block-target object)
+                        (object-id (condition-browser-block-target object))))
+       (:label (condition-browser-block-label object))
+       (otherwise (object-property object slot))))
     (otherwise
      (object-property object slot))))
 
@@ -2384,7 +2538,8 @@
                 (required-operation-payload-value operation :text))))
     (set-semantic-object-slot object
                               slot
-                              (insert-string-range current-text offset text))))
+                              (insert-string-range current-text offset text)
+                              registry)))
 
 (defun apply-delete-text-range-operation (registry operation)
   (let* ((object (target-object-for-operation registry operation))
@@ -2403,7 +2558,8 @@
              range-length))
     (set-semantic-object-slot object
                               slot
-                              (delete-string-range current-text offset range-length))))
+                              (delete-string-range current-text offset range-length)
+                              registry)))
 
 (defun created-object-for-operation (registry operation)
   (let* ((target-id (ensure-operation-target-id operation))
@@ -2424,7 +2580,8 @@
 
 (defun apply-create-object-operation (registry operation)
   (let ((object (created-object-for-operation registry operation)))
-    (apply-semantic-slots object
+    (apply-semantic-slots registry
+                          object
                           (ensure-plist-payload operation :slots))
     (apply-object-properties object
                              (ensure-plist-payload operation :properties))
@@ -2448,7 +2605,8 @@
     (set-semantic-object-slot
      (target-object-for-operation registry operation)
      slot
-     (operation-payload-value operation :value))))
+     (operation-payload-value operation :value)
+     registry)))
 
 (defun apply-attach-metadata-operation (registry operation)
   (apply-object-metadata

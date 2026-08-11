@@ -2133,6 +2133,13 @@
                    :note note
                    :registry registry)))
       (append-child section block)
+      (record-application-object-creation
+       application
+       block
+       section
+       (list :target-id (object-id (reference-block-target block))
+             :label (reference-block-label block)
+             :note (reference-block-note block)))
       (rebuild-root-cell application)
       block)))
 
@@ -2151,6 +2158,12 @@
                    :label label
                    :registry registry)))
       (append-child section block)
+      (record-application-object-creation
+       application
+       block
+       section
+       (list :target-id (object-id (inspector-block-target block))
+             :label (inspector-block-label block)))
       (rebuild-root-cell application)
       block)))
 
@@ -2167,6 +2180,13 @@
                  :label label
                  :registry registry)))
     (append-child section block)
+    (record-application-object-creation
+     application
+     block
+     section
+     (list :package-name (source-browser-block-package block)
+           :symbol-name (source-browser-block-symbol block)
+           :label (source-browser-block-label block)))
     (rebuild-root-cell application)
     block))
 
@@ -2183,6 +2203,13 @@
                  :label label
                  :registry registry)))
     (append-child section block)
+    (record-application-object-creation
+     application
+     block
+     section
+     (list :package-name (cross-reference-browser-block-package block)
+           :symbol-name (cross-reference-browser-block-symbol block)
+           :label (cross-reference-browser-block-label block)))
     (rebuild-root-cell application)
     block))
 
@@ -2201,6 +2228,12 @@
                    :label label
                    :registry registry)))
       (append-child section block)
+      (record-application-object-creation
+       application
+       block
+       section
+       (list :target-id (object-id (stack-frame-browser-block-target block))
+             :label (stack-frame-browser-block-label block)))
       (rebuild-root-cell application)
       block)))
 
@@ -2219,6 +2252,12 @@
                    :label label
                    :registry registry)))
       (append-child section block)
+      (record-application-object-creation
+       application
+       block
+       section
+       (list :target-id (object-id (condition-browser-block-target block))
+             :label (condition-browser-block-label block)))
       (rebuild-root-cell application)
       block)))
 

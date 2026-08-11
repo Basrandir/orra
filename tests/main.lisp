@@ -6141,6 +6141,138 @@
                    (children-of peer-parent))
             "Peer replay should preserve rich block append order.")))))
 
+(deftest lens-block-creation-records-replayable-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (target (invoke-command application
+                                 'append-paragraph
+                                 "Inspectable target"))
+         (reference (invoke-command application
+                                    'append-reference-block
+                                    (object-id target)
+                                    "target reference"
+                                    "Follow this object"))
+         (inspector (invoke-command application
+                                    'append-inspector-block
+                                    (object-id target)
+                                    "target inspector"))
+         (source-browser
+          (invoke-command application
+                          'append-source-browser-block
+                          "COMMON-LISP"
+                          "CAR"
+                          "CAR source"))
+         (cross-reference-browser
+          (invoke-command application
+                          'append-cross-reference-browser-block
+                          "COMMON-LISP"
+                          "CAR"
+                          "CAR references"))
+         (code (invoke-command application
+                               'append-code-block
+                               "(+ 20 22)"))
+         (result (invoke-command application
+                                 'evaluate-code-block
+                                 (object-id code)))
+         (stack-browser
+          (invoke-command application
+                          'append-stack-frame-browser-block
+                          (object-id result)
+                          "evaluation stack"))
+         (condition-browser
+          (invoke-command application
+                          'append-condition-browser-block
+                          (object-id result)
+                          "evaluation condition"))
+         (lenses (list reference
+                       inspector
+                       source-browser
+                       cross-reference-browser
+                       stack-browser
+                       condition-browser))
+         (operations (journal-operations journal))
+         (lens-operations
+          (mapcar (lambda (lens)
+                    (find (object-id lens)
+                          operations
+                          :key #'operation-target-id
+                          :test #'equal))
+                  lenses))
+         (parent (parent-of target)))
+    (is (every (lambda (operation)
+                 (and operation
+                      (eq :create-object (operation-type operation))))
+               lens-operations)
+        "Every local lens command should record a creation operation.")
+    (is (equal (object-id target)
+               (getf (getf (operation-payload (first lens-operations)) :slots)
+                     :target-id))
+        "Reference operations should encode object targets by id.")
+    (is (equal (object-id target)
+               (getf (getf (operation-payload (second lens-operations)) :slots)
+                     :target-id))
+        "Inspector operations should encode object targets by id.")
+    (is (equal (object-id result)
+               (getf (getf (operation-payload (fifth lens-operations)) :slots)
+                     :target-id))
+        "Stack browser operations should encode result targets by id.")
+    (is (every (lambda (operation)
+                 (eq :pending
+                     (journal-operation-queue-status journal operation)))
+               lens-operations)
+        "Locally created lenses should remain pending until synchronized.")
+    (let ((peer-registry (make-object-registry))
+          (peer-parent (make-instance 'section
+                                      :id (object-id parent)
+                                      :kind :section
+                                      :title "Peer Section")))
+      (register-object peer-registry peer-parent)
+      (dolist (operation operations)
+        (apply-workspace-operation peer-registry operation))
+      (let* ((peer-target (find-object peer-registry (object-id target)))
+             (peer-result (find-object peer-registry (object-id result)))
+             (peer-reference (find-object peer-registry (object-id reference)))
+             (peer-inspector (find-object peer-registry (object-id inspector)))
+             (peer-source (find-object peer-registry (object-id source-browser)))
+             (peer-cross-reference
+              (find-object peer-registry (object-id cross-reference-browser)))
+             (peer-stack (find-object peer-registry (object-id stack-browser)))
+             (peer-condition
+              (find-object peer-registry (object-id condition-browser))))
+        (is (eq peer-target (reference-block-target peer-reference))
+            "Peer reference lenses should resolve their target object.")
+        (is (eq peer-target (inspector-block-target peer-inspector))
+            "Peer inspector lenses should resolve their target object.")
+        (is (and (string= "COMMON-LISP"
+                          (source-browser-block-package peer-source))
+                 (string= "CAR" (source-browser-block-symbol peer-source))
+                 (string= "CAR source" (source-browser-block-label peer-source)))
+            "Peer source browsers should preserve symbol coordinates and labels.")
+        (is (and (string= "COMMON-LISP"
+                          (cross-reference-browser-block-package
+                           peer-cross-reference))
+                 (string= "CAR"
+                          (cross-reference-browser-block-symbol
+                           peer-cross-reference)))
+            "Peer cross-reference browsers should preserve symbol coordinates.")
+        (is (eq peer-result (stack-frame-browser-block-target peer-stack))
+            "Peer stack browsers should resolve captured result objects.")
+        (is (eq peer-result
+                (condition-browser-block-target peer-condition))
+            "Peer condition browsers should resolve captured result objects.")
+        (is (equal (mapcar (lambda (object)
+                             (find-object peer-registry (object-id object)))
+                           (list target
+                                 reference
+                                 inspector
+                                 source-browser
+                                 cross-reference-browser
+                                 code
+                                 stack-browser
+                                 condition-browser))
+                   (children-of peer-parent))
+            "Peer replay should preserve lens append order.")))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application
