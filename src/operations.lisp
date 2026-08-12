@@ -2099,13 +2099,19 @@
         :label (operation-link-label operation)
         :metadata (operation-link-metadata operation)))
 
-(defun code-block-target-for-operation (registry operation)
+(defun evaluation-target-for-operation (registry operation)
   (let ((object (target-object-for-operation registry operation)))
-    (unless (typep object 'code-block)
-      (error "Evaluate-cell operation ~A targets non-code object ~S."
+    (unless (or (typep object 'code-block)
+                (typep object 'repl-entry))
+      (error "Evaluate-cell operation ~A targets non-evaluatable object ~S."
              (operation-id operation)
              (object-id object)))
     object))
+
+(defun evaluation-target-source (target)
+  (typecase target
+    (code-block (code-block-source target))
+    (repl-entry (repl-entry-input-source target))))
 
 (defun evaluation-result-id-for-operation (operation)
   (let ((result-id (required-operation-payload-value operation :result-id)))
@@ -2129,7 +2135,7 @@
         registry
         (make-semantic-object-for-operation :result-block result-id))))))
 
-(defun apply-evaluation-result-payload (result operation block)
+(defun apply-evaluation-result-payload (result operation target)
   (setf (result-block-value result)
         (operation-payload-value operation :value))
   (setf (result-block-presentation result)
@@ -2139,7 +2145,7 @@
         (normalize-display-string
          (operation-payload-value operation
                                   :input-source
-                                  (code-block-source block))))
+                                  (evaluation-target-source target))))
   (setf (result-block-input-forms result)
         (operation-payload-value operation :input-forms))
   (setf (result-block-package result)
@@ -2292,6 +2298,21 @@
     (otherwise (set-object-property block slot value)))
   block)
 
+(defun set-repl-block-slot (block slot value)
+  (case slot
+    (:title (setf (repl-block-title block) (normalize-display-string value)))
+    (:package-name
+     (setf (repl-block-package block) (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
+(defun set-repl-entry-slot (entry slot value)
+  (case slot
+    (:input-source
+     (setf (repl-entry-input-source entry) (normalize-display-string value)))
+    (otherwise (set-object-property entry slot value)))
+  entry)
+
 (defun semantic-target-object (registry object slot target-id)
   (unless registry
     (error "Setting semantic slot ~S on ~S requires an object registry."
@@ -2395,6 +2416,8 @@
     (list-block (set-list-block-slot object slot value))
     (table-block (set-table-block-slot object slot value))
     (task-list (set-task-list-slot object slot value))
+    (repl-block (set-repl-block-slot object slot value))
+    (repl-entry (set-repl-entry-slot object slot value))
     (reference-block (set-reference-block-slot object slot value registry))
     (inspector-block (set-inspector-block-slot object slot value registry))
     (source-browser-block (set-source-browser-block-slot object slot value))
@@ -2463,6 +2486,15 @@
     (task-list
      (case slot
        (:items (task-list-items object))
+       (otherwise (object-property object slot))))
+    (repl-block
+     (case slot
+       (:title (repl-block-title object))
+       (:package-name (repl-block-package object))
+       (otherwise (object-property object slot))))
+    (repl-entry
+     (case slot
+       (:input-source (repl-entry-input-source object))
        (otherwise (object-property object slot))))
     (reference-block
      (case slot
@@ -2627,10 +2659,15 @@
     source))
 
 (defun apply-evaluate-cell-operation (registry operation)
-  (let ((block (code-block-target-for-operation registry operation))
+  (let ((target (evaluation-target-for-operation registry operation))
         (result (evaluation-result-block-for-operation registry operation)))
-    (apply-evaluation-result-payload result operation block)
-    (setf (code-block-result block) result)
+    (apply-evaluation-result-payload result operation target)
+    (typecase target
+      (code-block
+       (setf (code-block-result target) result))
+      (repl-entry
+       (setf (repl-entry-result target) result)
+       (setf (parent-of result) target)))
     result))
 
 (defun apply-workspace-operation (registry operation)

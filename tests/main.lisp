@@ -6273,6 +6273,71 @@
                    (children-of peer-parent))
             "Peer replay should preserve lens append order.")))))
 
+(deftest repl-evaluation-records-replayable-transcript-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (repl (invoke-command application
+                               'append-repl-block
+                               "Peer REPL"
+                               "COMMON-LISP-USER"))
+         (entry (invoke-command application
+                                'evaluate-repl-entry
+                                (object-id repl)
+                                "(+ 2 3)"))
+         (result (repl-entry-result entry))
+         (operations (journal-operations journal))
+         (parent (parent-of repl)))
+    (is (equal '(:create-object :create-object :evaluate-cell)
+               (mapcar #'operation-type operations))
+        "REPL evaluation should record transcript creation before its result.")
+    (is (equal (list :kind :repl-block
+                     :slots (list :title "Peer REPL"
+                                  :package-name "COMMON-LISP-USER")
+                     :parent-id (object-id parent))
+               (operation-payload (first operations)))
+        "REPL creation should capture title, package, and parent identity.")
+    (is (equal (list :kind :repl-entry
+                     :slots (list :input-source "(+ 2 3)")
+                     :parent-id (object-id repl))
+               (operation-payload (second operations)))
+        "REPL entry creation should capture source and transcript identity.")
+    (is (equal (object-id entry)
+               (operation-target-id (third operations)))
+        "REPL evaluation operations should target the transcript entry.")
+    (is (equal (object-id result)
+               (getf (operation-payload (third operations)) :result-id))
+        "REPL evaluation operations should preserve result identity.")
+    (is (every (lambda (operation)
+                 (eq :pending
+                     (journal-operation-queue-status journal operation)))
+               operations)
+        "Local REPL transcript operations should remain pending until synchronized.")
+    (let ((peer-registry (make-object-registry))
+          (peer-parent (make-instance 'section
+                                      :id (object-id parent)
+                                      :kind :section
+                                      :title "Peer Section")))
+      (register-object peer-registry peer-parent)
+      (dolist (operation operations)
+        (apply-workspace-operation peer-registry operation))
+      (let* ((peer-repl (find-object peer-registry (object-id repl)))
+             (peer-entry (find-object peer-registry (object-id entry)))
+             (peer-result (find-object peer-registry (object-id result))))
+        (is (and (string= "Peer REPL" (repl-block-title peer-repl))
+                 (string= "COMMON-LISP-USER" (repl-block-package peer-repl)))
+            "Peer replay should preserve REPL identity and package context.")
+        (is (equal (list peer-entry) (children-of peer-repl))
+            "Peer replay should append the entry to its transcript.")
+        (is (string= "(+ 2 3)" (repl-entry-input-source peer-entry))
+            "Peer replay should preserve entry source.")
+        (is (eq peer-result (repl-entry-result peer-entry))
+            "Peer replay should attach the captured result to the entry.")
+        (is (eq peer-entry (parent-of peer-result))
+            "Peer replay should preserve the result's entry parent.")
+        (is (and (eq :ok (result-block-status peer-result))
+                 (= 5 (result-block-value peer-result)))
+            "Peer replay should use the captured REPL result without evaluation.")))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application

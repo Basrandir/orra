@@ -1156,11 +1156,11 @@
         :evaluated-at (result-block-evaluated-at result)
         :environment (copy-tree (result-block-environment result))))
 
-(defun record-application-code-evaluation (application block result)
+(defun record-application-evaluation (application target result)
   (record-local-operation
    (ensure-application-operation-journal application)
    :evaluate-cell
-   :target-id (object-id block)
+   :target-id (object-id target)
    :payload (evaluation-result-operation-payload result)))
 
 (defun store-code-block-result (application block status presentation
@@ -1176,7 +1176,7 @@
                         :package-name package-name
                         :evaluated-at evaluated-at
                         :environment environment)
-    (record-application-code-evaluation application block result)
+    (record-application-evaluation application block result)
     result))
 
 (defun store-result-block (result status presentation
@@ -2070,6 +2070,12 @@
                  :package-name package-name
                  :registry registry)))
     (append-child section block)
+    (record-application-object-creation
+     application
+     block
+     section
+     (list :title (repl-block-title block)
+           :package-name (repl-block-package block)))
     (rebuild-root-cell application)
     block))
 
@@ -2089,11 +2095,17 @@
         (setf (repl-entry-result entry) result)
         (setf (parent-of result) entry)
         (append-child repl entry)
+        (record-application-object-creation
+         application
+         entry
+         repl
+         (list :input-source (repl-entry-input-source entry)))
         (let ((*package* package))
           (evaluate-source-into-result application
                                        source
                                        result
                                        :language :common-lisp))
+        (record-application-evaluation application entry result)
         (rebuild-root-cell application)
         entry))))
 
