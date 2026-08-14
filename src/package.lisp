@@ -354,6 +354,7 @@
    #:set-object-metadata
    #:set-object-computed-slot
    #:set-object-property
+   #:set-object-slot
    #:set-object-slot-metadata
    #:set-result-block-status
    #:sdl2-backend

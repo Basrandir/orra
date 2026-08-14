@@ -6338,6 +6338,114 @@
                  (= 5 (result-block-value peer-result)))
             "Peer replay should use the captured REPL result without evaluation.")))))
 
+(deftest application-slot-updates-record-replayable-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (target (invoke-command application
+                                 'append-paragraph
+                                 "Initial target"))
+         (quote (invoke-command application
+                                'append-quote-block
+                                "Quoted text"
+                                "Original attribution"))
+         (list-block (invoke-command application
+                                     'append-list-block
+                                     '("initial")))
+         (reference (invoke-command application
+                                    'append-reference-block
+                                    (object-id target)
+                                    "Reference"))
+         (parent (parent-of target)))
+    (invoke-command application
+                    'set-object-slot
+                    (object-id quote)
+                    :attribution
+                    42)
+    (invoke-command application
+                    'set-object-slot
+                    (object-id list-block)
+                    :items
+                    '(1 "two"))
+    (invoke-command application
+                    'set-object-slot
+                    (object-id reference)
+                    :target-id
+                    (object-id quote))
+    (let ((operations (journal-operations journal)))
+      (is (equal '(:create-object
+                   :create-object
+                   :create-object
+                   :create-object
+                   :set-slot
+                   :set-slot
+                   :set-slot)
+                 (mapcar #'operation-type operations))
+          "Application slot commands should follow creation with semantic writes.")
+      (is (equal (list (list :slot :attribution :value "42")
+                       (list :slot :items :value '("1" "two"))
+                       (list :slot :target-id :value (object-id quote)))
+                 (mapcar #'operation-payload (subseq operations 4)))
+          "Slot operations should capture normalized serializer-friendly values.")
+      (is (every (lambda (operation)
+                   (eq :pending
+                       (journal-operation-queue-status journal operation)))
+                 (subseq operations 4))
+          "Local slot writes should remain pending until synchronized.")
+      (is (and (string= "42" (quote-block-attribution quote))
+               (equal '("1" "two") (list-block-items list-block))
+               (eq quote (reference-block-target reference)))
+          "The command should apply normalized values to the local model.")
+      (let ((peer-registry (make-object-registry))
+            (peer-parent (make-instance 'section
+                                        :id (object-id parent)
+                                        :kind :section
+                                        :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (operation operations)
+          (apply-workspace-operation peer-registry operation))
+        (let ((peer-quote (find-object peer-registry (object-id quote)))
+              (peer-list (find-object peer-registry (object-id list-block)))
+              (peer-reference
+               (find-object peer-registry (object-id reference))))
+          (is (string= "42" (quote-block-attribution peer-quote))
+              "Peer replay should preserve normalized scalar slots.")
+          (is (equal '("1" "two") (list-block-items peer-list))
+              "Peer replay should preserve normalized structured slots.")
+          (is (eq peer-quote (reference-block-target peer-reference))
+              "Peer replay should resolve retargeted object-reference slots."))))))
+
+(deftest application-slot-update-synchronizes-active-editor ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (paragraph (invoke-command application
+                                    'append-paragraph
+                                    "draft text")))
+    (setf (orra::application-focused-model-id application)
+          (object-id paragraph))
+    (begin-editing-focused-model application)
+    (move-active-buffer-cursor-end application)
+    (invoke-command application
+                    'set-object-slot
+                    (object-id paragraph)
+                    :text
+                    "published")
+    (is (string= "published" (paragraph-text paragraph))
+        "Slot writes should update an actively edited model.")
+    (is (string= "published"
+                 (text-buffer-content
+                  (orra::application-active-text-buffer application)))
+        "Slot writes should keep the active editor buffer synchronized.")
+    (is (= (length "published")
+           (text-buffer-cursor
+            (orra::application-active-text-buffer application)))
+        "Slot writes should clamp the active cursor to the new content.")
+    (stop-editing application)
+    (is (string= "published" (paragraph-text paragraph))
+        "Stopping editing should not restore stale buffer content.")
+    (is (equal '(:create-object :set-slot)
+               (mapcar #'operation-type (journal-operations journal)))
+        "Stopping after synchronization should not record duplicate text edits.")))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application

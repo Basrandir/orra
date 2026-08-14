@@ -117,6 +117,14 @@
                   :slots (copy-tree slots)
                   :parent-id (object-id parent))))
 
+(defun record-application-slot-update (application object slot value)
+  (record-local-operation
+   (ensure-application-operation-journal application)
+   :set-slot
+   :target-id (object-id object)
+   :payload (list :slot slot
+                  :value (copy-tree value))))
+
 (defun mark-application-dirty (application &key (region :full))
   (setf (application-dirty-p application) t)
   (when region
@@ -753,6 +761,22 @@
        (application-active-editor-model-id application)
        (string= (application-active-editor-model-id application)
                 (object-id model))))
+
+(defun sync-active-buffer-after-slot-update (application object slot)
+  (when (and (active-editor-model-p application object)
+             (or (and (typep object 'paragraph)
+                      (eq slot :text))
+                 (and (typep object 'code-block)
+                      (eq slot :source))))
+    (let* ((buffer (application-active-text-buffer application))
+           (content (editable-model-string object))
+           (cursor (min (text-buffer-cursor buffer)
+                        (length content))))
+      (replace-buffer-content buffer content :cursor cursor)
+      (when (typep object 'code-block)
+        (sync-active-buffer-structure-selection application))
+      (ensure-active-caret-visible application)))
+  application)
 
 (defun sync-active-buffer-structure-selection (application)
   (when (editing-active-p application)
@@ -2021,6 +2045,21 @@
 (define-command clear-event-log (application)
   "Clear the in-application event log."
   (clear-application-event-log application))
+
+(define-command set-object-slot (application target-id slot value)
+  "Set a semantic object slot and record the local collaboration operation."
+  (let* ((registry (application-registry application))
+         (object (or (find-object registry target-id)
+                     (error "Unknown object ~A." target-id))))
+    (set-semantic-object-slot object slot value registry)
+    (record-application-slot-update
+     application
+     object
+     slot
+     (semantic-object-slot-value object slot))
+    (sync-active-buffer-after-slot-update application object slot)
+    (rebuild-root-cell application)
+    object))
 
 (define-command append-paragraph (application text)
   "Append a new paragraph to the default section."
