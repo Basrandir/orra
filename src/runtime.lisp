@@ -125,6 +125,14 @@
    :payload (list :slot slot
                   :value (copy-tree value))))
 
+(defun record-application-child-reorder (application parent)
+  (record-local-operation
+   (ensure-application-operation-journal application)
+   :reorder-children
+   :target-id (object-id parent)
+   :payload (list :child-ids
+                  (mapcar #'object-id (children-of parent)))))
+
 (defun mark-application-dirty (application &key (region :full))
   (setf (application-dirty-p application) t)
   (when region
@@ -2060,6 +2068,17 @@
     (sync-active-buffer-after-slot-update application object slot)
     (rebuild-root-cell application)
     object))
+
+(define-command reorder-children (application parent-id child-ids)
+  "Set a semantic child order and record the local collaboration operation."
+  (let* ((registry (application-registry application))
+         (parent (or (find-object registry parent-id)
+                     (error "Unknown parent object ~A." parent-id))))
+    (reorder-semantic-children registry parent child-ids)
+    (record-application-child-reorder application parent)
+    (rebuild-root-cell application)
+    (mark-application-dirty application)
+    parent))
 
 (define-command append-paragraph (application text)
   "Append a new paragraph to the default section."

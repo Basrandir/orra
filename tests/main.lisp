@@ -6446,6 +6446,99 @@
                (mapcar #'operation-type (journal-operations journal)))
         "Stopping after synchronization should not record duplicate text edits.")))
 
+(deftest application-child-reorders-record-replayable-operations ()
+  (let* ((workspace (make-workspace :title "Local Workspace"))
+         (notebook (make-notebook :title "Local Notebook"))
+         (section (make-section :title "Local Section")))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (let* ((application (make-application :workspace workspace
+                                          :backend (make-null-backend)))
+           (journal (application-operation-journal application))
+           (paragraph (invoke-command application
+                                      'append-paragraph
+                                      "first"))
+           (block (invoke-command application
+                                  'append-code-block
+                                  "(+ 1 2)"))
+           (quote (invoke-command application
+                                  'append-quote-block
+                                  "last"))
+           (ordered-children (list quote paragraph block))
+           (ordered-child-ids (mapcar #'object-id ordered-children)))
+      (setf (orra::application-focused-model-id application)
+            (object-id paragraph))
+      (begin-editing-focused-model application)
+      (clear-application-dirty application)
+      (invoke-command application
+                      'reorder-children
+                      (object-id section)
+                      ordered-child-ids)
+      (let* ((operations (journal-operations journal))
+             (operation (car (last operations))))
+        (is (eq :reorder-children (operation-type operation))
+            "Application child reorders should record a semantic operation.")
+        (is (string= (object-id section) (operation-target-id operation))
+            "Reorder operations should target the semantic parent.")
+        (is (equal (list :child-ids ordered-child-ids)
+                   (operation-payload operation))
+            "Reorder operations should capture stable child identity order.")
+        (is (eq :pending
+                (journal-operation-queue-status journal operation))
+            "Local child reorders should remain pending until synchronized.")
+        (is (equal ordered-children (children-of section))
+            "The command should reorder the local semantic children.")
+        (is (application-dirty-p application)
+            "Reordering should schedule the updated cell tree for rendering.")
+        (is (and (eq paragraph (focused-model application))
+                 (editing-active-p application))
+            "Reordering should preserve focus and active editor ownership.")
+        (let ((peer-registry (make-object-registry))
+              (peer-section (make-instance 'section
+                                           :id (object-id section)
+                                           :kind :section
+                                           :title "Peer Section")))
+          (register-object peer-registry peer-section)
+          (dolist (recorded-operation operations)
+            (apply-workspace-operation peer-registry recorded-operation))
+          (is (equal ordered-child-ids
+                     (mapcar #'object-id (children-of peer-section)))
+              "Peer replay should converge on the local child order.")
+          (is (every (lambda (child)
+                       (eq peer-section (parent-of child)))
+                     (children-of peer-section))
+              "Peer replay should preserve reordered child parent links."))))))
+
+(deftest application-rejects-invalid-child-reorders-before-recording ()
+  (let* ((workspace (make-workspace :title "Local Workspace"))
+         (notebook (make-notebook :title "Local Notebook"))
+         (section (make-section :title "Local Section")))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (let* ((application (make-application :workspace workspace
+                                          :backend (make-null-backend)))
+           (journal (application-operation-journal application))
+           (first (invoke-command application 'append-paragraph "first"))
+           (second (invoke-command application 'append-paragraph "second"))
+           (original-children (copy-list (children-of section)))
+           (operation-count (length (journal-operations journal)))
+           (signaledp nil))
+      (handler-case
+          (invoke-command application
+                          'reorder-children
+                          (object-id section)
+                          (list (object-id first) (object-id first)))
+        (error ()
+          (setf signaledp t)))
+      (is signaledp
+          "Duplicate child identities should reject a local reorder.")
+      (is (equal original-children (children-of section))
+          "Rejected reorders should leave semantic children unchanged.")
+      (is (= operation-count (length (journal-operations journal)))
+          "Rejected reorders should not advance the local operation journal.")
+      (is (eq section (parent-of second))
+          "Rejected reorders should preserve existing parent links."))))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application

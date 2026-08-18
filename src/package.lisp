@@ -302,6 +302,7 @@
    #:quote-block-attribution
    #:quote-block-text
    #:rebuild-root-cell
+   #:reorder-children
    #:register-object
    #:reference-block
    #:reference-block-label

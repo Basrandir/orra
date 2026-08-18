@@ -2166,20 +2166,24 @@
 (defun semantic-child-ids (parent)
   (mapcar #'object-id (children-of parent)))
 
-(defun ensure-operation-child-ids (operation)
-  (let ((child-ids (required-operation-payload-value operation :child-ids)))
-    (unless (listp child-ids)
-      (error "Operation ~A payload key :CHILD-IDS must be a list, got ~S."
-             (operation-id operation)
-             child-ids))
-    (unless (= (length child-ids)
-               (length (remove-duplicates child-ids :test #'equal)))
-      (error "Operation ~A payload key :CHILD-IDS contains duplicates: ~S."
-             (operation-id operation)
-             child-ids))
-    child-ids))
+(defun child-reorder-context (operation)
+  (if operation
+      (format nil "Operation ~A" (operation-id operation))
+      "Child reorder"))
 
-(defun ensure-child-id-permutation (parent operation child-ids)
+(defun ensure-reorder-child-ids (child-ids &optional operation)
+  (unless (listp child-ids)
+    (error "~A payload key :CHILD-IDS must be a list, got ~S."
+           (child-reorder-context operation)
+           child-ids))
+  (unless (= (length child-ids)
+             (length (remove-duplicates child-ids :test #'equal)))
+    (error "~A payload key :CHILD-IDS contains duplicates: ~S."
+           (child-reorder-context operation)
+           child-ids))
+  child-ids)
+
+(defun ensure-child-id-permutation (parent child-ids &optional operation)
   (let ((current-child-ids (semantic-child-ids parent)))
     (unless (and (= (length child-ids)
                     (length current-child-ids))
@@ -2189,21 +2193,21 @@
                  (null (set-difference current-child-ids
                                        child-ids
                                        :test #'equal)))
-      (error "Operation ~A child ids ~S are not a permutation of target children ~S."
-             (operation-id operation)
+      (error "~A child ids ~S are not a permutation of target children ~S."
+             (child-reorder-context operation)
              child-ids
              current-child-ids)))
   child-ids)
 
-(defun reorderable-child-for-id (registry operation parent child-id)
+(defun reorderable-child-for-id (registry parent child-id &optional operation)
   (let ((child (find-object registry child-id)))
     (unless child
-      (error "Operation ~A references unknown child object ~S."
-             (operation-id operation)
+      (error "~A references unknown child object ~S."
+             (child-reorder-context operation)
              child-id))
     (unless (eq parent (parent-of child))
-      (error "Operation ~A child object ~S is not parented by target ~S."
-             (operation-id operation)
+      (error "~A child object ~S is not parented by target ~S."
+             (child-reorder-context operation)
              child-id
              (object-id parent)))
     child))
@@ -2223,19 +2227,25 @@
     (setf (parent-of child) parent))
   parent)
 
-(defun apply-reorder-children-operation (registry operation)
-  (let* ((parent (target-object-for-operation registry operation))
-         (child-ids (ensure-child-id-permutation
+(defun reorder-semantic-children (registry parent child-ids &optional operation)
+  (let* ((child-ids (ensure-child-id-permutation
                      parent
-                     operation
-                     (ensure-operation-child-ids operation)))
+                     (ensure-reorder-child-ids child-ids operation)
+                     operation))
          (children (mapcar (lambda (child-id)
                              (reorderable-child-for-id registry
-                                                       operation
                                                        parent
-                                                       child-id))
+                                                       child-id
+                                                       operation))
                            child-ids)))
     (set-semantic-children parent children)))
+
+(defun apply-reorder-children-operation (registry operation)
+  (reorder-semantic-children
+   registry
+   (target-object-for-operation registry operation)
+   (required-operation-payload-value operation :child-ids)
+   operation))
 
 (defun set-workspace-slot (workspace slot value)
   (case slot
