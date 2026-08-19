@@ -2040,6 +2040,29 @@
         do (set-object-metadata object key value))
   object)
 
+(defun metadata-attachment-context (operation)
+  (if operation
+      (format nil "Operation ~A" (operation-id operation))
+      "Metadata attachment"))
+
+(defun metadata-attachment-plist-p (metadata)
+  (and (listp metadata)
+       (handler-case
+           (evenp (length metadata))
+         (type-error () nil))))
+
+(defun ensure-metadata-attachment-plist (metadata &optional operation)
+  (unless (metadata-attachment-plist-p metadata)
+    (error "~A requires an even property list, got ~S."
+           (metadata-attachment-context operation)
+           metadata))
+  metadata)
+
+(defun attach-semantic-metadata (object metadata &optional operation)
+  (apply-object-metadata
+   object
+   (ensure-metadata-attachment-plist metadata operation)))
+
 (defun metadata-entry-list (object key operation)
   (let ((entries (gethash key (object-metadata object))))
     (unless (or (null entries) (listp entries))
@@ -2651,9 +2674,10 @@
      registry)))
 
 (defun apply-attach-metadata-operation (registry operation)
-  (apply-object-metadata
+  (attach-semantic-metadata
    (target-object-for-operation registry operation)
-   (ensure-required-plist-payload operation :metadata)))
+   (required-operation-payload-value operation :metadata)
+   operation))
 
 (defun apply-link-object-operation (registry operation)
   (let ((source (target-object-for-operation registry operation))

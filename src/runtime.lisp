@@ -133,6 +133,14 @@
    :payload (list :child-ids
                   (mapcar #'object-id (children-of parent)))))
 
+(defun record-application-metadata-attachment
+    (application object metadata)
+  (record-local-operation
+   (ensure-application-operation-journal application)
+   :attach-metadata
+   :target-id (object-id object)
+   :payload (list :metadata (copy-tree metadata))))
+
 (defun mark-application-dirty (application &key (region :full))
   (setf (application-dirty-p application) t)
   (when region
@@ -2079,6 +2087,18 @@
     (rebuild-root-cell application)
     (mark-application-dirty application)
     parent))
+
+(define-command attach-object-metadata (application target-id metadata)
+  "Attach semantic metadata and record the local collaboration operation."
+  (let* ((registry (application-registry application))
+         (object (or (find-object registry target-id)
+                     (error "Unknown object ~A." target-id)))
+         (metadata (copy-tree metadata)))
+    (attach-semantic-metadata object metadata)
+    (record-application-metadata-attachment application object metadata)
+    (rebuild-root-cell application)
+    (mark-application-dirty application)
+    object))
 
 (define-command append-paragraph (application text)
   "Append a new paragraph to the default section."

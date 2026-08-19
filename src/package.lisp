@@ -25,6 +25,7 @@
    #:acknowledge-journal-operation
    #:archive-workspace
    #:archive-workspace-to-file
+   #:attach-object-metadata
    #:append-code-block
    #:append-child
    #:append-condition-browser-block

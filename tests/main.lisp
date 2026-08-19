@@ -6539,6 +6539,96 @@
       (is (eq section (parent-of second))
           "Rejected reorders should preserve existing parent links."))))
 
+(deftest application-metadata-attachments-record-replayable-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (paragraph (invoke-command application
+                                    'append-paragraph
+                                    "metadata target"))
+         (parent (parent-of paragraph))
+         (tags (list "sync" "review"))
+         (metadata (list :reviewed-p t
+                         :tags tags
+                         :origin "local")))
+    (setf (orra::application-focused-model-id application)
+          (object-id paragraph))
+    (clear-application-dirty application)
+    (is (eq paragraph
+            (invoke-command application
+                            'attach-object-metadata
+                            (object-id paragraph)
+                            metadata))
+        "Metadata attachment should return its semantic target.")
+    (let* ((operations (journal-operations journal))
+           (operation (car (last operations))))
+      (is (equal '(:create-object :attach-metadata)
+                 (mapcar #'operation-type operations))
+          "Metadata attachment should follow target creation in the journal.")
+      (is (string= (object-id paragraph) (operation-target-id operation))
+          "Metadata operations should target stable object identity.")
+      (is (equal (list :metadata
+                       (list :reviewed-p t
+                             :tags (list "sync" "review")
+                             :origin "local"))
+                 (operation-payload operation))
+          "Metadata operations should capture a serializer-friendly snapshot.")
+      (is (eq :pending
+              (journal-operation-queue-status journal operation))
+          "Local metadata attachments should remain pending until synchronized.")
+      (is (and (eql t (gethash :reviewed-p (object-metadata paragraph)))
+               (equal (list "sync" "review")
+                      (gethash :tags (object-metadata paragraph)))
+               (string= "local"
+                        (gethash :origin (object-metadata paragraph))))
+          "Metadata attachment should update the local semantic object.")
+      (is (application-dirty-p application)
+          "Metadata attachment should schedule inspector and lens rendering.")
+      (setf (first tags) "mutated outside Orra")
+      (is (equal (list "sync" "review")
+                 (gethash :tags (object-metadata paragraph)))
+          "Caller mutation should not bypass the semantic operation boundary.")
+      (is (equal (list "sync" "review")
+                 (getf (getf (operation-payload operation) :metadata) :tags))
+          "Caller mutation should not alter the recorded operation snapshot.")
+      (let ((peer-registry (make-object-registry))
+            (peer-parent (make-instance 'section
+                                        :id (object-id parent)
+                                        :kind :section
+                                        :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (recorded-operation operations)
+          (apply-workspace-operation peer-registry recorded-operation))
+        (let ((peer-paragraph
+               (find-object peer-registry (object-id paragraph))))
+          (is (equal (list "sync" "review")
+                     (gethash :tags (object-metadata peer-paragraph)))
+              "Peer replay should preserve structured metadata.")
+          (is (string= "local"
+                       (gethash :origin (object-metadata peer-paragraph)))
+              "Peer replay should converge on scalar metadata."))))))
+
+(deftest application-rejects-malformed-metadata-before-recording ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (paragraph (invoke-command application
+                                    'append-paragraph
+                                    "metadata target"))
+         (operation-count (length (journal-operations journal)))
+         (signaledp nil))
+    (handler-case
+        (invoke-command application
+                        'attach-object-metadata
+                        (object-id paragraph)
+                        (list :reviewed-p))
+      (error ()
+        (setf signaledp t)))
+    (is signaledp
+        "Odd-length metadata property lists should be rejected.")
+    (is (null (gethash :reviewed-p (object-metadata paragraph)))
+        "Rejected metadata should leave the semantic object unchanged.")
+    (is (= operation-count (length (journal-operations journal)))
+        "Rejected metadata should not advance the local operation journal.")))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application
