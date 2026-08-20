@@ -2063,11 +2063,16 @@
    object
    (ensure-metadata-attachment-plist metadata operation)))
 
-(defun metadata-entry-list (object key operation)
+(defun object-link-context (operation)
+  (if operation
+      (format nil "Operation ~A" (operation-id operation))
+      "Object link"))
+
+(defun metadata-entry-list (object key &optional operation)
   (let ((entries (gethash key (object-metadata object))))
     (unless (or (null entries) (listp entries))
-      (error "Operation ~A expected metadata key ~S on object ~S to contain a list, got ~S."
-             (operation-id operation)
+      (error "~A expected metadata key ~S on object ~S to contain a list, got ~S."
+             (object-link-context operation)
              key
              (object-id object)
              entries))
@@ -2106,21 +2111,29 @@
    (operation-payload-value operation :label "")))
 
 (defun operation-link-metadata (operation)
-  (ensure-plist-payload operation :metadata))
+  (ensure-metadata-attachment-plist
+   (operation-payload-value operation :metadata)
+   operation))
 
-(defun link-entry-for-operation (operation target)
+(defun link-entry-for-operation (operation target metadata)
   (list :id (operation-id operation)
         :target-id (object-id target)
         :relation (operation-link-relation operation)
         :label (operation-link-label operation)
-        :metadata (operation-link-metadata operation)))
+        :metadata (copy-tree metadata)))
 
-(defun backlink-entry-for-operation (operation source)
+(defun backlink-entry-for-operation (operation source metadata)
   (list :id (operation-id operation)
         :source-id (object-id source)
         :relation (operation-link-relation operation)
         :label (operation-link-label operation)
-        :metadata (operation-link-metadata operation)))
+        :metadata (copy-tree metadata)))
+
+(defun ensure-semantic-object-link (source target metadata &optional operation)
+  (ensure-metadata-attachment-plist metadata operation)
+  (metadata-entry-list source :links operation)
+  (metadata-entry-list target :backlinks operation)
+  (values source target))
 
 (defun evaluation-target-for-operation (registry operation)
   (let ((object (target-object-for-operation registry operation)))
@@ -2681,14 +2694,20 @@
 
 (defun apply-link-object-operation (registry operation)
   (let ((source (target-object-for-operation registry operation))
-        (target (operation-link-target-object registry operation)))
+        (target (operation-link-target-object registry operation))
+        (metadata (operation-link-metadata operation)))
+    (ensure-semantic-object-link source target metadata operation)
     (put-object-metadata-entry source
                                :links
-                               (link-entry-for-operation operation target)
+                               (link-entry-for-operation operation
+                                                         target
+                                                         metadata)
                                operation)
     (put-object-metadata-entry target
                                :backlinks
-                               (backlink-entry-for-operation operation source)
+                               (backlink-entry-for-operation operation
+                                                             source
+                                                             metadata)
                                operation)
     source))
 

@@ -200,6 +200,7 @@
    #:journal-vector-clock
    #:journal-workspace-id
    #:latest-workspace-checkpoint
+   #:link-objects
    #:list-commands
    #:list-key-bindings
    #:make-key-event

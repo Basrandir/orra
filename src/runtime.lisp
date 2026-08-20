@@ -141,6 +141,17 @@
    :target-id (object-id object)
    :payload (list :metadata (copy-tree metadata))))
 
+(defun record-application-object-link
+    (application source target relation label metadata)
+  (record-local-operation
+   (ensure-application-operation-journal application)
+   :link-object
+   :target-id (object-id source)
+   :payload (list :target-id (object-id target)
+                  :relation (or relation :related)
+                  :label (normalize-display-string label)
+                  :metadata (copy-tree metadata))))
+
 (defun mark-application-dirty (application &key (region :full))
   (setf (application-dirty-p application) t)
   (when region
@@ -2099,6 +2110,29 @@
     (rebuild-root-cell application)
     (mark-application-dirty application)
     object))
+
+(define-command link-objects
+    (application source-id target-id
+		 &optional (relation :related) (label "") metadata)
+  "Link two semantic objects and record the local collaboration operation."
+  (let* ((registry (application-registry application))
+         (source (or (find-object registry source-id)
+                     (error "Unknown source object ~A." source-id)))
+         (target (or (find-object registry target-id)
+                     (error "Unknown target object ~A." target-id)))
+         (metadata (copy-tree metadata)))
+    (ensure-semantic-object-link source target metadata)
+    (let ((operation
+           (record-application-object-link application
+                                           source
+                                           target
+                                           relation
+                                           label
+                                           metadata)))
+      (apply-workspace-operation registry operation))
+    (rebuild-root-cell application)
+    (mark-application-dirty application)
+    source))
 
 (define-command append-paragraph (application text)
   "Append a new paragraph to the default section."

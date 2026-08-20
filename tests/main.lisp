@@ -6629,6 +6629,118 @@
     (is (= operation-count (length (journal-operations journal)))
         "Rejected metadata should not advance the local operation journal.")))
 
+(deftest application-object-links-record-replayable-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (source (invoke-command application
+                                 'append-paragraph
+                                 "link source"))
+         (target (invoke-command application
+                                 'append-code-block
+                                 "(+ 1 2)"))
+         (parent (parent-of source))
+         (evidence (list "local test"))
+         (metadata (list :origin "local"
+                         :evidence evidence)))
+    (clear-application-dirty application)
+    (is (eq source
+            (invoke-command application
+                            'link-objects
+                            (object-id source)
+                            (object-id target)
+                            :references
+                            "supporting code"
+                            metadata))
+        "Object linking should return the semantic source.")
+    (let* ((operations (journal-operations journal))
+           (operation (car (last operations)))
+           (link (first (gethash :links (object-metadata source))))
+           (backlink
+            (first (gethash :backlinks (object-metadata target)))))
+      (is (equal '(:create-object :create-object :link-object)
+                 (mapcar #'operation-type operations))
+          "Object linking should follow endpoint creation in the journal.")
+      (is (equal (list :target-id (object-id target)
+                       :relation :references
+                       :label "supporting code"
+                       :metadata (list :origin "local"
+                                       :evidence (list "local test")))
+                 (operation-payload operation))
+          "Link operations should capture canonical relation data.")
+      (is (eq :pending
+              (journal-operation-queue-status journal operation))
+          "Local object links should remain pending until synchronized.")
+      (is (and (string= (operation-id operation) (getf link :id))
+               (string= (operation-id operation) (getf backlink :id)))
+          "Forward links and backlinks should share operation identity.")
+      (is (and (string= (object-id target) (getf link :target-id))
+               (string= (object-id source) (getf backlink :source-id))
+               (eq :references (getf link :relation))
+               (string= "supporting code" (getf backlink :label)))
+          "Local link metadata should describe both relation directions.")
+      (is (application-dirty-p application)
+          "Object linking should schedule relation lenses for rendering.")
+      (setf (first evidence) "mutated outside Orra")
+      (is (equal (list "local test")
+                 (getf (getf link :metadata) :evidence))
+          "Caller list mutation should not alter live relation metadata.")
+      (is (equal (list "local test")
+                 (getf (getf (operation-payload operation) :metadata)
+                       :evidence))
+          "Caller list mutation should not alter the recorded link operation.")
+      (let ((peer-registry (make-object-registry))
+            (peer-parent (make-instance 'section
+                                        :id (object-id parent)
+                                        :kind :section
+                                        :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (recorded-operation operations)
+          (apply-workspace-operation peer-registry recorded-operation))
+        (let* ((peer-source (find-object peer-registry (object-id source)))
+               (peer-target (find-object peer-registry (object-id target)))
+               (peer-link
+                (first (gethash :links (object-metadata peer-source))))
+               (peer-backlink
+                (first (gethash :backlinks (object-metadata peer-target)))))
+          (is (string= (operation-id operation) (getf peer-link :id))
+              "Peer replay should preserve forward-link identity.")
+          (is (string= (getf peer-link :id) (getf peer-backlink :id))
+              "Peer replay should preserve matching backlink identity.")
+          (is (equal (getf link :metadata) (getf peer-link :metadata))
+              "Peer replay should converge on relation metadata."))))))
+
+(deftest application-rejects-invalid-object-links-before-recording ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (source (invoke-command application
+                                 'append-paragraph
+                                 "link source"))
+         (target (invoke-command application
+                                 'append-code-block
+                                 "(+ 1 2)"))
+         (operation-count (length (journal-operations journal)))
+         (signaledp nil))
+    (set-object-metadata target :backlinks :invalid-link-storage)
+    (handler-case
+        (invoke-command application
+                        'link-objects
+                        (object-id source)
+                        (object-id target)
+                        :references
+                        "invalid"
+                        nil)
+      (error ()
+        (setf signaledp t)))
+    (is signaledp
+        "Non-list relation storage should reject a local object link.")
+    (is (null (gethash :links (object-metadata source)))
+        "Rejected links should not create a partial forward link.")
+    (is (eq :invalid-link-storage
+            (gethash :backlinks (object-metadata target)))
+        "Rejected links should leave target metadata unchanged.")
+    (is (= operation-count (length (journal-operations journal)))
+        "Rejected links should not advance the local operation journal.")))
+
 (deftest workspace-clone-command-writes-loadable-copy ()
   (let* ((application (make-application :save-path "active-workspace.sexp"))
          (paragraph (invoke-command application
