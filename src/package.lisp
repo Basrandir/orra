@@ -33,6 +33,7 @@
    #:append-inspector-block
    #:append-list-block
    #:append-paragraph
+   #:append-project-task
    #:append-quote-block
    #:append-reference-block
    #:append-repl-block
@@ -199,6 +200,9 @@
    #:journal-sync-request-payload
    #:journal-vector-clock
    #:journal-workspace-id
+   #:knowledge-item
+   #:knowledge-item-summary
+   #:knowledge-item-title
    #:latest-workspace-checkpoint
    #:link-objects
    #:list-commands
@@ -230,6 +234,7 @@
    #:make-workspace-checkpoint
    #:make-workspace-member
    #:make-paragraph
+   #:make-project-task
    #:make-quote-block
    #:make-reference-block
    #:make-result-block
@@ -299,6 +304,12 @@
    #:parse-common-lisp-source
    #:parent-of
    #:perform-layout
+   #:project-task
+   #:project-task-assignee-id
+   #:project-task-created-at
+   #:project-task-due-at
+   #:project-task-priority
+   #:project-task-status
    #:quit-application
    #:quote-block
    #:quote-block-attribution

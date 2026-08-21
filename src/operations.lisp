@@ -1998,6 +1998,10 @@
      (make-instance 'table-block :id id :kind :table-block))
     (:task-list
      (make-instance 'task-list :id id :kind :task-list))
+    (:project-task
+     (make-instance 'project-task
+                    :id id
+                    :kind :project-task))
     (:result-block
      (make-instance 'result-block :id id :kind :result-block))
     (:repl-block
@@ -2344,6 +2348,33 @@
     (otherwise (set-object-property block slot value)))
   block)
 
+(defun set-project-task-slot (task slot value)
+  (case slot
+    (:title
+     (setf (knowledge-item-title task) (normalize-display-string value)))
+    (:summary
+     (setf (knowledge-item-summary task) (normalize-display-string value)))
+    (:status
+     (setf (project-task-status task) (ensure-project-task-status value)))
+    (:priority
+     (setf (project-task-priority task)
+           (ensure-project-task-priority value)))
+    (:assignee-id
+     (setf (project-task-assignee-id task)
+           (normalize-project-task-assignee-id value)))
+    (:due-at
+     (setf (project-task-due-at task)
+           (ensure-project-task-time value :due-at)))
+    (:created-at
+     (let ((created-at (ensure-project-task-created-at value)))
+       (cond
+         ((null (project-task-created-at task))
+          (setf (project-task-created-at task) created-at))
+         ((not (equal created-at (project-task-created-at task)))
+          (error "Project task creation time is immutable.")))))
+    (otherwise (set-object-property task slot value)))
+  task)
+
 (defun set-repl-block-slot (block slot value)
   (case slot
     (:title (setf (repl-block-title block) (normalize-display-string value)))
@@ -2462,6 +2493,7 @@
     (list-block (set-list-block-slot object slot value))
     (table-block (set-table-block-slot object slot value))
     (task-list (set-task-list-slot object slot value))
+    (project-task (set-project-task-slot object slot value))
     (repl-block (set-repl-block-slot object slot value))
     (repl-entry (set-repl-entry-slot object slot value))
     (reference-block (set-reference-block-slot object slot value registry))
@@ -2532,6 +2564,16 @@
     (task-list
      (case slot
        (:items (task-list-items object))
+       (otherwise (object-property object slot))))
+    (project-task
+     (case slot
+       (:title (knowledge-item-title object))
+       (:summary (knowledge-item-summary object))
+       (:status (project-task-status object))
+       (:priority (project-task-priority object))
+       (:assignee-id (project-task-assignee-id object))
+       (:due-at (project-task-due-at object))
+       (:created-at (project-task-created-at object))
        (otherwise (object-property object slot))))
     (repl-block
      (case slot

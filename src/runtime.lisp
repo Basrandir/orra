@@ -569,7 +569,7 @@
            reference-block inspector-block source-browser-block
            cross-reference-browser-block stack-frame-browser-block
            condition-browser-block list-block table-block task-list
-           result-block repl-block repl-entry)))
+           project-task result-block repl-block repl-entry)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -2442,6 +2442,37 @@
      (list :items (task-list-items block)))
     (rebuild-root-cell application)
     block))
+
+(define-command append-project-task
+    (application title &optional (summary "") (status :todo)
+                 (priority :normal) assignee-id due-at)
+  "Append a first-class project task to the default section."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (task (make-project-task
+                :title title
+                :summary summary
+                :status status
+                :priority priority
+                :assignee-id assignee-id
+                :due-at due-at
+                :registry registry)))
+    (append-child section task)
+    (record-application-object-creation
+     application
+     task
+     section
+     (list :title (knowledge-item-title task)
+           :summary (knowledge-item-summary task)
+           :status (project-task-status task)
+           :priority (project-task-priority task)
+           :assignee-id (project-task-assignee-id task)
+           :due-at (project-task-due-at task)
+           :created-at (project-task-created-at task)))
+    (rebuild-root-cell application)
+    task))
 
 (define-command evaluate-code-block (application block-id)
   "Evaluate a code block by object id."

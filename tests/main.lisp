@@ -7091,6 +7091,130 @@
                     (princ-to-string condition))
             "Future workspace schemas should fail with a migration error.")))))
 
+(deftest project-task-is-notebook-native-and-persistent ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (task (make-project-task
+                :title "Ship knowledge layer"
+                :summary "Keep tasks inside the shared object model."
+                :status :blocked
+                :priority :high
+                :assignee-id "actor-1"
+                :due-at 200
+                :created-at 100
+                :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section task)
+    (let ((texts (collect-text-cells
+                  (build-workspace-cell-tree workspace registry))))
+      (is (find "Task [BLOCKED]: Ship knowledge layer" texts :test #'string=)
+          "Project tasks should render as notebook-native cells.")
+      (is (find "Keep tasks inside the shared object model."
+                texts
+                :test #'string=)
+          "Project task summaries should render in the notebook.")
+      (is (find "priority: HIGH  |  assignee: actor-1  |  due: 200"
+                texts
+                :test #'string=)
+          "Project task scheduling data should render as task metadata."))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-task
+                     (find-if (lambda (object)
+                                (typep object 'project-task))
+                              (children-of loaded-section))))
+               (is (string= "Ship knowledge layer"
+                            (knowledge-item-title loaded-task))
+                   "Project task titles should survive persistence.")
+               (is (string= "Keep tasks inside the shared object model."
+                            (knowledge-item-summary loaded-task))
+                   "Project task summaries should survive persistence.")
+               (is (and (eq :blocked (project-task-status loaded-task))
+                        (eq :high (project-task-priority loaded-task))
+                        (string= "actor-1"
+                                 (project-task-assignee-id loaded-task))
+                        (= 200 (project-task-due-at loaded-task))
+                        (= 100 (project-task-created-at loaded-task)))
+                   "Project task workflow data should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest project-task-commands-record-replayable-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (task (invoke-command application
+                               'append-project-task
+                               "Implement issues"
+                               "Follow the task substrate."
+                               :todo
+                               :urgent
+                               "actor-2"
+                               400))
+         (parent (parent-of task)))
+    (invoke-command application 'set-object-slot
+                    (object-id task) :status :in-progress)
+    (invoke-command application 'set-object-slot
+                    (object-id task) :summary "Model issues as objects.")
+    (invoke-command application 'set-object-slot
+                    (object-id task) :due-at 500)
+    (let ((operation-count (length (journal-operations journal)))
+          (rejectedp nil))
+      (handler-case
+          (invoke-command application 'set-object-slot
+                          (object-id task) :status :unknown)
+        (error ()
+          (setf rejectedp t)))
+      (is rejectedp "Unsupported task statuses should be rejected.")
+      (is (eq :in-progress (project-task-status task))
+          "Rejected task updates should preserve the current status.")
+      (is (= operation-count (length (journal-operations journal)))
+          "Rejected task updates should not advance the operation journal."))
+    (let ((operations (journal-operations journal)))
+      (is (equal '(:create-object :set-slot :set-slot :set-slot)
+                 (mapcar #'operation-type operations))
+          "Project task commands should use the semantic operation protocol.")
+      (is (every (lambda (operation)
+                   (eq :pending
+                       (journal-operation-queue-status journal operation)))
+                 operations)
+          "Local project task operations should remain pending until sync.")
+      (let ((peer-registry (make-object-registry))
+            (peer-parent (make-instance 'section
+                                        :id (object-id parent)
+                                        :kind :section
+                                        :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (operation operations)
+          (apply-workspace-operation peer-registry operation))
+        (let ((peer-task (find-object peer-registry (object-id task))))
+          (is (typep peer-task 'project-task)
+              "Peer replay should create the project task object.")
+          (is (and (string= "Implement issues"
+                            (knowledge-item-title peer-task))
+                   (string= "Model issues as objects."
+                            (knowledge-item-summary peer-task))
+                   (eq :in-progress (project-task-status peer-task))
+                   (eq :urgent (project-task-priority peer-task))
+                   (string= "actor-2"
+                            (project-task-assignee-id peer-task))
+                   (= 500 (project-task-due-at peer-task))
+                   (= (project-task-created-at task)
+                      (project-task-created-at peer-task)))
+              "Peer replay should converge on project task workflow state.")
+          (is (equal (list peer-task) (children-of peer-parent))
+              "Peer replay should keep project tasks in the notebook tree."))))))
+
 (defun run-all-tests ()
   (let ((passed 0)
         (failed 0))

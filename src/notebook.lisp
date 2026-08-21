@@ -41,6 +41,16 @@
     :accessor section-title
     :initform "Section")))
 
+(defclass knowledge-item (node)
+  ((title
+    :initarg :title
+    :accessor knowledge-item-title
+    :initform "")
+   (summary
+    :initarg :summary
+    :accessor knowledge-item-summary
+    :initform "")))
+
 (defclass paragraph (node)
   ((text
     :initarg :text
@@ -246,6 +256,34 @@
     :accessor task-list-items
     :initform nil)))
 
+(defparameter *project-task-statuses*
+  '(:todo :in-progress :blocked :done :cancelled))
+
+(defparameter *project-task-priorities*
+  '(:low :normal :high :urgent))
+
+(defclass project-task (knowledge-item)
+  ((status
+    :initarg :status
+    :accessor project-task-status
+    :initform :todo)
+   (priority
+    :initarg :priority
+    :accessor project-task-priority
+    :initform :normal)
+   (assignee-id
+    :initarg :assignee-id
+    :accessor project-task-assignee-id
+    :initform nil)
+   (due-at
+    :initarg :due-at
+    :accessor project-task-due-at
+    :initform nil)
+   (created-at
+    :initarg :created-at
+    :accessor project-task-created-at
+    :initform nil)))
+
 (defun normalize-display-string (value)
   (cond
     ((null value) "")
@@ -286,6 +324,31 @@
 
 (defun normalize-task-items (items)
   (mapcar #'normalize-task-item items))
+
+(defun ensure-project-task-status (status)
+  (unless (member status *project-task-statuses*)
+    (error "Unsupported project task status ~S." status))
+  status)
+
+(defun ensure-project-task-priority (priority)
+  (unless (member priority *project-task-priorities*)
+    (error "Unsupported project task priority ~S." priority))
+  priority)
+
+(defun ensure-project-task-time (value role)
+  (unless (or (null value)
+              (and (integerp value) (not (minusp value))))
+    (error "Project task ~A must be NIL or a non-negative universal time, got ~S."
+           role
+           value))
+  value)
+
+(defun ensure-project-task-created-at (value)
+  (or (ensure-project-task-time value :created-at)
+      (error "Project task creation time cannot be NIL.")))
+
+(defun normalize-project-task-assignee-id (assignee-id)
+  (and assignee-id (normalize-display-string assignee-id)))
 
 (defun %register-if-present (registry object)
   (when registry
@@ -431,6 +494,24 @@
                   :id (fresh-id "tasks")
                   :kind :task-list
                   :items (normalize-task-items items))))
+
+(defun make-project-task (&key (title "") (summary "") (status :todo)
+                            (priority :normal) assignee-id due-at
+                            (created-at (get-universal-time)) registry)
+  (%register-if-present
+   registry
+   (make-instance 'project-task
+                  :id (fresh-id "task")
+                  :kind :project-task
+                  :title (normalize-display-string title)
+                  :summary (normalize-display-string summary)
+                  :status (ensure-project-task-status status)
+                  :priority (ensure-project-task-priority priority)
+                  :assignee-id
+                  (normalize-project-task-assignee-id assignee-id)
+                  :due-at (ensure-project-task-time due-at :due-at)
+                  :created-at
+                  (ensure-project-task-created-at created-at))))
 
 (defun make-result-block (&key value (presentation "") (input-source "")
                             input-forms (package-name "") evaluated-at

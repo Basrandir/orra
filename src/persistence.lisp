@@ -21,6 +21,7 @@
 (defmethod persistable-object-p ((object list-block)) t)
 (defmethod persistable-object-p ((object table-block)) t)
 (defmethod persistable-object-p ((object task-list)) t)
+(defmethod persistable-object-p ((object project-task)) t)
 (defmethod persistable-object-p ((object result-block)) t)
 
 (defparameter *workspace-file-version* 2)
@@ -217,6 +218,16 @@
   (append (base-record object :task-list)
           (list :items (task-list-items object))))
 
+(defmethod serialize-object-record ((object project-task))
+  (append (base-record object :project-task)
+          (list :title (knowledge-item-title object)
+                :summary (knowledge-item-summary object)
+                :status (project-task-status object)
+                :priority (project-task-priority object)
+                :assignee-id (project-task-assignee-id object)
+                :due-at (project-task-due-at object)
+                :created-at (project-task-created-at object))))
+
 (defmethod serialize-object-record ((object result-block))
   (append (base-record object :result-block)
           (list :value (encode-value (result-block-value object))
@@ -274,6 +285,10 @@
        (make-instance 'table-block :id id :kind :table-block))
       (:task-list
        (make-instance 'task-list :id id :kind :task-list))
+      (:project-task
+       (make-instance 'project-task
+                      :id id
+                      :kind :project-task))
       (:result-block
        (make-instance 'result-block :id id :kind :result-block)))))
 
@@ -388,6 +403,21 @@
     (task-list
      (setf (task-list-items object)
            (normalize-task-items (getf record :items))))
+    (project-task
+     (setf (knowledge-item-title object)
+           (normalize-display-string (getf record :title)))
+     (setf (knowledge-item-summary object)
+           (normalize-display-string (getf record :summary)))
+     (setf (project-task-status object)
+           (ensure-project-task-status (getf record :status)))
+     (setf (project-task-priority object)
+           (ensure-project-task-priority (getf record :priority)))
+     (setf (project-task-assignee-id object)
+           (normalize-project-task-assignee-id (getf record :assignee-id)))
+     (setf (project-task-due-at object)
+           (ensure-project-task-time (getf record :due-at) :due-at))
+     (setf (project-task-created-at object)
+           (ensure-project-task-created-at (getf record :created-at))))
     (result-block
      (setf (result-block-value object)
            (decode-value (getf record :value) object-table))

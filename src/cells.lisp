@@ -571,6 +571,22 @@
                       (format nil "done: ~D"
                               (count-if #'task-item-done-p
                                         (task-list-items model)))))
+               (project-task
+                (list (format nil "title: ~A"
+                              (knowledge-item-title model))
+                      (format nil "summary: ~A"
+                              (preview-string
+                               (knowledge-item-summary model)))
+                      (format nil "status: ~A"
+                              (project-task-status model))
+                      (format nil "priority: ~A"
+                              (project-task-priority model))
+                      (format nil "assignee: ~A"
+                              (or (project-task-assignee-id model) "-"))
+                      (format nil "due-at: ~A"
+                              (or (project-task-due-at model) "-"))
+                      (format nil "created-at: ~A"
+                              (project-task-created-at model))))
                (result-block
                 (list (format nil "status: ~A"
                               (result-block-status model))
@@ -640,6 +656,17 @@
   (format nil "[~A] ~A"
           (if (task-item-done-p item) "x" " ")
           (task-item-text item)))
+
+(defun project-task-heading (task)
+  (format nil "Task [~A]: ~A"
+          (project-task-status task)
+          (knowledge-item-title task)))
+
+(defun project-task-metadata-line (task)
+  (format nil "priority: ~A  |  assignee: ~A  |  due: ~A"
+          (project-task-priority task)
+          (or (project-task-assignee-id task) "-")
+          (or (project-task-due-at task) "-")))
 
 (defun perform-layout (cell &key (x 0) (y 0) (width 80))
   (setf (cell-bounds cell)
@@ -935,6 +962,24 @@
                           node
                           (mapcar #'format-task-list-item
                                   (task-list-items node)))
+       cell))
+    (project-task
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label (project-task-heading node))))
+       (append-heading-cell cell registry node (project-task-heading node))
+       (unless (string= "" (knowledge-item-summary node))
+         (append-text-lines cell
+                            registry
+                            node
+                            (split-lines (knowledge-item-summary node))))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (project-task-metadata-line node)
+                      :role :metadata))
        cell))
     (result-block
      (let ((cell (make-container-cell
