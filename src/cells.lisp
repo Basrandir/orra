@@ -587,6 +587,22 @@
                               (or (project-task-due-at model) "-"))
                       (format nil "created-at: ~A"
                               (project-task-created-at model))))
+               (project-issue
+                (list (format nil "title: ~A"
+                              (knowledge-item-title model))
+                      (format nil "summary: ~A"
+                              (preview-string
+                               (knowledge-item-summary model)))
+                      (format nil "status: ~A"
+                              (project-issue-status model))
+                      (format nil "severity: ~A"
+                              (project-issue-severity model))
+                      (format nil "reporter: ~A"
+                              (or (project-issue-reporter-id model) "-"))
+                      (format nil "assignee: ~A"
+                              (or (project-issue-assignee-id model) "-"))
+                      (format nil "created-at: ~A"
+                              (project-issue-created-at model))))
                (result-block
                 (list (format nil "status: ~A"
                               (result-block-status model))
@@ -667,6 +683,17 @@
           (project-task-priority task)
           (or (project-task-assignee-id task) "-")
           (or (project-task-due-at task) "-")))
+
+(defun project-issue-heading (issue)
+  (format nil "Issue [~A]: ~A"
+          (project-issue-status issue)
+          (knowledge-item-title issue)))
+
+(defun project-issue-metadata-line (issue)
+  (format nil "severity: ~A  |  reporter: ~A  |  assignee: ~A"
+          (project-issue-severity issue)
+          (or (project-issue-reporter-id issue) "-")
+          (or (project-issue-assignee-id issue) "-")))
 
 (defun perform-layout (cell &key (x 0) (y 0) (width 80))
   (setf (cell-bounds cell)
@@ -979,6 +1006,24 @@
                       :registry registry
                       :model node
                       :text (project-task-metadata-line node)
+                      :role :metadata))
+       cell))
+    (project-issue
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label (project-issue-heading node))))
+       (append-heading-cell cell registry node (project-issue-heading node))
+       (unless (string= "" (knowledge-item-summary node))
+         (append-text-lines cell
+                            registry
+                            node
+                            (split-lines (knowledge-item-summary node))))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (project-issue-metadata-line node)
                       :role :metadata))
        cell))
     (result-block

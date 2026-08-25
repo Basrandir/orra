@@ -33,6 +33,7 @@
    #:append-inspector-block
    #:append-list-block
    #:append-paragraph
+   #:append-project-issue
    #:append-project-task
    #:append-quote-block
    #:append-reference-block
@@ -234,6 +235,7 @@
    #:make-workspace-checkpoint
    #:make-workspace-member
    #:make-paragraph
+   #:make-project-issue
    #:make-project-task
    #:make-quote-block
    #:make-reference-block
@@ -304,6 +306,12 @@
    #:parse-common-lisp-source
    #:parent-of
    #:perform-layout
+   #:project-issue
+   #:project-issue-assignee-id
+   #:project-issue-created-at
+   #:project-issue-reporter-id
+   #:project-issue-severity
+   #:project-issue-status
    #:project-task
    #:project-task-assignee-id
    #:project-task-created-at

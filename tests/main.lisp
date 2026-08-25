@@ -7215,6 +7215,133 @@
           (is (equal (list peer-task) (children-of peer-parent))
               "Peer replay should keep project tasks in the notebook tree."))))))
 
+(deftest project-issue-is-notebook-native-and-persistent ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (issue (make-project-issue
+                 :title "Fullscreen aborts"
+                 :summary "Resizing the render surface corrupts memory."
+                 :status :triaged
+                 :severity :critical
+                 :reporter-id "actor-1"
+                 :assignee-id "actor-2"
+                 :created-at 100
+                 :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section issue)
+    (let ((texts (collect-text-cells
+                  (build-workspace-cell-tree workspace registry))))
+      (is (find "Issue [TRIAGED]: Fullscreen aborts" texts :test #'string=)
+          "Project issues should render as notebook-native cells.")
+      (is (find "Resizing the render surface corrupts memory."
+                texts
+                :test #'string=)
+          "Project issue summaries should render in the notebook.")
+      (is (find "severity: CRITICAL  |  reporter: actor-1  |  assignee: actor-2"
+                texts
+                :test #'string=)
+          "Project issue ownership data should render as issue metadata."))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-issue
+                     (find-if (lambda (object)
+                                (typep object 'project-issue))
+                              (children-of loaded-section))))
+               (is (string= "Fullscreen aborts"
+                            (knowledge-item-title loaded-issue))
+                   "Project issue titles should survive persistence.")
+               (is (string= "Resizing the render surface corrupts memory."
+                            (knowledge-item-summary loaded-issue))
+                   "Project issue summaries should survive persistence.")
+               (is (and (eq :triaged (project-issue-status loaded-issue))
+                        (eq :critical
+                            (project-issue-severity loaded-issue))
+                        (string= "actor-1"
+                                 (project-issue-reporter-id loaded-issue))
+                        (string= "actor-2"
+                                 (project-issue-assignee-id loaded-issue))
+                        (= 100 (project-issue-created-at loaded-issue)))
+                   "Project issue workflow data should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest project-issue-commands-record-replayable-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (issue (invoke-command application
+                                'append-project-issue
+                                "Caret is displaced"
+                                "The insertion point and caret disagree."
+                                :open
+                                :high
+                                "actor-1"
+                                "actor-2"))
+         (parent (parent-of issue)))
+    (invoke-command application 'set-object-slot
+                    (object-id issue) :status :in-progress)
+    (invoke-command application 'set-object-slot
+                    (object-id issue) :severity :critical)
+    (invoke-command application 'set-object-slot
+                    (object-id issue) :assignee-id "actor-3")
+    (let ((operation-count (length (journal-operations journal)))
+          (rejectedp nil))
+      (handler-case
+          (invoke-command application 'set-object-slot
+                          (object-id issue) :severity :catastrophic)
+        (error ()
+          (setf rejectedp t)))
+      (is rejectedp "Unsupported issue severities should be rejected.")
+      (is (eq :critical (project-issue-severity issue))
+          "Rejected issue updates should preserve the current severity.")
+      (is (= operation-count (length (journal-operations journal)))
+          "Rejected issue updates should not advance the operation journal."))
+    (let ((operations (journal-operations journal)))
+      (is (equal '(:create-object :set-slot :set-slot :set-slot)
+                 (mapcar #'operation-type operations))
+          "Project issue commands should use the semantic operation protocol.")
+      (is (every (lambda (operation)
+                   (eq :pending
+                       (journal-operation-queue-status journal operation)))
+                 operations)
+          "Local project issue operations should remain pending until sync.")
+      (let ((peer-registry (make-object-registry))
+            (peer-parent (make-instance 'section
+                                        :id (object-id parent)
+                                        :kind :section
+                                        :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (operation operations)
+          (apply-workspace-operation peer-registry operation))
+        (let ((peer-issue (find-object peer-registry (object-id issue))))
+          (is (typep peer-issue 'project-issue)
+              "Peer replay should create the project issue object.")
+          (is (and (string= "Caret is displaced"
+                            (knowledge-item-title peer-issue))
+                   (string= "The insertion point and caret disagree."
+                            (knowledge-item-summary peer-issue))
+                   (eq :in-progress (project-issue-status peer-issue))
+                   (eq :critical (project-issue-severity peer-issue))
+                   (string= "actor-1"
+                            (project-issue-reporter-id peer-issue))
+                   (string= "actor-3"
+                            (project-issue-assignee-id peer-issue))
+                   (= (project-issue-created-at issue)
+                      (project-issue-created-at peer-issue)))
+              "Peer replay should converge on project issue workflow state.")
+          (is (equal (list peer-issue) (children-of peer-parent))
+              "Peer replay should keep project issues in the notebook tree."))))))
+
 (defun run-all-tests ()
   (let ((passed 0)
         (failed 0))

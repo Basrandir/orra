@@ -2002,6 +2002,10 @@
      (make-instance 'project-task
                     :id id
                     :kind :project-task))
+    (:project-issue
+     (make-instance 'project-issue
+                    :id id
+                    :kind :project-issue))
     (:result-block
      (make-instance 'result-block :id id :kind :result-block))
     (:repl-block
@@ -2361,12 +2365,12 @@
            (ensure-project-task-priority value)))
     (:assignee-id
      (setf (project-task-assignee-id task)
-           (normalize-project-task-assignee-id value)))
+           (normalize-knowledge-actor-id value)))
     (:due-at
      (setf (project-task-due-at task)
-           (ensure-project-task-time value :due-at)))
+           (ensure-knowledge-item-time value :due-at)))
     (:created-at
-     (let ((created-at (ensure-project-task-created-at value)))
+     (let ((created-at (ensure-knowledge-item-created-at value)))
        (cond
          ((null (project-task-created-at task))
           (setf (project-task-created-at task) created-at))
@@ -2374,6 +2378,34 @@
           (error "Project task creation time is immutable.")))))
     (otherwise (set-object-property task slot value)))
   task)
+
+(defun set-project-issue-slot (issue slot value)
+  (case slot
+    (:title
+     (setf (knowledge-item-title issue) (normalize-display-string value)))
+    (:summary
+     (setf (knowledge-item-summary issue) (normalize-display-string value)))
+    (:status
+     (setf (project-issue-status issue)
+           (ensure-project-issue-status value)))
+    (:severity
+     (setf (project-issue-severity issue)
+           (ensure-project-issue-severity value)))
+    (:reporter-id
+     (setf (project-issue-reporter-id issue)
+           (normalize-knowledge-actor-id value)))
+    (:assignee-id
+     (setf (project-issue-assignee-id issue)
+           (normalize-knowledge-actor-id value)))
+    (:created-at
+     (let ((created-at (ensure-knowledge-item-created-at value)))
+       (cond
+         ((null (project-issue-created-at issue))
+          (setf (project-issue-created-at issue) created-at))
+         ((not (equal created-at (project-issue-created-at issue)))
+          (error "Project issue creation time is immutable.")))))
+    (otherwise (set-object-property issue slot value)))
+  issue)
 
 (defun set-repl-block-slot (block slot value)
   (case slot
@@ -2494,6 +2526,7 @@
     (table-block (set-table-block-slot object slot value))
     (task-list (set-task-list-slot object slot value))
     (project-task (set-project-task-slot object slot value))
+    (project-issue (set-project-issue-slot object slot value))
     (repl-block (set-repl-block-slot object slot value))
     (repl-entry (set-repl-entry-slot object slot value))
     (reference-block (set-reference-block-slot object slot value registry))
@@ -2574,6 +2607,16 @@
        (:assignee-id (project-task-assignee-id object))
        (:due-at (project-task-due-at object))
        (:created-at (project-task-created-at object))
+       (otherwise (object-property object slot))))
+    (project-issue
+     (case slot
+       (:title (knowledge-item-title object))
+       (:summary (knowledge-item-summary object))
+       (:status (project-issue-status object))
+       (:severity (project-issue-severity object))
+       (:reporter-id (project-issue-reporter-id object))
+       (:assignee-id (project-issue-assignee-id object))
+       (:created-at (project-issue-created-at object))
        (otherwise (object-property object slot))))
     (repl-block
      (case slot

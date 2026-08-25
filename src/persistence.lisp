@@ -22,6 +22,7 @@
 (defmethod persistable-object-p ((object table-block)) t)
 (defmethod persistable-object-p ((object task-list)) t)
 (defmethod persistable-object-p ((object project-task)) t)
+(defmethod persistable-object-p ((object project-issue)) t)
 (defmethod persistable-object-p ((object result-block)) t)
 
 (defparameter *workspace-file-version* 2)
@@ -228,6 +229,16 @@
                 :due-at (project-task-due-at object)
                 :created-at (project-task-created-at object))))
 
+(defmethod serialize-object-record ((object project-issue))
+  (append (base-record object :project-issue)
+          (list :title (knowledge-item-title object)
+                :summary (knowledge-item-summary object)
+                :status (project-issue-status object)
+                :severity (project-issue-severity object)
+                :reporter-id (project-issue-reporter-id object)
+                :assignee-id (project-issue-assignee-id object)
+                :created-at (project-issue-created-at object))))
+
 (defmethod serialize-object-record ((object result-block))
   (append (base-record object :result-block)
           (list :value (encode-value (result-block-value object))
@@ -289,6 +300,10 @@
        (make-instance 'project-task
                       :id id
                       :kind :project-task))
+      (:project-issue
+       (make-instance 'project-issue
+                      :id id
+                      :kind :project-issue))
       (:result-block
        (make-instance 'result-block :id id :kind :result-block)))))
 
@@ -413,11 +428,26 @@
      (setf (project-task-priority object)
            (ensure-project-task-priority (getf record :priority)))
      (setf (project-task-assignee-id object)
-           (normalize-project-task-assignee-id (getf record :assignee-id)))
+           (normalize-knowledge-actor-id (getf record :assignee-id)))
      (setf (project-task-due-at object)
-           (ensure-project-task-time (getf record :due-at) :due-at))
+           (ensure-knowledge-item-time (getf record :due-at) :due-at))
      (setf (project-task-created-at object)
-           (ensure-project-task-created-at (getf record :created-at))))
+           (ensure-knowledge-item-created-at (getf record :created-at))))
+    (project-issue
+     (setf (knowledge-item-title object)
+           (normalize-display-string (getf record :title)))
+     (setf (knowledge-item-summary object)
+           (normalize-display-string (getf record :summary)))
+     (setf (project-issue-status object)
+           (ensure-project-issue-status (getf record :status)))
+     (setf (project-issue-severity object)
+           (ensure-project-issue-severity (getf record :severity)))
+     (setf (project-issue-reporter-id object)
+           (normalize-knowledge-actor-id (getf record :reporter-id)))
+     (setf (project-issue-assignee-id object)
+           (normalize-knowledge-actor-id (getf record :assignee-id)))
+     (setf (project-issue-created-at object)
+           (ensure-knowledge-item-created-at (getf record :created-at))))
     (result-block
      (setf (result-block-value object)
            (decode-value (getf record :value) object-table))
