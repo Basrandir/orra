@@ -23,6 +23,7 @@
 (defmethod persistable-object-p ((object task-list)) t)
 (defmethod persistable-object-p ((object project-task)) t)
 (defmethod persistable-object-p ((object project-issue)) t)
+(defmethod persistable-object-p ((object project-decision)) t)
 (defmethod persistable-object-p ((object result-block)) t)
 
 (defparameter *workspace-file-version* 2)
@@ -239,6 +240,17 @@
                 :assignee-id (project-issue-assignee-id object)
                 :created-at (project-issue-created-at object))))
 
+(defmethod serialize-object-record ((object project-decision))
+  (append (base-record object :project-decision)
+          (list :title (knowledge-item-title object)
+                :summary (knowledge-item-summary object)
+                :status (project-decision-status object)
+                :outcome (project-decision-outcome object)
+                :rationale (project-decision-rationale object)
+                :decided-by-id (project-decision-decided-by-id object)
+                :decided-at (project-decision-decided-at object)
+                :created-at (project-decision-created-at object))))
+
 (defmethod serialize-object-record ((object result-block))
   (append (base-record object :result-block)
           (list :value (encode-value (result-block-value object))
@@ -304,6 +316,10 @@
        (make-instance 'project-issue
                       :id id
                       :kind :project-issue))
+      (:project-decision
+       (make-instance 'project-decision
+                      :id id
+                      :kind :project-decision))
       (:result-block
        (make-instance 'result-block :id id :kind :result-block)))))
 
@@ -447,6 +463,23 @@
      (setf (project-issue-assignee-id object)
            (normalize-knowledge-actor-id (getf record :assignee-id)))
      (setf (project-issue-created-at object)
+           (ensure-knowledge-item-created-at (getf record :created-at))))
+    (project-decision
+     (setf (knowledge-item-title object)
+           (normalize-display-string (getf record :title)))
+     (setf (knowledge-item-summary object)
+           (normalize-display-string (getf record :summary)))
+     (setf (project-decision-status object)
+           (ensure-project-decision-status (getf record :status)))
+     (setf (project-decision-outcome object)
+           (normalize-display-string (getf record :outcome)))
+     (setf (project-decision-rationale object)
+           (normalize-display-string (getf record :rationale)))
+     (setf (project-decision-decided-by-id object)
+           (normalize-knowledge-actor-id (getf record :decided-by-id)))
+     (setf (project-decision-decided-at object)
+           (ensure-knowledge-item-time (getf record :decided-at) :decided-at))
+     (setf (project-decision-created-at object)
            (ensure-knowledge-item-created-at (getf record :created-at))))
     (result-block
      (setf (result-block-value object)

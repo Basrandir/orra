@@ -7342,6 +7342,149 @@
           (is (equal (list peer-issue) (children-of peer-parent))
               "Peer replay should keep project issues in the notebook tree."))))))
 
+(deftest project-decision-is-notebook-native-and-persistent ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (decision (make-project-decision
+                    :title "Keep the live image central"
+                    :summary "The application needs Lisp-machine semantics."
+                    :status :accepted
+                    :outcome "Run the product inside SBCL."
+                    :rationale "Runtime state must remain inspectable."
+                    :decided-by-id "actor-1"
+                    :decided-at 200
+                    :created-at 100
+                    :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section decision)
+    (let ((texts (collect-text-cells
+                  (build-workspace-cell-tree workspace registry))))
+      (is (find "Decision [ACCEPTED]: Keep the live image central"
+                texts
+                :test #'string=)
+          "Project decisions should render as notebook-native cells.")
+      (is (find "outcome: Run the product inside SBCL."
+                texts
+                :test #'string=)
+          "Project decision outcomes should render in the notebook.")
+      (is (find "rationale: Runtime state must remain inspectable."
+                texts
+                :test #'string=)
+          "Project decision rationale should render in the notebook.")
+      (is (find "decided-by: actor-1  |  decided-at: 200"
+                texts
+                :test #'string=)
+          "Project decision authorship should render as metadata."))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-decision
+                     (find-if (lambda (object)
+                                (typep object 'project-decision))
+                              (children-of loaded-section))))
+               (is (string= "Keep the live image central"
+                            (knowledge-item-title loaded-decision))
+                   "Project decision titles should survive persistence.")
+               (is (string= "The application needs Lisp-machine semantics."
+                            (knowledge-item-summary loaded-decision))
+                   "Project decision context should survive persistence.")
+               (is (and (eq :accepted
+                            (project-decision-status loaded-decision))
+                        (string= "Run the product inside SBCL."
+                                 (project-decision-outcome loaded-decision))
+                        (string= "Runtime state must remain inspectable."
+                                 (project-decision-rationale loaded-decision))
+                        (string= "actor-1"
+                                 (project-decision-decided-by-id
+                                  loaded-decision))
+                        (= 200
+                           (project-decision-decided-at loaded-decision))
+                        (= 100
+                           (project-decision-created-at loaded-decision)))
+                   "Project decision records should survive persistence.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest project-decision-commands-record-replayable-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (decision (invoke-command application
+                                   'append-project-decision
+                                   "Choose text shaping"
+                                   "Native-quality text is required."
+                                   :proposed
+                                   ""
+                                   "HarfBuzz supports complex scripts."))
+         (parent (parent-of decision)))
+    (invoke-command application 'set-object-slot
+                    (object-id decision) :status :accepted)
+    (invoke-command application 'set-object-slot
+                    (object-id decision) :outcome "Use HarfBuzz and FreeType.")
+    (invoke-command application 'set-object-slot
+                    (object-id decision) :decided-by-id "actor-2")
+    (invoke-command application 'set-object-slot
+                    (object-id decision) :decided-at 300)
+    (let ((operation-count (length (journal-operations journal)))
+          (rejectedp nil))
+      (handler-case
+          (invoke-command application 'set-object-slot
+                          (object-id decision) :status :implemented)
+        (error ()
+          (setf rejectedp t)))
+      (is rejectedp "Unsupported decision statuses should be rejected.")
+      (is (eq :accepted (project-decision-status decision))
+          "Rejected decision updates should preserve the current status.")
+      (is (= operation-count (length (journal-operations journal)))
+          "Rejected decision updates should not advance the operation journal."))
+    (let ((operations (journal-operations journal)))
+      (is (equal '(:create-object :set-slot :set-slot :set-slot :set-slot)
+                 (mapcar #'operation-type operations))
+          "Project decision commands should use the semantic operation protocol.")
+      (is (every (lambda (operation)
+                   (eq :pending
+                       (journal-operation-queue-status journal operation)))
+                 operations)
+          "Local project decision operations should remain pending until sync.")
+      (let ((peer-registry (make-object-registry))
+            (peer-parent (make-instance 'section
+                                        :id (object-id parent)
+                                        :kind :section
+                                        :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (operation operations)
+          (apply-workspace-operation peer-registry operation))
+        (let ((peer-decision
+               (find-object peer-registry (object-id decision))))
+          (is (typep peer-decision 'project-decision)
+              "Peer replay should create the project decision object.")
+          (is (and (string= "Choose text shaping"
+                            (knowledge-item-title peer-decision))
+                   (string= "Native-quality text is required."
+                            (knowledge-item-summary peer-decision))
+                   (eq :accepted (project-decision-status peer-decision))
+                   (string= "Use HarfBuzz and FreeType."
+                            (project-decision-outcome peer-decision))
+                   (string= "HarfBuzz supports complex scripts."
+                            (project-decision-rationale peer-decision))
+                   (string= "actor-2"
+                            (project-decision-decided-by-id peer-decision))
+                   (= 300 (project-decision-decided-at peer-decision))
+                   (= (project-decision-created-at decision)
+                      (project-decision-created-at peer-decision)))
+              "Peer replay should converge on the project decision record.")
+          (is (equal (list peer-decision) (children-of peer-parent))
+              "Peer replay should keep project decisions in the notebook tree."))))))
+
 (defun run-all-tests ()
   (let ((passed 0)
         (failed 0))

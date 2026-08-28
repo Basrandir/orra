@@ -312,6 +312,35 @@
     :accessor project-issue-created-at
     :initform nil)))
 
+(defparameter *project-decision-statuses*
+  '(:proposed :accepted :rejected :superseded))
+
+(defclass project-decision (knowledge-item)
+  ((status
+    :initarg :status
+    :accessor project-decision-status
+    :initform :proposed)
+   (outcome
+    :initarg :outcome
+    :accessor project-decision-outcome
+    :initform "")
+   (rationale
+    :initarg :rationale
+    :accessor project-decision-rationale
+    :initform "")
+   (decided-by-id
+    :initarg :decided-by-id
+    :accessor project-decision-decided-by-id
+    :initform nil)
+   (decided-at
+    :initarg :decided-at
+    :accessor project-decision-decided-at
+    :initform nil)
+   (created-at
+    :initarg :created-at
+    :accessor project-decision-created-at
+    :initform nil)))
+
 (defun normalize-display-string (value)
   (cond
     ((null value) "")
@@ -387,6 +416,11 @@
   (unless (member severity *project-issue-severities*)
     (error "Unsupported project issue severity ~S." severity))
   severity)
+
+(defun ensure-project-decision-status (status)
+  (unless (member status *project-decision-statuses*)
+    (error "Unsupported project decision status ~S." status))
+  status)
 
 (defun %register-if-present (registry object)
   (when registry
@@ -565,6 +599,27 @@
                   :severity (ensure-project-issue-severity severity)
                   :reporter-id (normalize-knowledge-actor-id reporter-id)
                   :assignee-id (normalize-knowledge-actor-id assignee-id)
+                  :created-at
+                  (ensure-knowledge-item-created-at created-at))))
+
+(defun make-project-decision
+    (&key (title "") (summary "") (status :proposed) (outcome "")
+       (rationale "") decided-by-id decided-at
+       (created-at (get-universal-time)) registry)
+  (%register-if-present
+   registry
+   (make-instance 'project-decision
+                  :id (fresh-id "decision")
+                  :kind :project-decision
+                  :title (normalize-display-string title)
+                  :summary (normalize-display-string summary)
+                  :status (ensure-project-decision-status status)
+                  :outcome (normalize-display-string outcome)
+                  :rationale (normalize-display-string rationale)
+                  :decided-by-id
+                  (normalize-knowledge-actor-id decided-by-id)
+                  :decided-at
+                  (ensure-knowledge-item-time decided-at :decided-at)
                   :created-at
                   (ensure-knowledge-item-created-at created-at))))
 

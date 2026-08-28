@@ -569,7 +569,8 @@
            reference-block inspector-block source-browser-block
            cross-reference-browser-block stack-frame-browser-block
            condition-browser-block list-block table-block task-list
-           project-task project-issue result-block repl-block repl-entry)))
+           project-task project-issue project-decision
+           result-block repl-block repl-entry)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -2504,6 +2505,39 @@
            :created-at (project-issue-created-at issue)))
     (rebuild-root-cell application)
     issue))
+
+(define-command append-project-decision
+    (application title &optional (summary "") (status :proposed)
+                 (outcome "") (rationale "") decided-by-id decided-at)
+  "Append a first-class project decision to the default section."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (decision (make-project-decision
+                    :title title
+                    :summary summary
+                    :status status
+                    :outcome outcome
+                    :rationale rationale
+                    :decided-by-id decided-by-id
+                    :decided-at decided-at
+                    :registry registry)))
+    (append-child section decision)
+    (record-application-object-creation
+     application
+     decision
+     section
+     (list :title (knowledge-item-title decision)
+           :summary (knowledge-item-summary decision)
+           :status (project-decision-status decision)
+           :outcome (project-decision-outcome decision)
+           :rationale (project-decision-rationale decision)
+           :decided-by-id (project-decision-decided-by-id decision)
+           :decided-at (project-decision-decided-at decision)
+           :created-at (project-decision-created-at decision)))
+    (rebuild-root-cell application)
+    decision))
 
 (define-command evaluate-code-block (application block-id)
   "Evaluate a code block by object id."

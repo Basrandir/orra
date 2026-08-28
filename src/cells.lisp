@@ -603,6 +603,26 @@
                               (or (project-issue-assignee-id model) "-"))
                       (format nil "created-at: ~A"
                               (project-issue-created-at model))))
+               (project-decision
+                (list (format nil "title: ~A"
+                              (knowledge-item-title model))
+                      (format nil "summary: ~A"
+                              (preview-string
+                               (knowledge-item-summary model)))
+                      (format nil "status: ~A"
+                              (project-decision-status model))
+                      (format nil "outcome: ~A"
+                              (preview-string
+                               (project-decision-outcome model)))
+                      (format nil "rationale: ~A"
+                              (preview-string
+                               (project-decision-rationale model)))
+                      (format nil "decided-by: ~A"
+                              (or (project-decision-decided-by-id model) "-"))
+                      (format nil "decided-at: ~A"
+                              (or (project-decision-decided-at model) "-"))
+                      (format nil "created-at: ~A"
+                              (project-decision-created-at model))))
                (result-block
                 (list (format nil "status: ~A"
                               (result-block-status model))
@@ -694,6 +714,16 @@
           (project-issue-severity issue)
           (or (project-issue-reporter-id issue) "-")
           (or (project-issue-assignee-id issue) "-")))
+
+(defun project-decision-heading (decision)
+  (format nil "Decision [~A]: ~A"
+          (project-decision-status decision)
+          (knowledge-item-title decision)))
+
+(defun project-decision-metadata-line (decision)
+  (format nil "decided-by: ~A  |  decided-at: ~A"
+          (or (project-decision-decided-by-id decision) "-")
+          (or (project-decision-decided-at decision) "-")))
 
 (defun perform-layout (cell &key (x 0) (y 0) (width 80))
   (setf (cell-bounds cell)
@@ -1024,6 +1054,38 @@
                       :registry registry
                       :model node
                       :text (project-issue-metadata-line node)
+                      :role :metadata))
+       cell))
+    (project-decision
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label (project-decision-heading node))))
+       (append-heading-cell cell registry node (project-decision-heading node))
+       (unless (string= "" (knowledge-item-summary node))
+         (append-text-lines cell
+                            registry
+                            node
+                            (split-lines (knowledge-item-summary node))))
+       (unless (string= "" (project-decision-outcome node))
+         (append-child cell
+                       (make-text-cell
+                        :registry registry
+                        :model node
+                        :text (format nil "outcome: ~A"
+                                      (project-decision-outcome node)))))
+       (unless (string= "" (project-decision-rationale node))
+         (append-child cell
+                       (make-text-cell
+                        :registry registry
+                        :model node
+                        :text (format nil "rationale: ~A"
+                                      (project-decision-rationale node)))))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (project-decision-metadata-line node)
                       :role :metadata))
        cell))
     (result-block

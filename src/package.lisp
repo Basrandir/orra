@@ -33,6 +33,7 @@
    #:append-inspector-block
    #:append-list-block
    #:append-paragraph
+   #:append-project-decision
    #:append-project-issue
    #:append-project-task
    #:append-quote-block
@@ -235,6 +236,7 @@
    #:make-workspace-checkpoint
    #:make-workspace-member
    #:make-paragraph
+   #:make-project-decision
    #:make-project-issue
    #:make-project-task
    #:make-quote-block
@@ -306,6 +308,13 @@
    #:parse-common-lisp-source
    #:parent-of
    #:perform-layout
+   #:project-decision
+   #:project-decision-created-at
+   #:project-decision-decided-at
+   #:project-decision-decided-by-id
+   #:project-decision-outcome
+   #:project-decision-rationale
+   #:project-decision-status
    #:project-issue
    #:project-issue-assignee-id
    #:project-issue-created-at

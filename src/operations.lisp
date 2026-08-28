@@ -2006,6 +2006,10 @@
      (make-instance 'project-issue
                     :id id
                     :kind :project-issue))
+    (:project-decision
+     (make-instance 'project-decision
+                    :id id
+                    :kind :project-decision))
     (:result-block
      (make-instance 'result-block :id id :kind :result-block))
     (:repl-block
@@ -2407,6 +2411,37 @@
     (otherwise (set-object-property issue slot value)))
   issue)
 
+(defun set-project-decision-slot (decision slot value)
+  (case slot
+    (:title
+     (setf (knowledge-item-title decision) (normalize-display-string value)))
+    (:summary
+     (setf (knowledge-item-summary decision) (normalize-display-string value)))
+    (:status
+     (setf (project-decision-status decision)
+           (ensure-project-decision-status value)))
+    (:outcome
+     (setf (project-decision-outcome decision)
+           (normalize-display-string value)))
+    (:rationale
+     (setf (project-decision-rationale decision)
+           (normalize-display-string value)))
+    (:decided-by-id
+     (setf (project-decision-decided-by-id decision)
+           (normalize-knowledge-actor-id value)))
+    (:decided-at
+     (setf (project-decision-decided-at decision)
+           (ensure-knowledge-item-time value :decided-at)))
+    (:created-at
+     (let ((created-at (ensure-knowledge-item-created-at value)))
+       (cond
+         ((null (project-decision-created-at decision))
+          (setf (project-decision-created-at decision) created-at))
+         ((not (equal created-at (project-decision-created-at decision)))
+          (error "Project decision creation time is immutable.")))))
+    (otherwise (set-object-property decision slot value)))
+  decision)
+
 (defun set-repl-block-slot (block slot value)
   (case slot
     (:title (setf (repl-block-title block) (normalize-display-string value)))
@@ -2527,6 +2562,7 @@
     (task-list (set-task-list-slot object slot value))
     (project-task (set-project-task-slot object slot value))
     (project-issue (set-project-issue-slot object slot value))
+    (project-decision (set-project-decision-slot object slot value))
     (repl-block (set-repl-block-slot object slot value))
     (repl-entry (set-repl-entry-slot object slot value))
     (reference-block (set-reference-block-slot object slot value registry))
@@ -2617,6 +2653,17 @@
        (:reporter-id (project-issue-reporter-id object))
        (:assignee-id (project-issue-assignee-id object))
        (:created-at (project-issue-created-at object))
+       (otherwise (object-property object slot))))
+    (project-decision
+     (case slot
+       (:title (knowledge-item-title object))
+       (:summary (knowledge-item-summary object))
+       (:status (project-decision-status object))
+       (:outcome (project-decision-outcome object))
+       (:rationale (project-decision-rationale object))
+       (:decided-by-id (project-decision-decided-by-id object))
+       (:decided-at (project-decision-decided-at object))
+       (:created-at (project-decision-created-at object))
        (otherwise (object-property object slot))))
     (repl-block
      (case slot
