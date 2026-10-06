@@ -2014,6 +2014,10 @@
      (make-instance 'project-meeting-note
                     :id id
                     :kind :project-meeting-note))
+    (:project-code-reference
+     (make-instance 'project-code-reference
+                    :id id
+                    :kind :project-code-reference))
     (:result-block
      (make-instance 'result-block :id id :kind :result-block))
     (:repl-block
@@ -2477,6 +2481,35 @@
     (otherwise (set-object-property meeting slot value)))
   meeting)
 
+(defun set-project-code-reference-slot (reference slot value registry)
+  (case slot
+    (:title
+     (setf (knowledge-item-title reference) (normalize-display-string value)))
+    (:summary
+     (setf (knowledge-item-summary reference) (normalize-display-string value)))
+    (:anchor
+     (unless (and (metadata-attachment-plist-p value)
+                  (= 6 (length value))
+                  (loop for key in '(:target-id :form-path :source-snapshot)
+                        always (nth-value 1 (plist-value value key))))
+       (error "Code reference anchor requires :TARGET-ID, :FORM-PATH, and :SOURCE-SNAPSHOT."))
+     (set-project-code-reference-anchor
+      reference
+      (and registry (find-object registry (getf value :target-id)))
+      (getf value :form-path)
+      (getf value :source-snapshot)))
+    (:created-at
+     (let ((created-at (ensure-knowledge-item-created-at value)))
+       (cond
+         ((null (project-code-reference-created-at reference))
+          (setf (project-code-reference-created-at reference) created-at))
+         ((not (equal created-at (project-code-reference-created-at reference)))
+          (error "Project code reference creation time is immutable.")))))
+    ((:target-id :form-path :source-snapshot)
+     (error "Update a code reference citation through its :ANCHOR slot."))
+    (otherwise (set-object-property reference slot value)))
+  reference)
+
 (defun set-repl-block-slot (block slot value)
   (case slot
     (:title (setf (repl-block-title block) (normalize-display-string value)))
@@ -2599,6 +2632,8 @@
     (project-issue (set-project-issue-slot object slot value))
     (project-decision (set-project-decision-slot object slot value))
     (project-meeting-note (set-project-meeting-note-slot object slot value))
+    (project-code-reference
+     (set-project-code-reference-slot object slot value registry))
     (repl-block (set-repl-block-slot object slot value))
     (repl-entry (set-repl-entry-slot object slot value))
     (reference-block (set-reference-block-slot object slot value registry))
@@ -2711,6 +2746,13 @@
        (:attendee-ids (project-meeting-note-attendee-ids object))
        (:location (project-meeting-note-location object))
        (:created-at (project-meeting-note-created-at object))
+       (otherwise (object-property object slot))))
+    (project-code-reference
+     (case slot
+       (:title (knowledge-item-title object))
+       (:summary (knowledge-item-summary object))
+       (:anchor (project-code-reference-anchor object))
+       (:created-at (project-code-reference-created-at object))
        (otherwise (object-property object slot))))
     (repl-block
      (case slot

@@ -704,6 +704,84 @@
 (defun code-block-source-map-entry-at-offset (block offset &optional info)
   (source-map-entry-at-offset (code-block-source-map block info) offset))
 
+(defun ensure-code-reference-form-path (path)
+  (unless (handler-case
+              (and (listp path)
+                   (list-length path)
+                   (every (lambda (index)
+                            (and (integerp index) (not (minusp index))))
+                          path))
+            (type-error () nil))
+    (let ((*print-circle* t))
+      (error "Code reference form path must be a proper list of non-negative indices, got ~S."
+             path)))
+  (copy-list path))
+
+(defun set-project-code-reference-anchor (reference target path source-snapshot)
+  (unless (typep target 'code-block)
+    (error "Code references require a code block target, got ~S." target))
+  (let ((path (ensure-code-reference-form-path path)))
+    (unless (stringp source-snapshot)
+      (error "Code reference source snapshot must be a string."))
+    (when (and path
+               (not (find path (common-lisp-source-map source-snapshot)
+                          :key (lambda (entry) (getf entry :path))
+                          :test #'equal)))
+      (error "Code reference form path ~S is absent from its source snapshot."
+             path))
+    ;; The target, path, and snapshot describe one citation and change together.
+    (setf (slot-value reference 'target) target
+          (slot-value reference 'form-path) path
+          (slot-value reference 'source-snapshot) (copy-seq source-snapshot)))
+  reference)
+
+(defun project-code-reference-anchor (reference)
+  (list :target-id (and (project-code-reference-target reference)
+			(object-id (project-code-reference-target reference)))
+        :form-path (copy-list (project-code-reference-form-path reference))
+        :source-snapshot
+        (copy-seq (project-code-reference-source-snapshot reference))))
+
+(defun resolve-project-code-reference (reference)
+  "Return the target, source span, and resolution status without changing selection."
+  (let ((target (project-code-reference-target reference))
+        (path (project-code-reference-form-path reference)))
+    (cond
+      ((not (typep target 'code-block))
+       (values nil nil :missing-target))
+      ((null path)
+       (values target (list 0 (length (code-block-source target))) :resolved))
+      ((not (code-block-common-lisp-p target))
+       (values target nil :unsupported-language))
+      ((not (string= (project-code-reference-source-snapshot reference)
+                     (code-block-source target)))
+       (values target nil :stale))
+      (t
+       (let ((entry (find path (code-block-source-map target)
+                          :key (lambda (entry) (getf entry :path))
+                          :test #'equal)))
+         (if entry
+             (values target (list (getf entry :start) (getf entry :end))
+                     :resolved)
+             (values target nil :missing-form)))))))
+
+(defun project-code-reference-status (reference)
+  (nth-value 2 (resolve-project-code-reference reference)))
+
+(defun project-code-reference-excerpt (reference)
+  (let ((path (project-code-reference-form-path reference)))
+    (if path
+        (getf (find path
+                    (common-lisp-source-map
+                     (project-code-reference-source-snapshot reference))
+                    :key (lambda (entry) (getf entry :path))
+                    :test #'equal)
+              :text "")
+        (let ((target (project-code-reference-target reference)))
+          (if (typep target 'code-block)
+              (code-block-source target)
+              "")))))
+
 (defun serialize-common-lisp-forms (forms)
   (with-output-to-string (stream)
     (loop for form in forms

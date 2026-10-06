@@ -25,6 +25,7 @@
 (defmethod persistable-object-p ((object project-issue)) t)
 (defmethod persistable-object-p ((object project-decision)) t)
 (defmethod persistable-object-p ((object project-meeting-note)) t)
+(defmethod persistable-object-p ((object project-code-reference)) t)
 (defmethod persistable-object-p ((object result-block)) t)
 
 (defparameter *workspace-file-version* 2)
@@ -100,6 +101,8 @@
                    (visit (code-block-result object)))
                  (when (typep object 'repl-entry)
                    (visit (repl-entry-result object)))
+                 (when (typep object 'project-code-reference)
+                   (visit (project-code-reference-target object)))
                  (when (and (typep object 'reference-block)
                             (typep (reference-block-target object)
                                    'model-object))
@@ -265,6 +268,15 @@
                 :created-at (project-meeting-note-created-at object)
                 :children (mapcar #'object-id (children-of object)))))
 
+(defmethod serialize-object-record ((object project-code-reference))
+  (append (base-record object :project-code-reference)
+          (list :title (knowledge-item-title object)
+                :summary (knowledge-item-summary object)
+                :target (encode-value (project-code-reference-target object))
+                :form-path (project-code-reference-form-path object)
+                :source-snapshot (project-code-reference-source-snapshot object)
+                :created-at (project-code-reference-created-at object))))
+
 (defmethod serialize-object-record ((object result-block))
   (append (base-record object :result-block)
           (list :value (encode-value (result-block-value object))
@@ -338,6 +350,10 @@
        (make-instance 'project-meeting-note
                       :id id
                       :kind :project-meeting-note))
+      (:project-code-reference
+       (make-instance 'project-code-reference
+                      :id id
+                      :kind :project-code-reference))
       (:result-block
        (make-instance 'result-block :id id :kind :result-block)))))
 
@@ -523,6 +539,18 @@
                    (getf record :children)))
      (dolist (child (children-of object))
        (setf (parent-of child) object)))
+    (project-code-reference
+     (setf (knowledge-item-title object)
+           (normalize-display-string (getf record :title)))
+     (setf (knowledge-item-summary object)
+           (normalize-display-string (getf record :summary)))
+     (set-project-code-reference-anchor
+      object
+      (decode-value (getf record :target) object-table)
+      (getf record :form-path)
+      (getf record :source-snapshot))
+     (setf (project-code-reference-created-at object)
+           (ensure-knowledge-item-created-at (getf record :created-at))))
     (result-block
      (setf (result-block-value object)
            (decode-value (getf record :value) object-table))

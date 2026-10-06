@@ -370,6 +370,21 @@
     :accessor project-meeting-note-created-at
     :initform nil)))
 
+(defclass project-code-reference (knowledge-item)
+  ((target
+    :reader project-code-reference-target
+    :initform nil)
+   (form-path
+    :reader project-code-reference-form-path
+    :initform nil)
+   (source-snapshot
+    :reader project-code-reference-source-snapshot
+    :initform "")
+   (created-at
+    :initarg :created-at
+    :accessor project-code-reference-created-at
+    :initform nil)))
+
 (defun normalize-display-string (value)
   (cond
     ((null value) "")
@@ -683,6 +698,24 @@
                   :location (normalize-display-string location)
                   :created-at
                   (ensure-knowledge-item-created-at created-at))))
+
+(defun make-project-code-reference
+    (&key (title "") (summary "") target form-path
+       (created-at (get-universal-time)) registry)
+  (unless (typep target 'code-block)
+    (error "Code references require a code block target, got ~S." target))
+  (when (and form-path (not (code-block-common-lisp-p target)))
+    (error "Structural code references require a Common Lisp code block."))
+  (let ((reference (make-instance 'project-code-reference
+                                  :id (fresh-id "code-reference")
+                                  :kind :project-code-reference
+                                  :title (normalize-display-string title)
+                                  :summary (normalize-display-string summary)
+                                  :created-at
+                                  (ensure-knowledge-item-created-at created-at))))
+    (set-project-code-reference-anchor
+     reference target form-path (code-block-source target))
+    (%register-if-present registry reference)))
 
 (defun make-result-block (&key value (presentation "") (input-source "")
                             input-forms (package-name "") evaluated-at

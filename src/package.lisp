@@ -33,6 +33,7 @@
    #:append-inspector-block
    #:append-list-block
    #:append-paragraph
+   #:append-project-code-reference
    #:append-project-decision
    #:append-project-issue
    #:append-project-meeting-note
@@ -237,6 +238,7 @@
    #:make-workspace-checkpoint
    #:make-workspace-member
    #:make-paragraph
+   #:make-project-code-reference
    #:make-project-decision
    #:make-project-issue
    #:make-project-meeting-note
@@ -323,6 +325,14 @@
    #:project-issue-reporter-id
    #:project-issue-severity
    #:project-issue-status
+   #:project-code-reference
+   #:project-code-reference-anchor
+   #:project-code-reference-created-at
+   #:project-code-reference-excerpt
+   #:project-code-reference-form-path
+   #:project-code-reference-source-snapshot
+   #:project-code-reference-status
+   #:project-code-reference-target
    #:project-meeting-note
    #:project-meeting-note-attendee-ids
    #:project-meeting-note-created-at
@@ -350,6 +360,7 @@
    #:replace-code-block-source
    #:replace-code-block-source-incrementally
    #:registry-objects-list
+   #:open-project-code-reference
    #:render
    #:render-application
    #:render-application-if-needed
@@ -362,6 +373,8 @@
    #:record-workspace-member
    #:record-operation
    #:resolve-sync-conflict
+   #:resolve-project-code-reference
+   #:retarget-project-code-reference
    #:result-block
    #:result-block-environment
    #:result-block-evaluated-at

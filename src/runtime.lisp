@@ -257,6 +257,8 @@
         (register-tree registry (code-block-result object) seen))
       (when (typep object 'repl-entry)
         (register-tree registry (repl-entry-result object) seen))
+      (when (typep object 'project-code-reference)
+        (register-tree registry (project-code-reference-target object) seen))
       (when (and (typep object 'reference-block)
                  (typep (reference-block-target object) 'model-object))
         (register-tree registry (reference-block-target object) seen))
@@ -277,13 +279,16 @@
                        seen)))))
 
 (defun code-block-status-controls (model)
-  (if (typep model 'code-block)
-      (format nil
-              "  |  Enter/e eval  |  [/] sibling  |  Left/Right depth  |  x delete  |  w wrap  |  u splice  |  v toggle structure~@[  |  ~A~]"
-              (let ((info (code-block-parse-info model)))
-                (when (code-block-selected-form-path model info)
-                  (code-block-selection-status-line model info))))
-      ""))
+  (cond
+    ((typep model 'project-code-reference)
+     "  |  Enter open code reference")
+    ((typep model 'code-block)
+     (format nil
+             "  |  Enter/e eval  |  [/] sibling  |  Left/Right depth  |  x delete  |  w wrap  |  u splice  |  v toggle structure~@[  |  ~A~]"
+             (let ((info (code-block-parse-info model)))
+               (when (code-block-selected-form-path model info)
+                 (code-block-selection-status-line model info)))))
+    (t "")))
 
 (defun code-block-edit-status-controls (model)
   (if (typep model 'code-block)
@@ -570,7 +575,8 @@
            cross-reference-browser-block stack-frame-browser-block
            condition-browser-block list-block table-block task-list
            project-task project-issue project-decision
-           project-meeting-note result-block repl-block repl-entry)))
+           project-meeting-note project-code-reference
+           result-block repl-block repl-entry)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -2015,7 +2021,7 @@
 
 (define-key-binding (:focus :return)
     (application event)
-  "Begin editing a paragraph or evaluate code."
+  "Begin editing a paragraph, evaluate code, or open a code reference."
   (declare (ignore event))
   (cond
     ((typep (focused-model application) 'paragraph)
@@ -2023,6 +2029,10 @@
      t)
     ((typep (focused-model application) 'code-block)
      (evaluate-focused-code-block application)
+     t)
+    ((typep (focused-model application) 'project-code-reference)
+     (invoke-command application 'open-project-code-reference
+                     (object-id (focused-model application)))
      t)))
 
 (define-key-binding (:focus :s)
@@ -2581,6 +2591,96 @@
            :created-at (project-meeting-note-created-at meeting)))
     (rebuild-root-cell application)
     meeting))
+
+(define-command append-project-code-reference
+    (application title target-id &optional (summary "") form-path parent-id)
+  "Append a code citation to PARENT-ID or the default section."
+  (let* ((registry (application-registry application))
+         (target (find-object registry target-id)))
+    (unless (typep target 'code-block)
+      (error "Object ~A is not a code block." target-id))
+    (let* ((reference (make-project-code-reference
+                       :title title :summary summary
+                       :target target :form-path form-path))
+           (parent (resolve-application-composite-parent application parent-id)))
+      (register-object registry reference)
+      (append-child parent reference)
+      (record-application-object-creation
+       application reference parent
+       (list :title (knowledge-item-title reference)
+             :summary (knowledge-item-summary reference)
+             :anchor (project-code-reference-anchor reference)
+             :created-at (project-code-reference-created-at reference)))
+      (rebuild-root-cell application)
+      reference)))
+
+(define-command retarget-project-code-reference
+    (application reference-id target-id &optional form-path)
+  "Replace a code citation with an anchor captured from the current target source."
+  (let* ((registry (application-registry application))
+         (reference (find-object registry reference-id))
+         (target (find-object registry target-id)))
+    (unless (typep reference 'project-code-reference)
+      (error "Object ~A is not a project code reference." reference-id))
+    (unless (typep target 'code-block)
+      (error "Object ~A is not a code block." target-id))
+    (when (and form-path (not (code-block-common-lisp-p target)))
+      (error "Structural code references require a Common Lisp code block."))
+    (invoke-command application 'set-object-slot reference-id :anchor
+                    (list :target-id target-id
+                          :form-path form-path
+                          :source-snapshot (code-block-source target)))))
+
+(defun application-notebook-for-node (application node)
+  (let ((workspace (application-workspace application))
+        (seen (make-hash-table :test #'eq))
+        (notebook nil))
+    (loop for current = node then (parent-of current)
+          while (and current (not (gethash current seen)))
+          do (setf (gethash current seen) t)
+          (when (eq current workspace)
+            (return notebook))
+          (when (typep current 'notebook)
+            (setf notebook current))
+          (unless (member current (children-of (parent-of current)))
+            (return nil)))))
+
+(define-command open-project-code-reference (application reference-id)
+  "Open a resolved code citation for editing; otherwise return NIL and its status."
+  (let ((reference (find-object (application-registry application) reference-id)))
+    (unless (typep reference 'project-code-reference)
+      (error "Object ~A is not a project code reference." reference-id))
+    (multiple-value-bind (target span status)
+        (resolve-project-code-reference reference)
+      (let ((notebook (and (eq status :resolved)
+                           (application-notebook-for-node application target))))
+        (cond
+          ((not (eq status :resolved))
+           (record-application-event application :reference
+                                     (format nil "Cannot open code reference: ~A."
+                                             status))
+           (values nil status))
+          ((null notebook)
+           (record-application-event application :reference
+                                     "Code reference target is outside the notebook tree.")
+           (values nil :detached-target))
+          (t
+           (stop-editing application)
+           (setf (workspace-current-notebook (application-workspace application))
+                 notebook)
+           (begin-editing-model application target)
+           (move-buffer-cursor-to (application-active-text-buffer application)
+                                  (first span))
+           (when (project-code-reference-form-path reference)
+             (set-code-block-selected-form-path
+              target (project-code-reference-form-path reference)))
+           (rebuild-root-cell application)
+           (perform-layout (application-root-cell application)
+                           :width (backend-layout-width
+                                   (application-backend application)))
+           (ensure-active-caret-visible application)
+           (mark-application-dirty application)
+           (values target :resolved)))))))
 
 (define-command evaluate-code-block (application block-id)
   "Evaluate a code block by object id."

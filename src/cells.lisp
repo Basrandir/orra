@@ -646,6 +646,20 @@
                                   (project-meeting-note-location model)))
                       (format nil "created-at: ~A"
                               (project-meeting-note-created-at model))))
+               (project-code-reference
+                (list (format nil "title: ~A" (knowledge-item-title model))
+                      (format nil "summary: ~A"
+                              (preview-string (knowledge-item-summary model)))
+                      (format nil "target: ~A"
+                              (object-reference-summary-string
+                               (project-code-reference-target model)))
+                      (format nil "form-path: ~A"
+                              (or (project-code-reference-form-path model)
+                                  "whole block"))
+                      (format nil "status: ~A"
+                              (project-code-reference-status model))
+                      (format nil "created-at: ~A"
+                              (project-code-reference-created-at model))))
                (result-block
                 (list (format nil "status: ~A"
                               (result-block-status model))
@@ -764,6 +778,18 @@
           (or (project-meeting-note-occurred-at meeting) "-")
           (or (project-meeting-note-facilitator-id meeting) "-")
           (project-meeting-note-attendees-string meeting)))
+
+(defun project-code-reference-heading (reference)
+  (format nil "Code reference [~A]: ~A"
+          (project-code-reference-status reference)
+          (knowledge-item-title reference)))
+
+(defun project-code-reference-metadata-line (reference)
+  (format nil "target: ~A  |  form-path: ~A"
+          (if (project-code-reference-target reference)
+              (object-id (project-code-reference-target reference))
+              "-")
+          (or (project-code-reference-form-path reference) "whole block")))
 
 (defun perform-layout (cell &key (x 0) (y 0) (width 80))
   (setf (cell-bounds cell)
@@ -1158,6 +1184,29 @@
                         :role :metadata)))
        (dolist (child (children-of node) cell)
          (append-child cell (build-node-cell child registry)))))
+    (project-code-reference
+     (let ((cell (make-container-cell
+                  :registry registry :model node
+                  :label (project-code-reference-heading node))))
+       (append-heading-cell cell registry node
+                            (project-code-reference-heading node))
+       (unless (string= "" (knowledge-item-summary node))
+         (append-text-lines cell registry node
+                            (split-lines (knowledge-item-summary node))))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry :model node
+                      :text (project-code-reference-metadata-line node)
+                      :role :metadata))
+       (when (project-code-reference-form-path node)
+         (append-child cell
+                       (make-text-cell
+                        :registry registry :model node
+                        :text "Captured form source (STALE after source changes)."
+                        :role :metadata)))
+       (append-text-lines cell registry node
+                          (split-lines (project-code-reference-excerpt node)))
+       cell))
     (result-block
      (let ((cell (make-container-cell
                   :registry registry

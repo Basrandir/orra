@@ -7644,6 +7644,284 @@
                             (paragraph-text peer-notes)))
               "Peer replay should preserve nested meeting content."))))))
 
+(deftest project-code-reference-is-notebook-native-and-persistent ()
+  (let* ((workspace (make-workspace))
+         (notebook (make-notebook))
+         (section (make-section))
+         (meeting (make-project-meeting-note :title "Review"))
+         (target (make-code-block :source "(list :hello (+ 20 22))"))
+         (reference (make-project-code-reference
+                     :title "Answer calculation"
+                     :summary "Discuss the nested expression."
+                     :target target :form-path '(0 2) :created-at 100)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section meeting)
+    (append-child meeting reference)
+    (let ((texts (collect-text-cells
+                  (build-workspace-cell-tree workspace
+                                             (make-object-registry)))))
+      (is (find "Code reference [RESOLVED]: Answer calculation"
+                texts :test #'string=)
+          "Code references should render inside meeting notes.")
+      (is (find "Discuss the nested expression." texts :test #'string=)
+          "Code references should render their knowledge summary.")
+      (is (find "(+ 20 22)" texts :test #'string=)
+          "Structural references should show the cited source excerpt."))
+    (replace-code-block-source target "(list :hello (+ 21 22))")
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             ;; The referenced target is detached; collection must follow the citation.
+             (save-workspace-to-file workspace path)
+             (let* ((registry (make-object-registry))
+                    (loaded (load-workspace-from-file path :registry registry))
+                    (loaded-reference
+                     (find-object registry (object-id reference)))
+                    (loaded-target (find-object registry (object-id target)))
+                    (application (make-application :workspace loaded)))
+               (is (and (typep loaded-reference 'project-code-reference)
+                        (eq loaded-target
+                            (project-code-reference-target loaded-reference))
+                        (string= "Answer calculation"
+                                 (knowledge-item-title loaded-reference))
+                        (string= "Discuss the nested expression."
+                                 (knowledge-item-summary loaded-reference))
+                        (= 100 (project-code-reference-created-at loaded-reference))
+                        (equal '(0 2)
+                               (project-code-reference-form-path loaded-reference)))
+                   "Code citations and their targets should survive persistence.")
+               (is (and (eq :stale
+                            (project-code-reference-status loaded-reference))
+                        (string= "(+ 20 22)"
+                                 (project-code-reference-excerpt loaded-reference))
+                        (string= "(list :hello (+ 21 22))"
+                                 (code-block-source loaded-target)))
+                   "Loading should preserve the old citation independently of live source.")
+               (is (eq loaded-target
+                       (find-object (application-registry application)
+                                    (object-id target)))
+                   "Application registration should follow referenced code targets.")
+               (is (find "Code reference [STALE]: Answer calculation"
+                         (collect-text-cells (application-root-cell application))
+                         :test #'string=)
+                   "Stale citations should be visible in the notebook.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest project-code-reference-commands-record-replayable-anchors ()
+  (let* ((application (make-application))
+         (journal (application-operation-journal application))
+         (code (invoke-command application 'append-code-block
+                               "(list :hello (+ 20 22))"))
+         (meeting (invoke-command application 'append-project-meeting-note
+                                  "Code review"))
+         (reference (invoke-command application 'append-project-code-reference
+                                    "Answer" (object-id code) "Review this form."
+                                    '(0 2) (object-id meeting)))
+         (peer-registry (make-object-registry))
+         (peer-parent (make-instance 'section :id (object-id (parent-of meeting))
+                                     :kind :section :title "Peer Section")))
+    (invoke-command application 'set-object-slot (object-id code)
+                    :source "(list :changed (* 6 7))")
+    (is (eq :stale (project-code-reference-status reference))
+        "Source edits should invalidate structural citations.")
+    (invoke-command application 'retarget-project-code-reference
+                    (object-id reference) (object-id code) '(0 2))
+    (invoke-command application 'set-object-slot
+                    (object-id reference) :summary "Accepted during review.")
+    (let ((operations (journal-operations journal)))
+      (is (equal '(:create-object :create-object :create-object
+                   :set-slot :set-slot :set-slot)
+                 (mapcar #'operation-type operations))
+          "Code citations should use the existing semantic operation protocol.")
+      (is (eq :anchor (getf (operation-payload (fifth operations)) :slot))
+          "Retargeting should update the entire citation in one operation.")
+      (is (every (lambda (operation)
+                   (eq :pending
+                       (journal-operation-queue-status journal operation)))
+                 operations)
+          "Local citation operations should remain pending until sync.")
+      (register-object peer-registry peer-parent)
+      (dolist (operation operations)
+        (apply-workspace-operation peer-registry operation))
+      (let ((peer-reference (find-object peer-registry (object-id reference)))
+            (peer-code (find-object peer-registry (object-id code)))
+            (peer-meeting (find-object peer-registry (object-id meeting))))
+        (is (and (eq peer-code (project-code-reference-target peer-reference))
+                 (equal (project-code-reference-anchor reference)
+                        (project-code-reference-anchor peer-reference))
+                 (eq :resolved (project-code-reference-status peer-reference))
+                 (string= "(* 6 7)"
+                          (project-code-reference-excerpt peer-reference))
+                 (string= "Accepted during review."
+                          (knowledge-item-summary peer-reference))
+                 (= (project-code-reference-created-at reference)
+                    (project-code-reference-created-at peer-reference)))
+            "Peer replay should converge on the complete citation and metadata.")
+        (is (and (eq peer-meeting (parent-of peer-reference))
+                 (equal (list peer-reference) (children-of peer-meeting)))
+            "Peer replay should keep citations nested in their meeting note.")))))
+
+(deftest project-code-reference-replay-retains-historical-source ()
+  (let* ((application (make-application))
+         (code (invoke-command application 'append-code-block "(+ 20 22)"))
+         (reference (invoke-command application 'append-project-code-reference
+                                    "Original answer" (object-id code) "" '(0)))
+         (journal (application-operation-journal application))
+         (peer-registry (make-object-registry))
+         (peer-parent (make-instance 'section
+                                     :id (object-id (parent-of reference))
+                                     :kind :section)))
+    (register-object peer-registry peer-parent)
+    (apply-workspace-operation peer-registry (first (journal-operations journal)))
+    (let ((peer-code (find-object peer-registry (object-id code))))
+      (replace-code-block-source peer-code "(* 6 7)")
+      (apply-workspace-operation peer-registry (second (journal-operations journal)))
+      (let ((peer-reference (find-object peer-registry (object-id reference))))
+        (is (and (eq peer-code (project-code-reference-target peer-reference))
+                 (eq :stale (project-code-reference-status peer-reference))
+                 (string= "(+ 20 22)"
+                          (project-code-reference-excerpt peer-reference)))
+            "Replay must retain the sender's citation even when peer source has changed.")))))
+
+(deftest project-code-reference-rejects-invalid-citations-before-recording ()
+  (let* ((application (make-application))
+         (registry (application-registry application))
+         (journal (application-operation-journal application))
+         (code (invoke-command application 'append-code-block "(+ 20 22)"))
+         (reference (invoke-command application 'append-project-code-reference
+                                    "Answer" (object-id code) "" '(0)))
+         (anchor (project-code-reference-anchor reference))
+         (operation-count (length (journal-operations journal)))
+         (object-count (length (registry-objects-list registry))))
+    (flet ((reject (thunk)
+             (let ((rejectedp nil))
+               (handler-case (funcall thunk)
+                 (error () (setf rejectedp t)))
+               (is rejectedp "Invalid citations must be rejected."))))
+      (dolist (path '((-1) (99) (0 99) (0 . 1) "0"))
+        (reject (lambda ()
+                  (invoke-command application 'append-project-code-reference
+                                  "Invalid" (object-id code) "" path))))
+      (is (= object-count (length (registry-objects-list registry)))
+          "Rejected creations must not leave registered citation objects.")
+      (dolist (value (list nil
+                           (list :target-id (object-id code))
+                           (list :target-id "missing" :form-path nil
+                                 :source-snapshot "")
+                           (list :target-id (object-id code) :form-path '(0)
+                                 :source-snapshot nil)
+                           (list :target-id (object-id code) :form-path '(99)
+                                 :source-snapshot "(+ 20 22)")))
+        (reject (lambda ()
+                  (invoke-command application 'set-object-slot
+                                  (object-id reference) :anchor value))))
+      (reject (lambda ()
+                (invoke-command application 'set-object-slot
+                                (object-id reference) :form-path '(0 1))))
+      (reject (lambda ()
+                (invoke-command application 'set-object-slot
+                                (object-id reference) :created-at 0)))
+      (is (equal anchor (project-code-reference-anchor reference))
+          "Rejected anchor updates must preserve the entire citation.")
+      (is (= operation-count (length (journal-operations journal)))
+          "Rejected citation commands must not advance the journal."))))
+
+(deftest project-code-reference-open-restores-cursor-and-notebook ()
+  (let* ((workspace (make-workspace))
+         (code-notebook (make-notebook :title "Code"))
+         (notes-notebook (make-notebook :title "Notes"))
+         (code-section (make-section))
+         (notes-section (make-section))
+         (source "(list :hello (+ 20 22))")
+         (code (make-code-block :source source))
+         (reference (make-project-code-reference
+                     :title "Operand" :target code :form-path '(0 2 1))))
+    (append-child workspace code-notebook)
+    (append-child workspace notes-notebook)
+    (append-child code-notebook code-section)
+    (append-child notes-notebook notes-section)
+    (dotimes (index 20)
+      (append-child code-section (make-paragraph :text (format nil "Line ~D" index))))
+    (append-child code-section code)
+    (append-child notes-section reference)
+    (let ((application (make-application
+                        :workspace workspace
+                        :backend (make-null-backend :layout-height 10))))
+      (orra::begin-editing-model application code)
+      (move-buffer-cursor-to (orra::application-active-text-buffer application)
+                             (length source))
+      (orra::stop-editing application)
+      (setf (orra::workspace-current-notebook workspace) notes-notebook
+            (orra::application-focused-model-id application) (object-id reference))
+      (rebuild-root-cell application)
+      (let ((operation-count
+             (length (journal-operations
+                      (application-operation-journal application)))))
+        (is (dispatch-application-key
+             application (make-key-event :key :return))
+            "Enter should open a focused code citation.")
+        (is (and (eq code-notebook (root-notebook workspace))
+                 (eq code (orra::focused-model application))
+                 (= (search "20" source)
+                    (text-buffer-cursor
+                     (orra::application-active-text-buffer application)))
+                 (equal '(0 2 1) (code-block-selected-form-path code)))
+            "Opening should switch notebooks and override the previously saved cursor.")
+        (is (plusp (application-viewport-y application))
+            "Opening a citation should scroll its caret into view.")
+        (is (= operation-count
+               (length (journal-operations
+                        (application-operation-journal application))))
+            "Citation navigation should not create semantic edit operations.")))))
+
+(deftest project-code-reference-open-declines-stale-and-detached-targets ()
+  (let* ((application (make-application))
+         (code (invoke-command application 'append-code-block "(+ 20 22)"))
+         (reference (invoke-command application 'append-project-code-reference
+                                    "Answer" (object-id code) "" '(0)))
+         (original-editor (orra::focused-model application)))
+    (orra::begin-editing-model application original-editor)
+    (replace-code-block-source code "(* 6 7)")
+    (multiple-value-bind (target status)
+        (invoke-command application 'open-project-code-reference (object-id reference))
+      (is (and (null target) (eq :stale status)
+               (eq original-editor (orra::focused-model application))
+               (string= (object-id original-editor)
+                        (orra::application-active-editor-model-id application)))
+          "Opening a stale citation must preserve the current focus and editor."))
+    (let* ((detached (make-code-block :source "(+ 1 2)"
+                                      :registry (application-registry application)))
+           (detached-reference
+            (invoke-command application 'append-project-code-reference
+                            "Detached" (object-id detached))))
+      (multiple-value-bind (target status)
+          (invoke-command application 'open-project-code-reference
+                          (object-id detached-reference))
+        (is (and (null target) (eq :detached-target status))
+            "Detached target objects must not open an invisible editor.")))))
+
+(deftest project-code-reference-whole-block-follows-live-source ()
+  (let* ((target (make-code-block :language :text :source "unparsed source"))
+         (reference (make-project-code-reference :title "Source" :target target)))
+    (replace-code-block-source target "changed source")
+    (multiple-value-bind (resolved span status)
+        (resolve-project-code-reference reference)
+      (is (and (eq target resolved) (eq :resolved status)
+               (equal '(0 14) span)
+               (string= "changed source" (project-code-reference-excerpt reference)))
+          "Whole-block references should follow current source without parsing it."))
+    (let ((rejectedp nil))
+      (handler-case
+          (make-project-code-reference :target target :form-path '(0))
+        (error () (setf rejectedp t)))
+      (is rejectedp "Structural citations require a supported language."))
+    (setf (code-block-language target) :common-lisp)
+    (replace-code-block-source target "(+")
+    (is (eq :resolved (project-code-reference-status reference))
+        "Whole-block references should also work while source is incomplete.")))
+
 (defun run-all-tests ()
   (let ((passed 0)
         (failed 0))
