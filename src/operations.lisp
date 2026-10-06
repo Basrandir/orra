@@ -2010,6 +2010,10 @@
      (make-instance 'project-decision
                     :id id
                     :kind :project-decision))
+    (:project-meeting-note
+     (make-instance 'project-meeting-note
+                    :id id
+                    :kind :project-meeting-note))
     (:result-block
      (make-instance 'result-block :id id :kind :result-block))
     (:repl-block
@@ -2442,6 +2446,37 @@
     (otherwise (set-object-property decision slot value)))
   decision)
 
+(defun set-project-meeting-note-slot (meeting slot value)
+  (case slot
+    (:title
+     (setf (knowledge-item-title meeting) (normalize-display-string value)))
+    (:summary
+     (setf (knowledge-item-summary meeting) (normalize-display-string value)))
+    (:status
+     (setf (project-meeting-note-status meeting)
+           (ensure-project-meeting-note-status value)))
+    (:occurred-at
+     (setf (project-meeting-note-occurred-at meeting)
+           (ensure-knowledge-item-time value :occurred-at)))
+    (:facilitator-id
+     (setf (project-meeting-note-facilitator-id meeting)
+           (normalize-knowledge-actor-id value)))
+    (:attendee-ids
+     (setf (project-meeting-note-attendee-ids meeting)
+           (normalize-knowledge-actor-ids value)))
+    (:location
+     (setf (project-meeting-note-location meeting)
+           (normalize-display-string value)))
+    (:created-at
+     (let ((created-at (ensure-knowledge-item-created-at value)))
+       (cond
+         ((null (project-meeting-note-created-at meeting))
+          (setf (project-meeting-note-created-at meeting) created-at))
+         ((not (equal created-at (project-meeting-note-created-at meeting)))
+          (error "Project meeting note creation time is immutable.")))))
+    (otherwise (set-object-property meeting slot value)))
+  meeting)
+
 (defun set-repl-block-slot (block slot value)
   (case slot
     (:title (setf (repl-block-title block) (normalize-display-string value)))
@@ -2563,6 +2598,7 @@
     (project-task (set-project-task-slot object slot value))
     (project-issue (set-project-issue-slot object slot value))
     (project-decision (set-project-decision-slot object slot value))
+    (project-meeting-note (set-project-meeting-note-slot object slot value))
     (repl-block (set-repl-block-slot object slot value))
     (repl-entry (set-repl-entry-slot object slot value))
     (reference-block (set-reference-block-slot object slot value registry))
@@ -2664,6 +2700,17 @@
        (:decided-by-id (project-decision-decided-by-id object))
        (:decided-at (project-decision-decided-at object))
        (:created-at (project-decision-created-at object))
+       (otherwise (object-property object slot))))
+    (project-meeting-note
+     (case slot
+       (:title (knowledge-item-title object))
+       (:summary (knowledge-item-summary object))
+       (:status (project-meeting-note-status object))
+       (:occurred-at (project-meeting-note-occurred-at object))
+       (:facilitator-id (project-meeting-note-facilitator-id object))
+       (:attendee-ids (project-meeting-note-attendee-ids object))
+       (:location (project-meeting-note-location object))
+       (:created-at (project-meeting-note-created-at object))
        (otherwise (object-property object slot))))
     (repl-block
      (case slot

@@ -24,6 +24,7 @@
 (defmethod persistable-object-p ((object project-task)) t)
 (defmethod persistable-object-p ((object project-issue)) t)
 (defmethod persistable-object-p ((object project-decision)) t)
+(defmethod persistable-object-p ((object project-meeting-note)) t)
 (defmethod persistable-object-p ((object result-block)) t)
 
 (defparameter *workspace-file-version* 2)
@@ -251,6 +252,19 @@
                 :decided-at (project-decision-decided-at object)
                 :created-at (project-decision-created-at object))))
 
+(defmethod serialize-object-record ((object project-meeting-note))
+  (append (base-record object :project-meeting-note)
+          (list :title (knowledge-item-title object)
+                :summary (knowledge-item-summary object)
+                :status (project-meeting-note-status object)
+                :occurred-at (project-meeting-note-occurred-at object)
+                :facilitator-id
+                (project-meeting-note-facilitator-id object)
+                :attendee-ids (project-meeting-note-attendee-ids object)
+                :location (project-meeting-note-location object)
+                :created-at (project-meeting-note-created-at object)
+                :children (mapcar #'object-id (children-of object)))))
+
 (defmethod serialize-object-record ((object result-block))
   (append (base-record object :result-block)
           (list :value (encode-value (result-block-value object))
@@ -320,6 +334,10 @@
        (make-instance 'project-decision
                       :id id
                       :kind :project-decision))
+      (:project-meeting-note
+       (make-instance 'project-meeting-note
+                      :id id
+                      :kind :project-meeting-note))
       (:result-block
        (make-instance 'result-block :id id :kind :result-block)))))
 
@@ -481,6 +499,30 @@
            (ensure-knowledge-item-time (getf record :decided-at) :decided-at))
      (setf (project-decision-created-at object)
            (ensure-knowledge-item-created-at (getf record :created-at))))
+    (project-meeting-note
+     (setf (knowledge-item-title object)
+           (normalize-display-string (getf record :title)))
+     (setf (knowledge-item-summary object)
+           (normalize-display-string (getf record :summary)))
+     (setf (project-meeting-note-status object)
+           (ensure-project-meeting-note-status (getf record :status)))
+     (setf (project-meeting-note-occurred-at object)
+           (ensure-knowledge-item-time (getf record :occurred-at)
+                                       :occurred-at))
+     (setf (project-meeting-note-facilitator-id object)
+           (normalize-knowledge-actor-id (getf record :facilitator-id)))
+     (setf (project-meeting-note-attendee-ids object)
+           (normalize-knowledge-actor-ids (getf record :attendee-ids)))
+     (setf (project-meeting-note-location object)
+           (normalize-display-string (getf record :location)))
+     (setf (project-meeting-note-created-at object)
+           (ensure-knowledge-item-created-at (getf record :created-at)))
+     (setf (children-of object)
+           (mapcar (lambda (id)
+                     (gethash id object-table))
+                   (getf record :children)))
+     (dolist (child (children-of object))
+       (setf (parent-of child) object)))
     (result-block
      (setf (result-block-value object)
            (decode-value (getf record :value) object-table))

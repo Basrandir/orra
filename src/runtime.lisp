@@ -570,7 +570,7 @@
            cross-reference-browser-block stack-frame-browser-block
            condition-browser-block list-block table-block task-list
            project-task project-issue project-decision
-           result-block repl-block repl-entry)))
+           project-meeting-note result-block repl-block repl-entry)))
 
 (defun visible-focusable-models (application)
   (let ((seen (make-hash-table :test #'equal))
@@ -2135,18 +2135,28 @@
     (mark-application-dirty application)
     source))
 
-(define-command append-paragraph (application text)
-  "Append a new paragraph to the default section."
+(defun resolve-application-composite-parent (application parent-id)
+  (if parent-id
+      (let ((parent (find-object (application-registry application) parent-id)))
+        (unless parent
+          (error "Unknown parent object ~A." parent-id))
+        (unless (typep parent 'composite-node)
+          (error "Object ~A cannot contain notebook nodes." parent-id))
+        parent)
+      (ensure-default-section
+       (application-workspace application)
+       (application-registry application))))
+
+(define-command append-paragraph (application text &optional parent-id)
+  "Append a new paragraph to PARENT-ID or the default section."
   (let* ((registry (application-registry application))
-         (section (ensure-default-section
-                   (application-workspace application)
-                   registry))
+         (parent (resolve-application-composite-parent application parent-id))
          (paragraph (make-paragraph :text text :registry registry)))
-    (append-child section paragraph)
+    (append-child parent paragraph)
     (record-application-object-creation
      application
      paragraph
-     section
+     parent
      (list :text (paragraph-text paragraph)))
     (rebuild-root-cell application)
     paragraph))
@@ -2538,6 +2548,39 @@
            :created-at (project-decision-created-at decision)))
     (rebuild-root-cell application)
     decision))
+
+(define-command append-project-meeting-note
+    (application title &optional (summary "") (status :planned) occurred-at
+                 facilitator-id attendee-ids (location ""))
+  "Append a composite project meeting note to the default section."
+  (let* ((registry (application-registry application))
+         (section (ensure-default-section
+                   (application-workspace application)
+                   registry))
+         (meeting (make-project-meeting-note
+                   :title title
+                   :summary summary
+                   :status status
+                   :occurred-at occurred-at
+                   :facilitator-id facilitator-id
+                   :attendee-ids attendee-ids
+                   :location location
+                   :registry registry)))
+    (append-child section meeting)
+    (record-application-object-creation
+     application
+     meeting
+     section
+     (list :title (knowledge-item-title meeting)
+           :summary (knowledge-item-summary meeting)
+           :status (project-meeting-note-status meeting)
+           :occurred-at (project-meeting-note-occurred-at meeting)
+           :facilitator-id (project-meeting-note-facilitator-id meeting)
+           :attendee-ids (project-meeting-note-attendee-ids meeting)
+           :location (project-meeting-note-location meeting)
+           :created-at (project-meeting-note-created-at meeting)))
+    (rebuild-root-cell application)
+    meeting))
 
 (define-command evaluate-code-block (application block-id)
   "Evaluate a code block by object id."

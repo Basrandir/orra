@@ -341,6 +341,35 @@
     :accessor project-decision-created-at
     :initform nil)))
 
+(defparameter *project-meeting-note-statuses*
+  '(:planned :in-progress :completed :cancelled))
+
+(defclass project-meeting-note (knowledge-item composite-node)
+  ((status
+    :initarg :status
+    :accessor project-meeting-note-status
+    :initform :planned)
+   (occurred-at
+    :initarg :occurred-at
+    :accessor project-meeting-note-occurred-at
+    :initform nil)
+   (facilitator-id
+    :initarg :facilitator-id
+    :accessor project-meeting-note-facilitator-id
+    :initform nil)
+   (attendee-ids
+    :initarg :attendee-ids
+    :accessor project-meeting-note-attendee-ids
+    :initform nil)
+   (location
+    :initarg :location
+    :accessor project-meeting-note-location
+    :initform "")
+   (created-at
+    :initarg :created-at
+    :accessor project-meeting-note-created-at
+    :initform nil)))
+
 (defun normalize-display-string (value)
   (cond
     ((null value) "")
@@ -407,6 +436,11 @@
 (defun normalize-knowledge-actor-id (actor-id)
   (and actor-id (normalize-display-string actor-id)))
 
+(defun normalize-knowledge-actor-ids (actor-ids)
+  (unless (listp actor-ids)
+    (error "Knowledge item actor ids must be a list, got ~S." actor-ids))
+  (mapcar #'normalize-knowledge-actor-id actor-ids))
+
 (defun ensure-project-issue-status (status)
   (unless (member status *project-issue-statuses*)
     (error "Unsupported project issue status ~S." status))
@@ -420,6 +454,11 @@
 (defun ensure-project-decision-status (status)
   (unless (member status *project-decision-statuses*)
     (error "Unsupported project decision status ~S." status))
+  status)
+
+(defun ensure-project-meeting-note-status (status)
+  (unless (member status *project-meeting-note-statuses*)
+    (error "Unsupported project meeting note status ~S." status))
   status)
 
 (defun %register-if-present (registry object)
@@ -620,6 +659,28 @@
                   (normalize-knowledge-actor-id decided-by-id)
                   :decided-at
                   (ensure-knowledge-item-time decided-at :decided-at)
+                  :created-at
+                  (ensure-knowledge-item-created-at created-at))))
+
+(defun make-project-meeting-note
+    (&key (title "") (summary "") (status :planned) occurred-at
+       facilitator-id attendee-ids (location "")
+       (created-at (get-universal-time)) registry)
+  (%register-if-present
+   registry
+   (make-instance 'project-meeting-note
+                  :id (fresh-id "meeting")
+                  :kind :project-meeting-note
+                  :title (normalize-display-string title)
+                  :summary (normalize-display-string summary)
+                  :status (ensure-project-meeting-note-status status)
+                  :occurred-at
+                  (ensure-knowledge-item-time occurred-at :occurred-at)
+                  :facilitator-id
+                  (normalize-knowledge-actor-id facilitator-id)
+                  :attendee-ids
+                  (normalize-knowledge-actor-ids attendee-ids)
+                  :location (normalize-display-string location)
                   :created-at
                   (ensure-knowledge-item-created-at created-at))))
 

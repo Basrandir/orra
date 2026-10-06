@@ -35,6 +35,7 @@
    #:append-paragraph
    #:append-project-decision
    #:append-project-issue
+   #:append-project-meeting-note
    #:append-project-task
    #:append-quote-block
    #:append-reference-block
@@ -238,6 +239,7 @@
    #:make-paragraph
    #:make-project-decision
    #:make-project-issue
+   #:make-project-meeting-note
    #:make-project-task
    #:make-quote-block
    #:make-reference-block
@@ -321,6 +323,13 @@
    #:project-issue-reporter-id
    #:project-issue-severity
    #:project-issue-status
+   #:project-meeting-note
+   #:project-meeting-note-attendee-ids
+   #:project-meeting-note-created-at
+   #:project-meeting-note-facilitator-id
+   #:project-meeting-note-location
+   #:project-meeting-note-occurred-at
+   #:project-meeting-note-status
    #:project-task
    #:project-task-assignee-id
    #:project-task-created-at

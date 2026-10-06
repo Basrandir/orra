@@ -623,6 +623,29 @@
                               (or (project-decision-decided-at model) "-"))
                       (format nil "created-at: ~A"
                               (project-decision-created-at model))))
+               (project-meeting-note
+                (list (format nil "title: ~A"
+                              (knowledge-item-title model))
+                      (format nil "summary: ~A"
+                              (preview-string
+                               (knowledge-item-summary model)))
+                      (format nil "status: ~A"
+                              (project-meeting-note-status model))
+                      (format nil "occurred-at: ~A"
+                              (or (project-meeting-note-occurred-at model) "-"))
+                      (format nil "facilitator: ~A"
+                              (or (project-meeting-note-facilitator-id model)
+                                  "-"))
+                      (format nil "attendees: ~D"
+                              (length
+                               (project-meeting-note-attendee-ids model)))
+                      (format nil "location: ~A"
+                              (if (string= ""
+                                           (project-meeting-note-location model))
+                                  "-"
+                                  (project-meeting-note-location model)))
+                      (format nil "created-at: ~A"
+                              (project-meeting-note-created-at model))))
                (result-block
                 (list (format nil "status: ~A"
                               (result-block-status model))
@@ -724,6 +747,23 @@
   (format nil "decided-by: ~A  |  decided-at: ~A"
           (or (project-decision-decided-by-id decision) "-")
           (or (project-decision-decided-at decision) "-")))
+
+(defun project-meeting-note-attendees-string (meeting)
+  (let ((attendee-ids (project-meeting-note-attendee-ids meeting)))
+    (if attendee-ids
+        (format nil "~{~A~^, ~}" attendee-ids)
+        "-")))
+
+(defun project-meeting-note-heading (meeting)
+  (format nil "Meeting [~A]: ~A"
+          (project-meeting-note-status meeting)
+          (knowledge-item-title meeting)))
+
+(defun project-meeting-note-metadata-line (meeting)
+  (format nil "occurred-at: ~A  |  facilitator: ~A  |  attendees: ~A"
+          (or (project-meeting-note-occurred-at meeting) "-")
+          (or (project-meeting-note-facilitator-id meeting) "-")
+          (project-meeting-note-attendees-string meeting)))
 
 (defun perform-layout (cell &key (x 0) (y 0) (width 80))
   (setf (cell-bounds cell)
@@ -1088,6 +1128,36 @@
                       :text (project-decision-metadata-line node)
                       :role :metadata))
        cell))
+    (project-meeting-note
+     (let ((cell (make-container-cell
+                  :registry registry
+                  :model node
+                  :label (project-meeting-note-heading node))))
+       (append-heading-cell cell
+                            registry
+                            node
+                            (project-meeting-note-heading node))
+       (unless (string= "" (knowledge-item-summary node))
+         (append-text-lines cell
+                            registry
+                            node
+                            (split-lines (knowledge-item-summary node))))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry
+                      :model node
+                      :text (project-meeting-note-metadata-line node)
+                      :role :metadata))
+       (unless (string= "" (project-meeting-note-location node))
+         (append-child cell
+                       (make-text-cell
+                        :registry registry
+                        :model node
+                        :text (format nil "location: ~A"
+                                      (project-meeting-note-location node))
+                        :role :metadata)))
+       (dolist (child (children-of node) cell)
+         (append-child cell (build-node-cell child registry)))))
     (result-block
      (let ((cell (make-container-cell
                   :registry registry

@@ -7485,6 +7485,165 @@
           (is (equal (list peer-decision) (children-of peer-parent))
               "Peer replay should keep project decisions in the notebook tree."))))))
 
+(deftest project-meeting-note-is-composite-and-persistent ()
+  (let* ((registry (make-object-registry))
+         (workspace (make-workspace :registry registry))
+         (notebook (make-notebook :registry registry))
+         (section (make-section :registry registry))
+         (meeting (make-project-meeting-note
+                   :title "Renderer planning"
+                   :summary "Review the long-term GPU architecture."
+                   :status :completed
+                   :occurred-at 200
+                   :facilitator-id "actor-1"
+                   :attendee-ids '("actor-1" "actor-2")
+                   :location "Orra workspace"
+                   :created-at 100
+                   :registry registry))
+         (notes (make-paragraph :text "Keep draw lists Lisp-owned."
+                                :registry registry))
+         (decision (make-project-decision
+                    :title "Use an explicit renderer protocol"
+                    :status :accepted
+                    :outcome "Separate cells from backend drawing calls."
+                    :created-at 150
+                    :registry registry)))
+    (append-child workspace notebook)
+    (append-child notebook section)
+    (append-child section meeting)
+    (append-child meeting notes)
+    (append-child meeting decision)
+    (let ((texts (collect-text-cells
+                  (build-workspace-cell-tree workspace registry))))
+      (is (find "Meeting [COMPLETED]: Renderer planning"
+                texts
+                :test #'string=)
+          "Meeting notes should render as notebook-native containers.")
+      (is (find "occurred-at: 200  |  facilitator: actor-1  |  attendees: actor-1, actor-2"
+                texts
+                :test #'string=)
+          "Meeting participation should render as metadata.")
+      (is (find "Keep draw lists Lisp-owned." texts :test #'string=)
+          "Meeting notes should render embedded paragraphs.")
+      (is (find "Decision [ACCEPTED]: Use an explicit renderer protocol"
+                texts
+                :test #'string=)
+          "Meeting notes should render embedded knowledge objects."))
+    (uiop:with-temporary-file (:pathname path :keep t)
+      (unwind-protect
+           (progn
+             (save-workspace-to-file workspace path :registry registry)
+             (let* ((loaded-registry (make-object-registry))
+                    (loaded-workspace
+                     (load-workspace-from-file path
+                                               :registry loaded-registry))
+                    (loaded-section
+                     (first (children-of (root-notebook loaded-workspace))))
+                    (loaded-meeting
+                     (find-if (lambda (object)
+                                (typep object 'project-meeting-note))
+                              (children-of loaded-section)))
+                    (loaded-children (children-of loaded-meeting)))
+               (is (and (eq :completed
+                            (project-meeting-note-status loaded-meeting))
+                        (= 200
+                           (project-meeting-note-occurred-at loaded-meeting))
+                        (string= "actor-1"
+                                 (project-meeting-note-facilitator-id
+                                  loaded-meeting))
+                        (equal '("actor-1" "actor-2")
+                               (project-meeting-note-attendee-ids
+                                loaded-meeting))
+                        (string= "Orra workspace"
+                                 (project-meeting-note-location loaded-meeting))
+                        (= 100
+                           (project-meeting-note-created-at loaded-meeting)))
+                   "Meeting metadata should survive persistence.")
+               (is (and (= 2 (length loaded-children))
+                        (typep (first loaded-children) 'paragraph)
+                        (typep (second loaded-children) 'project-decision))
+                   "Meeting child order and types should survive persistence.")
+               (is (every (lambda (child)
+                            (eq loaded-meeting (parent-of child)))
+                          loaded-children)
+                   "Loaded meeting children should retain their parent.")))
+        (when (probe-file path)
+          (delete-file path))))))
+
+(deftest project-meeting-note-commands-record-nested-operations ()
+  (let* ((application (make-application :backend (make-null-backend)))
+         (journal (application-operation-journal application))
+         (meeting (invoke-command application
+                                  'append-project-meeting-note
+                                  "Collaboration review"
+                                  "Review operation replay."
+                                  :in-progress
+                                  300
+                                  "actor-1"
+                                  '("actor-1" "actor-2")
+                                  "Remote"))
+         (notes (invoke-command application
+                                'append-paragraph
+                                "Record all nested edits."
+                                (object-id meeting)))
+         (parent (parent-of meeting)))
+    (invoke-command application 'set-object-slot
+                    (object-id meeting) :status :completed)
+    (invoke-command application 'set-object-slot
+                    (object-id meeting) :attendee-ids
+                    '("actor-1" "actor-2" "actor-3"))
+    (let ((operation-count (length (journal-operations journal)))
+          (rejectedp nil))
+      (handler-case
+          (invoke-command application 'set-object-slot
+                          (object-id meeting) :status :archived)
+        (error ()
+          (setf rejectedp t)))
+      (is rejectedp "Unsupported meeting statuses should be rejected.")
+      (is (eq :completed (project-meeting-note-status meeting))
+          "Rejected meeting updates should preserve the current status.")
+      (is (= operation-count (length (journal-operations journal)))
+          "Rejected meeting updates should not advance the operation journal."))
+    (let ((operations (journal-operations journal)))
+      (is (equal '(:create-object :create-object :set-slot :set-slot)
+                 (mapcar #'operation-type operations))
+          "Meeting and nested paragraph commands should record semantic operations.")
+      (is (string= (object-id meeting)
+                   (getf (operation-payload (second operations)) :parent-id))
+          "Nested paragraph creation should target the meeting object.")
+      (is (every (lambda (operation)
+                   (eq :pending
+                       (journal-operation-queue-status journal operation)))
+                 operations)
+          "Local meeting operations should remain pending until sync.")
+      (let ((peer-registry (make-object-registry))
+            (peer-parent (make-instance 'section
+                                        :id (object-id parent)
+                                        :kind :section
+                                        :title "Peer Section")))
+        (register-object peer-registry peer-parent)
+        (dolist (operation operations)
+          (apply-workspace-operation peer-registry operation))
+        (let* ((peer-meeting
+                (find-object peer-registry (object-id meeting)))
+               (peer-notes
+                (find-object peer-registry (object-id notes))))
+          (is (typep peer-meeting 'project-meeting-note)
+              "Peer replay should create the meeting note object.")
+          (is (and (eq :completed
+                       (project-meeting-note-status peer-meeting))
+                   (equal '("actor-1" "actor-2" "actor-3")
+                          (project-meeting-note-attendee-ids peer-meeting))
+                   (= 300 (project-meeting-note-occurred-at peer-meeting))
+                   (string= "Remote"
+                            (project-meeting-note-location peer-meeting)))
+              "Peer replay should converge on meeting metadata.")
+          (is (and (equal (list peer-notes) (children-of peer-meeting))
+                   (eq peer-meeting (parent-of peer-notes))
+                   (string= "Record all nested edits."
+                            (paragraph-text peer-notes)))
+              "Peer replay should preserve nested meeting content."))))))
+
 (defun run-all-tests ()
   (let ((passed 0)
         (failed 0))
