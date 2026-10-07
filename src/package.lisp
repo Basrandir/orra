@@ -31,6 +31,7 @@
    #:append-condition-browser-block
    #:append-cross-reference-browser-block
    #:append-inspector-block
+   #:append-link-browser-block
    #:append-list-block
    #:append-paragraph
    #:append-project-code-reference
@@ -209,9 +210,18 @@
    #:knowledge-item-title
    #:latest-workspace-checkpoint
    #:link-objects
+   #:link-browser-block
+   #:link-browser-block-direction
+   #:link-browser-block-label
+   #:link-browser-block-relation
+   #:link-browser-block-target
+   #:link-browser-entries
+   #:link-browser-entry-key
+   #:link-browser-selected-entry
    #:list-commands
    #:list-key-bindings
    #:make-key-event
+   #:make-link-browser-block
    #:list-block
    #:list-block-items
    #:list-block-ordered-p
@@ -286,6 +296,8 @@
    #:object-computed-slot-cached-p
    #:object-computed-slot-value
    #:object-id
+   #:object-links
+   #:object-backlinks
    #:object-kind
    #:object-metadata
    #:object-properties
@@ -361,6 +373,7 @@
    #:replace-code-block-source-incrementally
    #:registry-objects-list
    #:open-project-code-reference
+   #:open-link-browser-entry
    #:render
    #:render-application
    #:render-application-if-needed
@@ -374,6 +387,7 @@
    #:record-operation
    #:resolve-sync-conflict
    #:resolve-project-code-reference
+   #:resolve-link-browser-entry
    #:retarget-project-code-reference
    #:result-block
    #:result-block-environment
@@ -420,6 +434,7 @@
    #:stack-frame-browser-block-target
    #:start-application
    #:start-demo
+   #:step-link-browser-selection
    #:stop-editing
    #:sync-journal-with-coordinator
    #:sync-journal-with-transport

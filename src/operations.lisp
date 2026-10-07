@@ -1976,6 +1976,8 @@
      (make-instance 'quote-block :id id :kind :quote-block))
     (:reference-block
      (make-instance 'reference-block :id id :kind :reference-block))
+    (:link-browser-block
+     (make-instance 'link-browser-block :id id :kind :link-browser-block))
     (:inspector-block
      (make-instance 'inspector-block :id id :kind :inspector-block))
     (:source-browser-block
@@ -2097,6 +2099,64 @@
              (object-id object)
              entries))
     entries))
+
+(defun object-links (object &key relation)
+  "Return a copy of OBJECT's outgoing relation records, optionally filtered."
+  (copy-tree
+   (remove-if (lambda (entry)
+                (and relation (not (equal relation (getf entry :relation)))))
+              (metadata-entry-list object :links))))
+
+(defun object-backlinks (object &key relation)
+  "Return a copy of OBJECT's incoming relation records, optionally filtered."
+  (copy-tree
+   (remove-if (lambda (entry)
+                (and relation (not (equal relation (getf entry :relation)))))
+              (metadata-entry-list object :backlinks))))
+
+(defun link-browser-entries (browser)
+  (let ((target (link-browser-block-target browser))
+        (direction (link-browser-block-direction browser))
+        (relation (link-browser-block-relation browser)))
+    (when target
+      (append
+       (when (member direction '(:outgoing :both))
+         (loop for entry in (object-links target :relation relation)
+               collect (append (list :direction :outgoing
+                                     :endpoint-id (getf entry :target-id))
+                               entry)))
+       (when (member direction '(:incoming :both))
+         (loop for entry in (object-backlinks target :relation relation)
+               collect (append (list :direction :incoming
+                                     :endpoint-id (getf entry :source-id))
+                               entry)))))))
+
+(defun link-browser-entry-key (entry)
+  (when entry
+    (list (getf entry :direction) (getf entry :id))))
+
+(defun link-browser-selected-entry (browser &optional (entries (link-browser-entries browser)))
+  (let* ((key (object-property browser :selected-link-key :inherit nil))
+         (selected (or (find key entries :key #'link-browser-entry-key :test #'equal)
+                       (first entries))))
+    ;; Remember an identity before new relations can change the displayed order.
+    (unless (equal key (link-browser-entry-key selected))
+      (set-object-property browser :selected-link-key
+                           (link-browser-entry-key selected)))
+    selected))
+
+(defun resolve-link-browser-entry (browser registry
+                                   &optional (entry (link-browser-selected-entry browser)))
+  (if (null entry)
+      (values nil :empty)
+      (let* ((id (getf entry :endpoint-id))
+             (target (link-browser-block-target browser))
+             (endpoint (if (and target (equal id (object-id target)))
+                           target
+                           (and registry (find-object registry id)))))
+        (if endpoint
+            (values endpoint :resolved)
+            (values nil :missing-target)))))
 
 (defun replace-metadata-entry-by-id (entries entry)
   (cons entry
@@ -2557,6 +2617,20 @@
     (otherwise (set-object-property block slot value)))
   block)
 
+(defun set-link-browser-block-slot (block slot value registry)
+  (case slot
+    (:target-id
+     (let ((target (semantic-target-object registry block slot value)))
+       (setf (link-browser-block-target block) target)
+       (remhash :selected-link-key (object-properties block))))
+    (:direction
+     (setf (link-browser-block-direction block)
+           (ensure-link-browser-direction value)))
+    (:relation (setf (link-browser-block-relation block) value))
+    (:label (setf (link-browser-block-label block) (normalize-display-string value)))
+    (otherwise (set-object-property block slot value)))
+  block)
+
 (defun set-inspector-block-slot (block slot value registry)
   (case slot
     (:target-id
@@ -2637,6 +2711,7 @@
     (repl-block (set-repl-block-slot object slot value))
     (repl-entry (set-repl-entry-slot object slot value))
     (reference-block (set-reference-block-slot object slot value registry))
+    (link-browser-block (set-link-browser-block-slot object slot value registry))
     (inspector-block (set-inspector-block-slot object slot value registry))
     (source-browser-block (set-source-browser-block-slot object slot value))
     (cross-reference-browser-block
@@ -2769,6 +2844,14 @@
                         (object-id (reference-block-target object))))
        (:label (reference-block-label object))
        (:note (reference-block-note object))
+       (otherwise (object-property object slot))))
+    (link-browser-block
+     (case slot
+       (:target-id (and (link-browser-block-target object)
+                        (object-id (link-browser-block-target object))))
+       (:direction (link-browser-block-direction object))
+       (:relation (link-browser-block-relation object))
+       (:label (link-browser-block-label object))
        (otherwise (object-property object slot))))
     (inspector-block
      (case slot

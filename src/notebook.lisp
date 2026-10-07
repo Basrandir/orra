@@ -172,6 +172,24 @@
     :accessor reference-block-note
     :initform "")))
 
+(defclass link-browser-block (node)
+  ((target
+    :initarg :target
+    :accessor link-browser-block-target
+    :initform nil)
+   (direction
+    :initarg :direction
+    :accessor link-browser-block-direction
+    :initform :both)
+   (relation
+    :initarg :relation
+    :accessor link-browser-block-relation
+    :initform nil)
+   (label
+    :initarg :label
+    :accessor link-browser-block-label
+    :initform "")))
+
 (defclass inspector-block (node)
   ((target
     :initarg :target
@@ -476,6 +494,11 @@
     (error "Unsupported project meeting note status ~S." status))
   status)
 
+(defun ensure-link-browser-direction (direction)
+  (unless (member direction '(:outgoing :incoming :both))
+    (error "Unsupported link browser direction ~S." direction))
+  direction)
+
 (defun %register-if-present (registry object)
   (when registry
     (register-object registry object))
@@ -540,6 +563,20 @@
                   :target target
                   :label (normalize-display-string label)
                   :note (normalize-display-string note))))
+
+(defun make-link-browser-block
+    (&key target (direction :both) relation (label "") registry)
+  (unless (typep target 'model-object)
+    (error "Link browsers require a semantic object target, got ~S." target))
+  (%register-if-present
+   registry
+   (make-instance 'link-browser-block
+                  :id (fresh-id "links")
+                  :kind :link-browser-block
+                  :target target
+                  :direction (ensure-link-browser-direction direction)
+                  :relation relation
+                  :label (normalize-display-string label))))
 
 (defun make-inspector-block (&key target (label "") registry)
   (%register-if-present

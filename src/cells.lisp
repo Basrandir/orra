@@ -139,6 +139,37 @@
       (object-summary-string (object-prototype object))
       "-"))
 
+(defun link-endpoint-summary-string (object)
+  (let ((title (typecase object
+                 (knowledge-item (knowledge-item-title object))
+                 (workspace (workspace-title object))
+                 (notebook (notebook-title object))
+                 (section (section-title object))
+                 (paragraph (preview-string (paragraph-text object)))
+                 (code-block (preview-string (code-block-source object))))))
+    (if (and title (not (string= "" title)))
+        (format nil "~A: ~A (~A)" (object-kind object) title (object-id object))
+        (object-reference-summary-string object))))
+
+(defun link-browser-heading (browser)
+  (format nil "Links: ~A"
+          (if (string= "" (link-browser-block-label browser))
+              (link-endpoint-summary-string (link-browser-block-target browser))
+              (link-browser-block-label browser))))
+
+(defun link-browser-entry-line (browser entry registry selected-key)
+  (multiple-value-bind (endpoint status)
+      (resolve-link-browser-entry browser registry entry)
+    (format nil "~A ~A ~A ~A~@[ | ~A~]"
+            (if (equal selected-key (link-browser-entry-key entry)) ">" " ")
+            (if (eq :outgoing (getf entry :direction)) "->" "<-")
+            (getf entry :relation)
+            (if endpoint
+                (link-endpoint-summary-string endpoint)
+                (format nil "~A (~A)" (getf entry :endpoint-id) status))
+            (let ((label (normalize-display-string (getf entry :label))))
+              (unless (string= "" label) label)))))
+
 (defun source-browser-resolve-symbol (browser)
   (let ((package (find-package (source-browser-block-package browser))))
     (when package
@@ -503,6 +534,13 @@
                               (if (string= "" (reference-block-note model))
                                   "-"
                                   (reference-block-note model)))))
+               (link-browser-block
+                (list (format nil "target: ~A"
+                              (object-reference-summary-string
+                               (link-browser-block-target model)))
+                      (format nil "direction: ~A" (link-browser-block-direction model))
+                      (format nil "relation: ~A"
+                              (or (link-browser-block-relation model) "all"))))
                (inspector-block
                 (list (format nil "target: ~A"
                               (object-reference-summary-string
@@ -802,7 +840,7 @@
                           (cell-spacing cell))))))
   cell)
 
-(defun build-node-cell (node registry)
+(defun build-node-cell (node registry &optional (model-registry registry))
   (typecase node
     (notebook
      (let ((cell (make-container-cell
@@ -814,7 +852,7 @@
                             node
                             (format nil "Notebook: ~A" (notebook-title node)))
        (dolist (child (children-of node) cell)
-         (append-child cell (build-node-cell child registry)))))
+         (append-child cell (build-node-cell child registry model-registry)))))
     (section
      (let ((cell (make-container-cell
                   :registry registry
@@ -825,7 +863,7 @@
                             node
                             (format nil "Section: ~A" (section-title node)))
        (dolist (child (children-of node) cell)
-         (append-child cell (build-node-cell child registry)))))
+         (append-child cell (build-node-cell child registry model-registry)))))
     (paragraph
      (make-text-cell
       :registry registry
@@ -887,7 +925,7 @@
            (append-child cell structure-cell)))
        (when (code-block-result node)
          (append-child cell
-                       (build-node-cell (code-block-result node) registry)))
+                       (build-node-cell (code-block-result node) registry model-registry)))
        cell))
     (repl-block
      (let ((cell (make-container-cell
@@ -903,7 +941,7 @@
                                     (repl-block-title node)
                                     (repl-block-package node)))
        (dolist (entry (children-of node) cell)
-         (append-child cell (build-node-cell entry registry)))))
+         (append-child cell (build-node-cell entry registry model-registry)))))
     (repl-entry
      (let ((cell (make-container-cell
                   :registry registry
@@ -919,7 +957,7 @@
                       :role :content))
        (when (repl-entry-result node)
          (append-child cell
-                       (build-node-cell (repl-entry-result node) registry)))
+                       (build-node-cell (repl-entry-result node) registry model-registry)))
        cell))
     (quote-block
      (make-text-cell
@@ -940,6 +978,33 @@
                     (and (not (string= "" (reference-block-note node)))
                          (reference-block-note node)))
       :role :reference))
+    (link-browser-block
+     (let ((cell (make-container-cell
+                  :registry registry :model node :label (link-browser-heading node))))
+       (append-heading-cell cell registry node (link-browser-heading node))
+       (append-child cell
+                     (make-text-cell
+                      :registry registry :model node :role :metadata
+                      :text (format nil "direction: ~A  |  relation: ~A"
+                                    (link-browser-block-direction node)
+                                    (or (link-browser-block-relation node) "all"))))
+       (handler-case
+           (let* ((entries (link-browser-entries node))
+                  (selected-key (link-browser-entry-key
+                                 (link-browser-selected-entry node entries))))
+             (if entries
+                 (dolist (entry entries)
+                   (let ((row (make-text-cell
+                               :registry registry :model node :role :link
+                               :text (link-browser-entry-line
+                                      node entry model-registry selected-key))))
+                     (set-object-property row :link-key (link-browser-entry-key entry))
+                     (append-child cell row)))
+                 (append-text-lines cell registry node (list "No matching links."))))
+         (error (condition)
+           (append-text-lines cell registry node
+                              (list (format nil "Cannot read links: ~A" condition)))))
+       cell))
     (inspector-block
      (let* ((target (inspector-block-target node))
             (label (if (string= "" (inspector-block-label node))
@@ -1183,7 +1248,7 @@
                                       (project-meeting-note-location node))
                         :role :metadata)))
        (dolist (child (children-of node) cell)
-         (append-child cell (build-node-cell child registry)))))
+         (append-child cell (build-node-cell child registry model-registry)))))
     (project-code-reference
      (let ((cell (make-container-cell
                   :registry registry :model node
@@ -1230,7 +1295,19 @@
       :registry registry
       :text (format nil "~A" node)))))
 
-(defun build-workspace-cell-tree (workspace &optional registry)
+(defun build-workspace-cell-tree (workspace &optional registry (model-registry registry))
+  "Build cells with REGISTRY for cells and MODEL-REGISTRY for relation endpoints."
+  (unless model-registry
+    (setf model-registry (make-object-registry))
+    (labels ((visit (object)
+               (when (and object (not (find-object model-registry (object-id object))))
+                 (register-object model-registry object)
+                 (dolist (child (children-of object)) (visit child))
+                 (typecase object
+                   (code-block (visit (code-block-result object)))
+                   (repl-entry (visit (repl-entry-result object)))
+                   (link-browser-block (visit (link-browser-block-target object)))))))
+      (visit workspace)))
   (let ((root (make-container-cell
                :registry registry
                :model workspace
@@ -1244,5 +1321,5 @@
                    :role :heading))
     (when (root-notebook workspace)
       (append-child root
-                    (build-node-cell (root-notebook workspace) registry)))
+                    (build-node-cell (root-notebook workspace) registry model-registry)))
     root))

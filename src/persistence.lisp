@@ -13,6 +13,7 @@
 (defmethod persistable-object-p ((object repl-entry)) t)
 (defmethod persistable-object-p ((object quote-block)) t)
 (defmethod persistable-object-p ((object reference-block)) t)
+(defmethod persistable-object-p ((object link-browser-block)) t)
 (defmethod persistable-object-p ((object inspector-block)) t)
 (defmethod persistable-object-p ((object source-browser-block)) t)
 (defmethod persistable-object-p ((object cross-reference-browser-block)) t)
@@ -103,6 +104,8 @@
                    (visit (repl-entry-result object)))
                  (when (typep object 'project-code-reference)
                    (visit (project-code-reference-target object)))
+                 (when (typep object 'link-browser-block)
+                   (visit (link-browser-block-target object)))
                  (when (and (typep object 'reference-block)
                             (typep (reference-block-target object)
                                    'model-object))
@@ -182,6 +185,13 @@
           (list :target (encode-value (reference-block-target object))
                 :label (reference-block-label object)
                 :note (reference-block-note object))))
+
+(defmethod serialize-object-record ((object link-browser-block))
+  (append (base-record object :link-browser-block)
+          (list :target (encode-value (link-browser-block-target object))
+                :direction (link-browser-block-direction object)
+                :relation (encode-value (link-browser-block-relation object))
+                :label (link-browser-block-label object))))
 
 (defmethod serialize-object-record ((object inspector-block))
   (append (base-record object :inspector-block)
@@ -310,6 +320,8 @@
        (make-instance 'quote-block :id id :kind :quote-block))
       (:reference-block
        (make-instance 'reference-block :id id :kind :reference-block))
+      (:link-browser-block
+       (make-instance 'link-browser-block :id id :kind :link-browser-block))
       (:inspector-block
        (make-instance 'inspector-block :id id :kind :inspector-block))
       (:source-browser-block
@@ -426,6 +438,17 @@
            (normalize-display-string (getf record :label)))
      (setf (reference-block-note object)
            (normalize-display-string (getf record :note))))
+    (link-browser-block
+     (setf (link-browser-block-target object)
+           (decode-value (getf record :target) object-table))
+     (unless (typep (link-browser-block-target object) 'model-object)
+       (error "Persisted link browser ~A requires an object target." (object-id object)))
+     (setf (link-browser-block-direction object)
+           (ensure-link-browser-direction (getf record :direction :both)))
+     (setf (link-browser-block-relation object)
+           (decode-value (getf record :relation) object-table))
+     (setf (link-browser-block-label object)
+           (normalize-display-string (getf record :label))))
     (inspector-block
      (setf (inspector-block-target object)
            (decode-value (getf record :target) object-table))

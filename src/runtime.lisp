@@ -259,6 +259,8 @@
         (register-tree registry (repl-entry-result object) seen))
       (when (typep object 'project-code-reference)
         (register-tree registry (project-code-reference-target object) seen))
+      (when (typep object 'link-browser-block)
+        (register-tree registry (link-browser-block-target object) seen))
       (when (and (typep object 'reference-block)
                  (typep (reference-block-target object) 'model-object))
         (register-tree registry (reference-block-target object) seen))
@@ -280,6 +282,8 @@
 
 (defun code-block-status-controls (model)
   (cond
+    ((typep model 'link-browser-block)
+     "  |  [/] select link  |  Enter follow link")
     ((typep model 'project-code-reference)
      "  |  Enter open code reference")
     ((typep model 'code-block)
@@ -424,7 +428,8 @@
   (let ((root (make-container-cell :label "Orra")))
     (append-child root
                   (build-workspace-cell-tree
-                   (application-workspace application)))
+                   (application-workspace application)
+                   nil (application-registry application)))
     (append-child root (build-inspector-cell application))
     (when (application-debug-visible-p application)
       (append-child root (build-debug-cell application)))
@@ -571,7 +576,7 @@
 (defun focusable-model-object-p (object)
   (typep object
          '(or notebook section paragraph code-block quote-block
-           reference-block inspector-block source-browser-block
+           reference-block link-browser-block inspector-block source-browser-block
            cross-reference-browser-block stack-frame-browser-block
            condition-browser-block list-block table-block task-list
            project-task project-issue project-decision
@@ -600,10 +605,8 @@
       ((null models)
        (setf (application-focused-model-id application) nil))
       ((and (application-focused-model-id application)
-            (find (application-focused-model-id application)
-                  models
-                  :key #'object-id
-                  :test #'string=))
+            (cell-for-model-id (application-root-cell application)
+                               (application-focused-model-id application)))
        (application-focused-model-id application))
       (t
        (setf (application-focused-model-id application)
@@ -761,6 +764,11 @@
           ((focusable-model-object-p model)
            (setf (application-focused-model-id application)
                  (object-id model))
+           (when (and (typep model 'link-browser-block)
+                      (object-property cell :link-key :inherit nil))
+             (set-object-property model :selected-link-key
+                                  (copy-list (object-property cell :link-key :inherit nil)))
+             (mark-application-dirty application))
            (unless (equal old-focused-id
                           (application-focused-model-id application))
              (mark-application-dirty application))))))
@@ -1880,19 +1888,25 @@
 
 (define-key-binding (:focus :leftbracket)
     (application event)
-  "Move to the previous structural code form."
+  "Move to the previous structural code form or object link."
   (declare (ignore event))
-  (when (typep (focused-model application) 'code-block)
-    (step-focused-code-form-selection application -1)
-    t))
+  (typecase (focused-model application)
+    (code-block (step-focused-code-form-selection application -1) t)
+    (link-browser-block
+     (invoke-command application 'step-link-browser-selection
+                     (object-id (focused-model application)) -1)
+     t)))
 
 (define-key-binding (:focus :rightbracket)
     (application event)
-  "Move to the next structural code form."
+  "Move to the next structural code form or object link."
   (declare (ignore event))
-  (when (typep (focused-model application) 'code-block)
-    (step-focused-code-form-selection application 1)
-    t))
+  (typecase (focused-model application)
+    (code-block (step-focused-code-form-selection application 1) t)
+    (link-browser-block
+     (invoke-command application 'step-link-browser-selection
+                     (object-id (focused-model application)) 1)
+     t)))
 
 (define-key-binding (:focus :left)
     (application event)
@@ -2021,7 +2035,7 @@
 
 (define-key-binding (:focus :return)
     (application event)
-  "Begin editing a paragraph, evaluate code, or open a code reference."
+  "Begin editing, evaluate code, open a code reference, or follow an object link."
   (declare (ignore event))
   (cond
     ((typep (focused-model application) 'paragraph)
@@ -2032,6 +2046,10 @@
      t)
     ((typep (focused-model application) 'project-code-reference)
      (invoke-command application 'open-project-code-reference
+                     (object-id (focused-model application)))
+     t)
+    ((typep (focused-model application) 'link-browser-block)
+     (invoke-command application 'open-link-browser-entry
                      (object-id (focused-model application)))
      t)))
 
@@ -2287,6 +2305,61 @@
              :note (reference-block-note block)))
       (rebuild-root-cell application)
       block)))
+
+(define-command append-link-browser-block
+    (application target-id &optional (direction :both) relation (label "") parent-id)
+  "Append an object links/backlinks lens to PARENT-ID or the default section."
+  (let* ((registry (application-registry application))
+         (target (or (find-object registry target-id)
+                     (error "Unknown link browser target ~A." target-id)))
+         (browser (make-link-browser-block :target target :direction direction
+                                           :relation relation :label label))
+         (parent (resolve-application-composite-parent application parent-id)))
+    (register-object registry browser)
+    (append-child parent browser)
+    (record-application-object-creation
+     application browser parent
+     (list :target-id (object-id target)
+           :direction (link-browser-block-direction browser)
+           :relation (link-browser-block-relation browser)
+           :label (link-browser-block-label browser)))
+    (rebuild-root-cell application)
+    browser))
+
+(defun application-link-browser (application browser-id)
+  (let ((browser (find-object (application-registry application) browser-id)))
+    (unless (typep browser 'link-browser-block)
+      (error "Object ~A is not a link browser." browser-id))
+    browser))
+
+(define-command step-link-browser-selection (application browser-id steps)
+  "Move the local link selection by STEPS without recording a semantic edit."
+  (unless (integerp steps)
+    (error "Link selection steps must be an integer."))
+  (let ((browser (application-link-browser application browser-id)))
+    (handler-case
+        (let* ((entries (link-browser-entries browser))
+               (selected (link-browser-selected-entry browser entries))
+               (index (position selected entries :test #'eq)))
+          (when entries
+            (set-object-property
+             browser :selected-link-key
+             (link-browser-entry-key (nth (mod (+ index steps) (length entries)) entries))))
+          (rebuild-root-cell application)
+          (perform-layout (application-root-cell application)
+                          :width (backend-layout-width (application-backend application)))
+          (let* ((cell (cell-for-model-id (application-root-cell application) browser-id))
+                 (key (object-property browser :selected-link-key :inherit nil))
+                 (row (and key cell
+                           (find key (children-of cell) :test #'equal
+                                 :key (lambda (child)
+                                        (object-property child :link-key :inherit nil))))))
+            (ensure-cell-visible application row))
+          (mark-application-dirty application)
+          (link-browser-selected-entry browser))
+      (error (condition)
+        (record-application-event application :link (princ-to-string condition))
+        (values nil :invalid-links)))))
 
 (define-command append-inspector-block
     (application target-id &optional (label ""))
@@ -2644,6 +2717,47 @@
             (setf notebook current))
           (unless (member current (children-of (parent-of current)))
             (return nil)))))
+
+(defun focus-linked-object (application target)
+  (let ((notebook (application-notebook-for-node application target)))
+    (unless (or notebook
+                (eq target (application-workspace application))
+                (cell-for-model-id (application-root-cell application) (object-id target)))
+      (return-from focus-linked-object (values nil :detached-target)))
+    (stop-editing application)
+    (when notebook
+      (setf (workspace-current-notebook (application-workspace application)) notebook))
+    (setf (application-focused-model-id application) (object-id target))
+    (rebuild-root-cell application)
+    (perform-layout (application-root-cell application)
+                    :width (backend-layout-width (application-backend application)))
+    (let ((cell (cell-for-model-id (application-root-cell application) (object-id target))))
+      (when cell
+        (let ((y (bounds-y (cell-bounds cell))))
+          (ensure-row-range-visible application y (1+ y)))))
+    (mark-application-dirty application)
+    (values target :resolved)))
+
+(define-command open-link-browser-entry (application browser-id)
+  "Follow the selected outgoing link or backlink without evaluating its endpoint."
+  (let ((browser (application-link-browser application browser-id)))
+    (handler-case
+        (multiple-value-bind (target status)
+            (resolve-link-browser-entry browser (application-registry application))
+          (if target
+              (multiple-value-bind (focused focus-status)
+                  (focus-linked-object application target)
+                (unless focused
+                  (record-application-event application :link
+                                            (format nil "Cannot follow link: ~A." focus-status)))
+                (values focused focus-status))
+              (progn
+                (record-application-event application :link
+                                          (format nil "Cannot follow link: ~A." status))
+                (values nil status))))
+      (error (condition)
+        (record-application-event application :link (princ-to-string condition))
+        (values nil :invalid-links)))))
 
 (define-command open-project-code-reference (application reference-id)
   "Open a resolved code citation for editing; otherwise return NIL and its status."
