@@ -160,11 +160,13 @@
    #:handle-sync-request
    #:invoke-command
    #:key-binding
+   #:key-binding-alt
    #:key-binding-context
    #:key-binding-control
    #:key-binding-documentation
    #:key-binding-function
    #:key-binding-key
+   #:key-binding-meta
    #:key-binding-shift
    #:key-event
    #:key-event-altp

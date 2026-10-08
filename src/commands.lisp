@@ -26,6 +26,14 @@
     :initarg :shift
     :reader key-binding-shift
     :initform nil)
+   (alt
+    :initarg :alt
+    :reader key-binding-alt
+    :initform nil)
+   (meta
+    :initarg :meta
+    :reader key-binding-meta
+    :initform nil)
    (documentation
     :initarg :documentation
     :reader key-binding-documentation)
@@ -44,15 +52,20 @@
 (defvar *command-definitions* (make-hash-table :test #'equal))
 (defvar *key-binding-definitions* nil)
 
-(defun key-binding-descriptor (context key control shift)
-  (list context key (not (null control)) shift))
+(defun key-binding-descriptor (context key control shift &optional alt meta)
+  ;; Keep existing descriptors valid for live, user-customized keymaps.
+  (append (list context key (not (null control)) shift)
+          (when (or alt meta)
+            (list (not (null alt)) (not (null meta))))))
 
 (defun binding-descriptor (binding)
   (key-binding-descriptor
    (key-binding-context binding)
    (key-binding-key binding)
    (key-binding-control binding)
-   (key-binding-shift binding)))
+   (key-binding-shift binding)
+   (key-binding-alt binding)
+   (key-binding-meta binding)))
 
 (defun register-key-binding (binding)
   (let ((descriptor (binding-descriptor binding)))
@@ -71,7 +84,7 @@
                         :documentation ,documentation
                         :function (lambda ,lambda-list ,@body))))
 
-(defmacro define-key-binding ((context key &key control (shift nil))
+(defmacro define-key-binding ((context key &key control (shift nil) alt meta)
 					     lambda-list
 					     documentation
                               &body body)
@@ -81,6 +94,8 @@
                    :key ,key
                    :control ,control
                    :shift ,shift
+                   :alt ,alt
+                   :meta ,meta
                    :documentation ,documentation
                    :function (lambda ,lambda-list ,@body))))
 
@@ -106,14 +121,14 @@
                    (application-keymap application))
           binding)))
 
-(defun find-key-binding (application context key controlp shiftp)
-  (or (gethash (key-binding-descriptor context key controlp shiftp)
+(defun find-key-binding (application context key controlp shiftp &optional altp metap)
+  (or (gethash (key-binding-descriptor context key controlp shiftp altp metap)
                (application-keymap application))
-      (gethash (key-binding-descriptor context key controlp :any)
+      (gethash (key-binding-descriptor context key controlp :any altp metap)
                (application-keymap application))
-      (gethash (key-binding-descriptor :global key controlp shiftp)
+      (gethash (key-binding-descriptor :global key controlp shiftp altp metap)
                (application-keymap application))
-      (gethash (key-binding-descriptor :global key controlp :any)
+      (gethash (key-binding-descriptor :global key controlp :any altp metap)
                (application-keymap application))))
 
 (defun list-key-bindings (application)
@@ -125,10 +140,12 @@
     (sort bindings
           #'string<
           :key (lambda (binding)
-                 (format nil "~A ~A ~A ~A"
+                 (format nil "~A ~A ~A ~A ~A ~A"
                          (key-binding-context binding)
                          (key-binding-control binding)
                          (key-binding-shift binding)
+                         (key-binding-alt binding)
+                         (key-binding-meta binding)
                          (key-binding-key binding))))))
 
 (defun invoke-command (application name &rest arguments)

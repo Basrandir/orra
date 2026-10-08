@@ -655,7 +655,9 @@
                                     context
                                     (key-event-key event)
                                     (key-event-controlp event)
-                                    (key-event-shiftp event))))
+                                    (key-event-shiftp event)
+                                    (key-event-altp event)
+                                    (key-event-metap event))))
     (cond
       (binding
        (record-application-event
@@ -681,18 +683,18 @@
 
 (defun handle-unbound-application-key (application event)
   (let ((text (key-event-text event)))
-    (cond
-      ((and text
-            (editing-active-p application))
-       (insert-into-active-buffer application text)
-       t)
-      ((and text
-            (not (key-event-controlp event))
-            (editable-model-p (focused-model application)))
-       (begin-editing-focused-model application)
-       (insert-into-active-buffer application text)
-       t)
-      (t nil))))
+    (when (and text (plusp (length text))
+               (not (key-event-controlp event))
+               (not (key-event-altp event))
+               (not (key-event-metap event)))
+      (cond
+        ((editing-active-p application)
+         (insert-into-active-buffer application text)
+         t)
+        ((editable-model-p (focused-model application))
+         (begin-editing-focused-model application)
+         (insert-into-active-buffer application text)
+         t)))))
 
 (defun cell-contains-point-p (cell x y)
   (let ((bounds (cell-bounds cell)))
