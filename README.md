@@ -8,6 +8,9 @@ Run:
 guix shell -m manifest.scm -- ./bin/orra
 ```
 
+Press `F1` for the current keyboard shortcuts. Help is read-only; use the mouse
+wheel, arrows, or Page Up/Down to scroll, and `F1` or `Esc` to return to your work.
+
 Optional font override:
 
 ```bash

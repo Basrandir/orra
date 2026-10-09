@@ -66,6 +66,15 @@
     :initarg :debug-visible-p
     :accessor application-debug-visible-p
     :initform nil)
+   (help-visible-p
+    :accessor application-help-visible-p
+    :initform nil)
+   (help-root-cell
+    :accessor application-help-root-cell
+    :initform nil)
+   (help-viewport-y
+    :accessor application-help-viewport-y
+    :initform 0)
    (save-path
     :initarg :save-path
     :accessor application-save-path
@@ -427,6 +436,12 @@
 (defun build-application-shell-cell (application)
   (let ((root (make-container-cell :label "Orra")))
     (append-child root
+                  (make-text-cell
+                   :text (if (editing-active-p application)
+                             "Edit mode  |  F1 keyboard help  |  Esc stops editing"
+                             "Focus mode  |  F1 keyboard help")
+                   :role :metadata))
+    (append-child root
                   (build-workspace-cell-tree
                    (application-workspace application)
                    nil (application-registry application)))
@@ -438,6 +453,76 @@
                    :text (application-status-line application)))
     root))
 
+(defun wrap-keyboard-help-text (text width)
+  (let ((width (max 1 width)))
+    (format nil "~{~A~^~%~}"
+            (loop for line in (split-lines text)
+                  nconc (let ((start 0) (lines nil))
+                          (loop while (> (- (length line) start) width)
+                                do (let* ((limit (+ start width))
+                                          (space (position #\Space line :start start
+                                                           :end (1+ limit) :from-end t))
+                                          (end (if (and space (> space start)) space limit)))
+                                     (push (subseq line start end) lines)
+                                     (setf start end)
+                                     (loop while (and (< start (length line))
+                                                      (char= #\Space (char line start)))
+                                           do (incf start))))
+                          (push (subseq line start) lines)
+                          (nreverse lines))))))
+
+(defun build-keyboard-help-cell (application)
+  (let* ((context (if (editing-active-p application) :edit :focus))
+         (root (make-container-cell :label "Keyboard help"))
+         (width (max 1 (- (backend-layout-width (application-backend application)) 6)))
+         (lines
+          (append
+           (list (format nil "Keyboard help - ~A mode" (if (eq context :edit) "Edit" "Focus")))
+           (key-binding-help-lines application :help)
+           (list "Help is read-only. Closing it restores your editor and notebook position."
+                 "[Shift+] means Shift is optional. Meta is Command or Windows/Super."
+                 (if (eq context :edit)
+                     "Edit mode: text changes the active buffer. Esc returns to focus mode."
+                     "Focus mode: letter shortcuts are active. Some commands apply only to code or links.")
+                 "Current mode shortcuts")
+           (key-binding-help-lines application context))))
+    (dolist (line lines root)
+      (append-child root (make-text-cell :text (wrap-keyboard-help-text line width)
+                                         :role :metadata)))))
+
+(defun application-help-max-viewport-y (application)
+  (max 0 (- (if (application-help-root-cell application)
+                (bounds-height (cell-bounds (application-help-root-cell application)))
+                0)
+            (application-viewport-height application))))
+
+(defun refresh-application-keyboard-help (application)
+  (setf (application-help-root-cell application) (build-keyboard-help-cell application))
+  (perform-layout (application-help-root-cell application)
+                  :width (backend-layout-width (application-backend application)))
+  (setf (application-help-viewport-y application)
+        (max 0 (min (application-help-viewport-y application)
+                    (application-help-max-viewport-y application))))
+  application)
+
+(defun close-application-keyboard-help (application)
+  (when (application-help-visible-p application)
+    (setf (application-help-visible-p application) nil
+          (application-help-root-cell application) nil
+          (application-help-viewport-y application) 0)
+    (mark-application-dirty application))
+  application)
+
+(defun toggle-application-keyboard-help (application)
+  (if (application-help-visible-p application)
+      (close-application-keyboard-help application)
+      (progn
+        (setf (application-help-visible-p application) t
+              (application-help-viewport-y application) 0)
+        (refresh-application-keyboard-help application)
+        (mark-application-dirty application)))
+  application)
+
 (defun rebuild-root-cell (application)
   (setf (application-root-cell application)
         (build-application-shell-cell application)))
@@ -446,12 +531,12 @@
   (let ((model (focused-model application)))
     (if (editing-active-p application)
         (format nil
-                "EDIT ~A ~A  |  type to edit  |  arrows move  |  Shift+arrows select  |  PgUp/PgDn scroll  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  F12 debug  |  Esc stop"
+                "EDIT  |  F1 help  |  ~A ~A  |  type to edit  |  arrows move  |  Shift+arrows select  |  PgUp/PgDn scroll  |  Ctrl+Z undo  |  Ctrl+Y redo~A  |  F12 debug  |  Esc stop"
                 (if model (object-kind model) :none)
                 (or (application-active-editor-model-id application) "-")
                 (code-block-edit-status-controls model))
         (format nil
-                "FOCUS ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move  |  PgUp/PgDn scroll~A  |  F12 debug  |  q quit"
+                "FOCUS  |  F1 help  |  ~A ~A  |  type to edit focused paragraph/code  |  click or Up/Down to move  |  PgUp/PgDn scroll~A  |  F12 debug  |  q quit"
                 (if model (object-kind model) :none)
                 (if model (object-id model) "-")
                 (code-block-status-controls model)))))
@@ -477,11 +562,18 @@
   application)
 
 (defun scroll-application (application rows)
-  (let ((old-viewport-y (application-viewport-y application)))
-    (incf (application-viewport-y application) rows)
-    (clamp-application-viewport application)
-    (unless (= old-viewport-y (application-viewport-y application))
-      (mark-application-dirty application)))
+  (if (application-help-visible-p application)
+      (let* ((old-viewport-y (application-help-viewport-y application))
+             (new-viewport-y (max 0 (min (+ old-viewport-y rows)
+                                         (application-help-max-viewport-y application)))))
+        (setf (application-help-viewport-y application) new-viewport-y)
+        (unless (= old-viewport-y new-viewport-y)
+          (mark-application-dirty application)))
+      (let ((old-viewport-y (application-viewport-y application)))
+        (incf (application-viewport-y application) rows)
+        (clamp-application-viewport application)
+        (unless (= old-viewport-y (application-viewport-y application))
+          (mark-application-dirty application))))
   application)
 
 (defun scroll-application-page (application direction)
@@ -550,18 +642,19 @@
             (ensure-row-range-visible application row (1+ row)))))))
   application)
 
-(defun draw-application-scrollbar (application)
+(defun draw-application-scrollbar
+    (application &key (content-height (application-content-height application))
+                   (viewport-y (application-viewport-y application)))
   (let* ((backend (application-backend application))
-         (content-height (application-content-height application))
          (viewport-height (application-viewport-height application))
-         (max-scroll (application-max-viewport-y application)))
+         (max-scroll (max 0 (- content-height viewport-height))))
     (when (plusp max-scroll)
       (let* ((track-height viewport-height)
              (thumb-height (max 1
                                 (floor (* viewport-height viewport-height)
                                        content-height)))
              (thumb-y (if (plusp (- track-height thumb-height))
-                          (floor (* (application-viewport-y application)
+                          (floor (* viewport-y
                                     (- track-height thumb-height))
                                  max-scroll)
                           0)))
@@ -647,17 +740,20 @@
   (focus-step application -1))
 
 (defun application-key-context (application)
-  (if (editing-active-p application) :edit :focus))
+  (cond ((application-help-visible-p application) :help)
+        ((editing-active-p application) :edit)
+        (t :focus)))
 
 (defun dispatch-application-key (application event)
   (let* ((context (application-key-context application))
-         (binding (find-key-binding application
-                                    context
-                                    (key-event-key event)
-                                    (key-event-controlp event)
-                                    (key-event-shiftp event)
-                                    (key-event-altp event)
-                                    (key-event-metap event))))
+         (binding (funcall (if (application-help-visible-p application)
+                               #'find-context-key-binding #'find-key-binding)
+                           application context
+                           (key-event-key event)
+                           (key-event-controlp event)
+                           (key-event-shiftp event)
+                           (key-event-altp event)
+                           (key-event-metap event))))
     (cond
       (binding
        (record-application-event
@@ -683,7 +779,8 @@
 
 (defun handle-unbound-application-key (application event)
   (let ((text (key-event-text event)))
-    (when (and text (plusp (length text))
+    (when (and (not (application-help-visible-p application))
+               text (plusp (length text))
                (not (key-event-controlp event))
                (not (key-event-altp event))
                (not (key-event-metap event)))
@@ -734,6 +831,8 @@
   application)
 
 (defun focus-model-at-pixel (application pixel-x pixel-y)
+  (when (application-help-visible-p application)
+    (return-from focus-model-at-pixel application))
   (multiple-value-bind (grid-x grid-y)
       (backend-grid-point (application-backend application) pixel-x pixel-y)
     (let* ((logical-y (+ grid-y (application-viewport-y application)))
@@ -1197,12 +1296,21 @@
                   :width (backend-layout-width
                           (application-backend application)))
   (clamp-application-viewport application)
-  (let ((*application* application))
-    (draw-cell-tree (application-backend application)
-                    (application-root-cell application)
-                    :viewport-y (application-viewport-y application)
+  (when (application-help-visible-p application)
+    (refresh-application-keyboard-help application))
+  (let* ((*application* application)
+         (root (if (application-help-visible-p application)
+                   (application-help-root-cell application)
+                   (application-root-cell application)))
+         (viewport-y (if (application-help-visible-p application)
+                         (application-help-viewport-y application)
+                         (application-viewport-y application))))
+    (draw-cell-tree (application-backend application) root
+                    :viewport-y viewport-y
                     :viewport-height (application-viewport-height application))
-    (draw-application-scrollbar application))
+    (draw-application-scrollbar application
+                                :content-height (bounds-height (cell-bounds root))
+                                :viewport-y viewport-y))
   (backend-present (application-backend application))
   (clear-application-dirty application)
   application)
@@ -1708,6 +1816,71 @@
                                 (focused-model application)
                                 operator))
 
+(define-key-binding (:global :f1)
+    (application event)
+  "Show keyboard help."
+  (declare (ignore event))
+  (invoke-command application 'toggle-keyboard-help)
+  t)
+
+(define-key-binding (:help :f1)
+    (application event)
+  "Close help and return to the notebook."
+  (declare (ignore event))
+  (close-application-keyboard-help application)
+  t)
+
+(define-key-binding (:help :escape)
+    (application event)
+  "Close help and return to the notebook."
+  (declare (ignore event))
+  (close-application-keyboard-help application)
+  t)
+
+(define-key-binding (:help :up :shift :any)
+    (application event)
+  "Scroll help up."
+  (declare (ignore event))
+  (scroll-application application -1)
+  t)
+
+(define-key-binding (:help :down :shift :any)
+    (application event)
+  "Scroll help down."
+  (declare (ignore event))
+  (scroll-application application 1)
+  t)
+
+(define-key-binding (:help :pageup)
+    (application event)
+  "Scroll help up one page."
+  (declare (ignore event))
+  (scroll-application-page application -1)
+  t)
+
+(define-key-binding (:help :pagedown)
+    (application event)
+  "Scroll help down one page."
+  (declare (ignore event))
+  (scroll-application-page application 1)
+  t)
+
+(define-key-binding (:help :home)
+    (application event)
+  "Go to the top of help."
+  (declare (ignore event))
+  (scroll-application application (- (application-help-viewport-y application)))
+  t)
+
+(define-key-binding (:help :end)
+    (application event)
+  "Go to the bottom of help."
+  (declare (ignore event))
+  (scroll-application application
+                      (- (application-help-max-viewport-y application)
+                         (application-help-viewport-y application)))
+  t)
+
 (define-key-binding (:edit :z :control t)
     (application event)
   "Undo the active text edit."
@@ -2075,6 +2248,10 @@
   (declare (ignore event))
   (toggle-application-debug-panel application)
   t)
+
+(define-command toggle-keyboard-help (application)
+  "Show or close the read-only keyboard help view."
+  (toggle-application-keyboard-help application))
 
 (define-command render (application)
   "Rebuild and render the current cell tree."

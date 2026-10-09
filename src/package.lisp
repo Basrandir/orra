@@ -12,6 +12,7 @@
    #:application-dirty-p
    #:application-event-log
    #:application-event-log-limit
+   #:application-help-visible-p
    #:application-keymap
    #:application-last-checkpoint-at
    #:application-last-checkpoint-path
@@ -166,6 +167,7 @@
    #:key-binding-documentation
    #:key-binding-function
    #:key-binding-key
+   #:key-binding-label
    #:key-binding-meta
    #:key-binding-shift
    #:key-event
@@ -411,6 +413,7 @@
    #:save-runtime-image
    #:save-workspace
    #:save-workspace-to-file
+   #:toggle-keyboard-help
    #:select-next-code-form
    #:select-parent-code-form
    #:select-previous-code-form

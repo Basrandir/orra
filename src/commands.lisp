@@ -121,15 +121,61 @@
                    (application-keymap application))
           binding)))
 
-(defun find-key-binding (application context key controlp shiftp &optional altp metap)
+(defun find-context-key-binding (application context key controlp shiftp
+                                 &optional altp metap)
   (or (gethash (key-binding-descriptor context key controlp shiftp altp metap)
                (application-keymap application))
       (gethash (key-binding-descriptor context key controlp :any altp metap)
-               (application-keymap application))
-      (gethash (key-binding-descriptor :global key controlp shiftp altp metap)
-               (application-keymap application))
-      (gethash (key-binding-descriptor :global key controlp :any altp metap)
                (application-keymap application))))
+
+(defun find-key-binding (application context key controlp shiftp &optional altp metap)
+  (or (find-context-key-binding application context key controlp shiftp altp metap)
+      (find-context-key-binding application :global key controlp shiftp altp metap)))
+
+(defun key-binding-label (binding &key (shift (key-binding-shift binding)))
+  (let* ((key (key-binding-key binding))
+         (name (case key
+                 (:return "Enter") (:escape "Esc")
+                 (:leftbracket "[") (:rightbracket "]")
+                 (:pageup "PgUp") (:pagedown "PgDn")
+                 (otherwise
+                  (let ((name (string key)))
+                    (if (= 1 (length name))
+                        (string-upcase name)
+                        (string-capitalize name)))))))
+    (format nil "~A~A~A~A~A"
+            (if (key-binding-control binding) "Ctrl+" "")
+            (if (key-binding-alt binding) "Alt+" "")
+            (if (key-binding-meta binding) "Meta+" "")
+            (case shift (:any "[Shift+]") ((nil) "") (otherwise "Shift+"))
+            name)))
+
+(defun key-binding-help-lines (application context)
+  "Describe effective bindings, excluding shadowed global or Shift variants."
+  (let ((finder (if (eq context :help) #'find-context-key-binding #'find-key-binding)))
+    (loop for binding in (list-key-bindings application)
+          when (or (eq (key-binding-context binding) context)
+                   (and (not (eq context :help))
+                        (eq (key-binding-context binding) :global)))
+          nconc (let* ((shifts (if (eq (key-binding-shift binding) :any)
+                                   '(nil t)
+                                   (list (key-binding-shift binding))))
+                       (effective-shifts
+                        (remove-if-not
+                         (lambda (shift)
+                           (eq binding
+                               (funcall finder application context
+                                        (key-binding-key binding)
+                                        (key-binding-control binding) shift
+                                        (key-binding-alt binding)
+                                        (key-binding-meta binding))))
+                         shifts)))
+                  (when effective-shifts
+                    (list (format nil "~A  -  ~A"
+                                  (key-binding-label
+                                   binding :shift (if (= 2 (length effective-shifts))
+                                                      :any (first effective-shifts)))
+                                  (or (key-binding-documentation binding) ""))))))))
 
 (defun list-key-bindings (application)
   (let (bindings)

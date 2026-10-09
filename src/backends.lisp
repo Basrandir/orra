@@ -803,6 +803,7 @@
       ((sdl2:scancode= scancode :scancode-up) :up)
       ((sdl2:scancode= scancode :scancode-down) :down)
       ((sdl2:scancode= scancode :scancode-return) :return)
+      ((sdl2:scancode= scancode :scancode-f1) :f1)
       ((sdl2:scancode= scancode :scancode-f12) :f12)
       ((sdl2:scancode= scancode :scancode-leftbracket) :leftbracket)
       ((sdl2:scancode= scancode :scancode-rightbracket) :rightbracket)
@@ -837,7 +838,8 @@
                      :metap metap))))
 
 (defun sync-sdl2-text-input-state (backend application)
-  (let ((editingp (editing-active-p application)))
+  (let ((editingp (and (editing-active-p application)
+                       (not (application-help-visible-p application)))))
     (cond
       ((and editingp (not (backend-text-input-active-p backend)))
        (sdl2:start-text-input)
