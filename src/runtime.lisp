@@ -50,6 +50,9 @@
     :initarg :active-text-buffer
     :accessor application-active-text-buffer
     :initform nil)
+   (active-editor-synced-content
+    :accessor application-active-editor-synced-content
+    :initform nil)
    (editor-state-table
     :initarg :editor-state-table
     :accessor application-editor-state-table
@@ -78,6 +81,24 @@
    (notification
     :accessor application-notification
     :initform nil)
+   (save-baseline
+    :accessor application-save-baseline
+    :initform nil)
+   (saved-workspace-p
+    :accessor application-saved-workspace-p
+    :initform nil)
+   (pending-action
+    :accessor application-pending-action
+    :initform nil)
+   (confirmation-root-cell
+    :accessor application-confirmation-root-cell
+    :initform nil)
+   (confirmation-viewport-y
+    :accessor application-confirmation-viewport-y
+    :initform 0)
+   (quit-requested-p
+    :accessor application-quit-requested-p
+    :initform nil)
    (save-path
     :initarg :save-path
     :accessor application-save-path
@@ -101,6 +122,105 @@
     :initarg :last-checkpoint-path
     :accessor application-last-checkpoint-path
     :initform nil)))
+
+(define-condition unsaved-workspace-changes (error)
+  ((application :initarg :application :reader unsaved-changes-application)
+   (action :initarg :action :reader unsaved-changes-action))
+  (:report (lambda (condition stream)
+             (format stream "Unsaved workspace changes: save, discard, or cancel before ~A."
+                     (unsaved-changes-action condition)))))
+
+(defun application-content-fingerprint (application)
+  ;; Comparing frozen payloads also catches edits made directly in the Lisp image.
+  (handler-case
+      (let* ((model (active-editor-model application))
+             (buffer (application-active-text-buffer application))
+             (draft (when (and model buffer
+                               (not (string= (editable-model-string model)
+                                             (text-buffer-content buffer))))
+                      (list (object-id model) (text-buffer-content buffer)))))
+        (workspace-payload-fingerprint
+         (workspace-file-payload (application-workspace application)
+                                 :registry (application-registry application)
+                                 :journal (ensure-application-operation-journal application))
+         draft))
+    (error () nil)))
+
+(defun application-unsaved-changes-p (application)
+  (let ((current (application-content-fingerprint application))
+        (baseline (application-save-baseline application)))
+    (or (null current) (null baseline) (not (string= current baseline)))))
+
+(defun application-save-state (application)
+  (cond ((application-unsaved-changes-p application) :unsaved)
+        ((application-saved-workspace-p application) :saved)
+        (t :new)))
+
+(defun call-with-workspace-replacement-guard (application action function)
+  (if (not (application-unsaved-changes-p application))
+      (funcall function)
+      (restart-case (error 'unsaved-workspace-changes :application application :action action)
+        (discard-changes ()
+          :report "Discard unsaved work and continue."
+          (funcall function))
+        (save-and-continue ()
+          :report "Save the workspace, then continue."
+          (invoke-command application 'save-workspace)
+          (when (application-unsaved-changes-p application)
+            (error "The workspace changed during saving; ~A was not performed." action))
+          (funcall function))
+        (cancel-action ()
+          :report "Cancel the requested action and keep the workspace."
+          nil))))
+
+(defun clear-pending-action (application)
+  (setf (application-pending-action application) nil
+        (application-confirmation-root-cell application) nil
+        (application-confirmation-viewport-y application) 0)
+  (mark-application-dirty application)
+  application)
+
+(defun request-destructive-action (application action function)
+  (when (application-pending-action application)
+    (return-from request-destructive-action nil))
+  (handler-case
+      (handler-bind
+          ((unsaved-workspace-changes
+            (lambda (condition)
+              (setf (application-pending-action application)
+                    (list :action action :function function)
+                    (application-confirmation-viewport-y application) 0)
+              (mark-application-dirty application)
+              (invoke-restart (find-restart 'cancel-action condition)))))
+        (funcall function))
+    (error (condition)
+      (report-application-io-error application action condition)
+      nil)))
+
+(defun resolve-pending-action (application choice)
+  (unless (member choice '(:save :discard :cancel))
+    (error "Unknown confirmation choice ~S." choice))
+  (let ((pending (application-pending-action application)))
+    (when pending
+      (if (eq choice :cancel)
+          (clear-pending-action application)
+          (handler-case
+              (progn
+                (when (eq choice :save)
+                  (invoke-command application 'save-workspace)
+                  (when (application-unsaved-changes-p application)
+                    (error "The workspace changed during saving; the action was not performed.")))
+                (handler-bind
+                    ((unsaved-workspace-changes
+                      (lambda (condition)
+                        (if (eq choice :discard)
+                            (invoke-restart (find-restart 'discard-changes condition))
+                            (error condition)))))
+                  (funcall (getf pending :function)))
+                (clear-pending-action application))
+            (error (condition)
+              (report-application-io-error application (getf pending :action) condition))))))
+  application)
 
 (defun operation-journal-for-workspace (workspace &key journal actor-id
                                                     session-id)
@@ -208,7 +328,8 @@
   (record-application-event application kind message :details details)
   (mark-application-dirty application)
   (when (and (editing-active-p application)
-             (not (application-help-visible-p application)))
+             (not (application-help-visible-p application))
+             (not (application-pending-action application)))
     (ensure-active-caret-visible application))
   application)
 
@@ -491,9 +612,10 @@
   (let ((root (make-container-cell :label "Orra")))
     (append-child root
                   (make-text-cell
-                   :text (if (editing-active-p application)
-                             "Edit mode  |  F1 keyboard help  |  Esc stops editing"
-                             "Focus mode  |  F1 keyboard help")
+                   :text (format nil "~A  |  ~A" (application-save-state application)
+                                 (if (editing-active-p application)
+                                     "Edit mode  |  F1 keyboard help  |  Esc stops editing"
+                                     "Focus mode  |  F1 keyboard help"))
                    :role :metadata))
     (append-child root
                   (build-workspace-cell-tree
@@ -543,6 +665,35 @@
     (dolist (line lines root)
       (append-child root (make-text-cell :text (wrap-keyboard-help-text line width)
                                          :role :metadata)))))
+
+(defun refresh-application-confirmation (application)
+  (let* ((root (make-container-cell :label "Unsaved changes"))
+         (width (max 1 (- (backend-layout-width (application-backend application)) 6)))
+         (lines
+          (append (list "Unsaved workspace changes"
+                        (format nil "Requested action: ~A"
+                                (getf (application-pending-action application) :action))
+                        "Your editor and notebook are unchanged until you choose."
+                        (format nil "Save destination: ~A"
+                                (or (application-save-path application) "workspace.sexp"))
+                        "A failed save keeps this prompt open. Enter cancels by default."
+                        "The mouse wheel scrolls this prompt.")
+                  (key-binding-help-lines application :confirm))))
+    (dolist (line lines)
+      (append-child root (make-text-cell :text (wrap-keyboard-help-text line width)
+                                         :role :metadata)))
+    (perform-layout root :width (backend-layout-width (application-backend application)))
+    (setf (application-confirmation-root-cell application) root
+          (application-confirmation-viewport-y application)
+          (max 0 (min (application-confirmation-viewport-y application)
+                      (application-confirmation-max-viewport-y application))))
+    application))
+
+(defun application-confirmation-max-viewport-y (application)
+  (max 0 (- (if (application-confirmation-root-cell application)
+                (bounds-height (cell-bounds (application-confirmation-root-cell application)))
+                0)
+            (application-viewport-height application))))
 
 (defun application-help-max-viewport-y (application)
   (max 0 (- (if (application-help-root-cell application)
@@ -617,18 +768,27 @@
   application)
 
 (defun scroll-application (application rows)
-  (if (application-help-visible-p application)
-      (let* ((old-viewport-y (application-help-viewport-y application))
-             (new-viewport-y (max 0 (min (+ old-viewport-y rows)
-                                         (application-help-max-viewport-y application)))))
-        (setf (application-help-viewport-y application) new-viewport-y)
-        (unless (= old-viewport-y new-viewport-y)
-          (mark-application-dirty application)))
-      (let ((old-viewport-y (application-viewport-y application)))
-        (incf (application-viewport-y application) rows)
-        (clamp-application-viewport application)
-        (unless (= old-viewport-y (application-viewport-y application))
-          (mark-application-dirty application))))
+  (cond
+    ((application-pending-action application)
+     (unless (application-confirmation-root-cell application)
+       (refresh-application-confirmation application))
+     (let* ((old (application-confirmation-viewport-y application))
+            (new (max 0 (min (+ old rows) (application-confirmation-max-viewport-y application)))))
+       (setf (application-confirmation-viewport-y application) new)
+       (unless (= old new) (mark-application-dirty application))))
+    ((application-help-visible-p application)
+     (let* ((old-viewport-y (application-help-viewport-y application))
+            (new-viewport-y (max 0 (min (+ old-viewport-y rows)
+                                        (application-help-max-viewport-y application)))))
+       (setf (application-help-viewport-y application) new-viewport-y)
+       (unless (= old-viewport-y new-viewport-y)
+         (mark-application-dirty application))))
+    (t
+     (let ((old-viewport-y (application-viewport-y application)))
+       (incf (application-viewport-y application) rows)
+       (clamp-application-viewport application)
+       (unless (= old-viewport-y (application-viewport-y application))
+         (mark-application-dirty application)))))
   application)
 
 (defun scroll-application-page (application direction)
@@ -795,13 +955,16 @@
   (focus-step application -1))
 
 (defun application-key-context (application)
-  (cond ((application-help-visible-p application) :help)
+  (cond ((application-pending-action application) :confirm)
+        ((application-help-visible-p application) :help)
         ((editing-active-p application) :edit)
         (t :focus)))
 
 (defun dispatch-application-key (application event)
+  (when (application-quit-requested-p application)
+    (return-from dispatch-application-key nil))
   (let* ((context (application-key-context application))
-         (binding (funcall (if (application-help-visible-p application)
+         (binding (funcall (if (member context '(:help :confirm))
                                #'find-context-key-binding #'find-key-binding)
                            application context
                            (key-event-key event)
@@ -835,6 +998,7 @@
 (defun handle-unbound-application-key (application event)
   (let ((text (key-event-text event)))
     (when (and (not (application-help-visible-p application))
+               (not (application-pending-action application))
                text (plusp (length text))
                (not (key-event-controlp event))
                (not (key-event-altp event))
@@ -886,7 +1050,9 @@
   application)
 
 (defun focus-model-at-pixel (application pixel-x pixel-y)
-  (when (application-help-visible-p application)
+  (when (or (application-help-visible-p application)
+            (application-pending-action application)
+            (application-quit-requested-p application))
     (return-from focus-model-at-pixel application))
   (multiple-value-bind (grid-x grid-y)
       (backend-grid-point (application-backend application) pixel-x pixel-y)
@@ -971,6 +1137,7 @@
            (cursor (min (text-buffer-cursor buffer)
                         (length content))))
       (replace-buffer-content buffer content :cursor cursor)
+      (setf (application-active-editor-synced-content application) (copy-seq content))
       (when (typep object 'code-block)
         (sync-active-buffer-structure-selection application))
       (ensure-active-caret-visible application)))
@@ -1097,8 +1264,25 @@
                                                    dirty-start
                                                    dirty-end
                                                    dirty-replacement)))
+          (setf (application-active-editor-synced-content application) (copy-seq new-content))
           (when (typep model 'code-block)
             (sync-active-buffer-structure-selection application))))))
+  application)
+
+(defun reconcile-active-editor-for-save (application)
+  ;; A common ancestor distinguishes direct Lisp edits from stale editor text.
+  (when (editing-active-p application)
+    (let* ((model (active-editor-model application))
+           (content (editable-model-string model))
+           (buffer-content (text-buffer-content (application-active-text-buffer application)))
+           (synced (application-active-editor-synced-content application)))
+      (cond
+        ((string= content buffer-content))
+        ((and synced (string= content synced))
+         (sync-active-buffer-to-model application))
+        ((and synced (string= buffer-content synced))
+         (sync-active-buffer-after-slot-update application model (editable-model-text-slot model)))
+        (t (error "The model and editor have different edits. Resolve them before saving.")))))
   application)
 
 (defun begin-editing-model (application model)
@@ -1122,7 +1306,8 @@
         (let ((offset (code-block-selected-form-start-offset model)))
           (when offset
             (move-buffer-cursor-to buffer offset))))
-      (setf (application-active-text-buffer application) buffer)
+      (setf (application-active-text-buffer application) buffer
+            (application-active-editor-synced-content application) (copy-seq content))
       (when (typep model 'code-block)
         (sync-active-buffer-structure-selection application))
       (ensure-active-caret-visible application)
@@ -1171,7 +1356,9 @@
      (application-active-text-buffer application)
      (code-block-source block)
      :cursor (or (code-block-selected-form-start-offset block)
-                 (length (code-block-source block))))))
+                 (length (code-block-source block))))
+    (setf (application-active-editor-synced-content application)
+          (copy-seq (code-block-source block)))))
 
 (defun remember-code-block-structural-edit (application block previous-source
                                             &key previous-cursor)
@@ -1207,6 +1394,7 @@
     (remember-active-editor-state application)
     (setf (application-active-editor-model-id application) nil)
     (setf (application-active-text-buffer application) nil)
+    (setf (application-active-editor-synced-content application) nil)
     (when was-editing-p
       (mark-application-dirty application)))
   application)
@@ -1353,13 +1541,20 @@
   (clamp-application-viewport application)
   (when (application-help-visible-p application)
     (refresh-application-keyboard-help application))
+  (when (application-pending-action application)
+    (refresh-application-confirmation application))
+  (backend-update-save-state (application-backend application) (application-save-state application))
   (let* ((*application* application)
-         (root (if (application-help-visible-p application)
-                   (application-help-root-cell application)
-                   (application-root-cell application)))
-         (viewport-y (if (application-help-visible-p application)
-                         (application-help-viewport-y application)
-                         (application-viewport-y application))))
+         (root (cond ((application-pending-action application)
+                      (application-confirmation-root-cell application))
+                     ((application-help-visible-p application)
+                      (application-help-root-cell application))
+                     (t (application-root-cell application))))
+         (viewport-y (cond ((application-pending-action application)
+                            (application-confirmation-viewport-y application))
+                           ((application-help-visible-p application)
+                            (application-help-viewport-y application))
+                           (t (application-viewport-y application)))))
     (draw-cell-tree (application-backend application) root
                     :viewport-y viewport-y
                     :viewport-height (application-viewport-height application))
@@ -1677,6 +1872,7 @@
     (install-defined-key-bindings application)
     (rebuild-root-cell application)
     (ensure-valid-focus application)
+    (setf (application-save-baseline application) (application-content-fingerprint application))
     (rebuild-root-cell application)
     application))
 
@@ -1737,6 +1933,11 @@
 
 (defun load-workspace-into-application (application path &key
 							   (update-save-path-p t))
+  (call-with-workspace-replacement-guard
+   application "load a workspace"
+   (lambda () (replace-application-workspace application path update-save-path-p))))
+
+(defun replace-application-workspace (application path update-save-path-p)
   (let* ((registry (make-object-registry))
          (current-journal
           (ensure-application-operation-journal application)))
@@ -1749,6 +1950,17 @@
               :actor-id (journal-actor-id current-journal)
               :session-id (journal-session-id current-journal))))
         (setf (application-registry application) registry)
+        (setf (application-active-editor-model-id application) nil
+              (application-active-text-buffer application) nil
+              (application-active-editor-synced-content application) nil
+              (application-focused-model-id application) nil
+              (application-help-visible-p application) nil
+              (application-help-root-cell application) nil
+              (application-help-viewport-y application) 0
+              (application-notification application) nil
+              (application-last-checkpoint-at application) nil
+              (application-last-checkpoint-attempt-at application) nil
+              (application-last-checkpoint-path application) nil)
         (setf (application-editor-state-table application)
               (make-hash-table :test #'equal))
         (setf (application-workspace application) workspace)
@@ -1759,31 +1971,64 @@
         (setf (application-viewport-y application) 0)
         (rebuild-root-cell application)
         (ensure-valid-focus application)
+        (when update-save-path-p
+          (setf (application-save-baseline application) (application-content-fingerprint application)
+                (application-saved-workspace-p application) t))
+        (clear-pending-action application)
         (rebuild-root-cell application)
         application))))
 
+(defun request-load-workspace (application path)
+  (handler-case
+      (let ((path (uiop:ensure-pathname path :ensure-absolute t
+					:defaults *default-pathname-defaults*)))
+        (request-destructive-action
+         application "Load workspace"
+         (lambda ()
+           (when (load-workspace-into-application application path)
+             (set-application-notification application :load
+                                           (format nil "Loaded ~A" (namestring path)))
+             application))))
+    (error (condition)
+      (report-application-io-error application "Load workspace" condition)
+      nil)))
+
+(defun resolve-workspace-checkpoint-path (application path)
+  (let ((path (or path
+                  (let ((directory (application-checkpoint-directory application)))
+                    (and directory (latest-workspace-checkpoint directory))))))
+    (unless path
+      (error "No loadable workspace checkpoint is available."))
+    (uiop:ensure-pathname path :ensure-absolute t :defaults *default-pathname-defaults*)))
+
 (defun recover-workspace-from-checkpoint (application &optional path)
-  (let* ((checkpoint-path
-          (or path
-              (let ((directory (application-checkpoint-directory application)))
-                (and directory
-                     (latest-workspace-checkpoint directory)))))
+  (let* ((checkpoint-path (resolve-workspace-checkpoint-path application path))
          (record (and checkpoint-path
                       (workspace-checkpoint-record checkpoint-path))))
     (unless record
       (error "No loadable workspace checkpoint is available."))
-    (load-workspace-into-application application
-                                     (getf record :path)
-                                     :update-save-path-p nil)
-    (setf (application-last-checkpoint-path application) (getf record :path))
-    (setf (application-last-checkpoint-at application)
-          (getf record :checkpoint-at))
-    (record-application-event
-     application
-     :recovery
-     (format nil "workspace recovered from ~A"
-             (namestring (getf record :path))))
-    application))
+    (call-with-workspace-replacement-guard
+     application "recover a checkpoint"
+     (lambda ()
+       (replace-application-workspace application (getf record :path) nil)
+       (setf (application-last-checkpoint-path application) (getf record :path)
+             (application-last-checkpoint-at application) (getf record :checkpoint-at))
+       (set-application-notification
+        application :recovery
+        (format nil "Recovered ~A; save to ~A to keep it as the active workspace."
+                (namestring (getf record :path))
+                (or (application-save-path application) "workspace.sexp")))
+       application))))
+
+(defun request-recover-workspace (application &optional path)
+  (handler-case
+      (let ((path (resolve-workspace-checkpoint-path application path)))
+        (request-destructive-action
+         application "Recover checkpoint"
+         (lambda () (recover-workspace-from-checkpoint application path))))
+    (error (condition)
+      (report-application-io-error application "Recover checkpoint" condition)
+      nil)))
 
 (defun save-runtime-image (path)
   #+sbcl
@@ -1792,8 +2037,17 @@
   (error "Saving executable images is currently only implemented for SBCL."))
 
 (defun quit-application (application)
-  (declare (ignore application))
-  (sdl2:push-event :quit))
+  (call-with-workspace-replacement-guard
+   application "quit"
+   (lambda () (setf (application-quit-requested-p application) t))))
+
+(defun request-application-quit (application)
+  (request-destructive-action application "Quit" (lambda () (quit-application application))))
+
+(defun handle-application-close-request (application)
+  (or (application-quit-requested-p application)
+      (progn (request-application-quit application)
+             (application-quit-requested-p application))))
 
 (defun evaluate-focused-code-block (application)
   (let ((model (focused-model application)))
@@ -1877,6 +2131,76 @@
   "Show keyboard help."
   (declare (ignore event))
   (invoke-command application 'toggle-keyboard-help)
+  t)
+
+(define-key-binding (:confirm :s)
+    (application event)
+  "Save unsaved changes and continue the requested action."
+  (declare (ignore event))
+  (resolve-pending-action application :save)
+  t)
+
+(define-key-binding (:confirm :s :control t)
+    (application event)
+  "Save unsaved changes and continue the requested action."
+  (declare (ignore event))
+  (resolve-pending-action application :save)
+  t)
+
+(define-key-binding (:confirm :d)
+    (application event)
+  "Discard unsaved changes and continue the requested action."
+  (declare (ignore event))
+  (resolve-pending-action application :discard)
+  t)
+
+(define-key-binding (:confirm :escape)
+    (application event)
+  "Cancel the requested action and return to the notebook."
+  (declare (ignore event))
+  (resolve-pending-action application :cancel)
+  t)
+
+(define-key-binding (:confirm :return)
+    (application event)
+  "Cancel the requested action and return to the notebook."
+  (declare (ignore event))
+  (resolve-pending-action application :cancel)
+  t)
+
+(define-key-binding (:confirm :g :control t)
+    (application event)
+  "Cancel the requested action and return to the notebook."
+  (declare (ignore event))
+  (resolve-pending-action application :cancel)
+  t)
+
+(define-key-binding (:confirm :up :shift :any)
+    (application event)
+  "Scroll the confirmation up."
+  (declare (ignore event))
+  (scroll-application application -1)
+  t)
+
+(define-key-binding (:confirm :down :shift :any)
+    (application event)
+  "Scroll the confirmation down."
+  (declare (ignore event))
+  (scroll-application application 1)
+  t)
+
+(define-key-binding (:confirm :pageup)
+    (application event)
+  "Scroll the confirmation up one page."
+  (declare (ignore event))
+  (scroll-application-page application -1)
+  t)
+
+(define-key-binding (:confirm :pagedown)
+    (application event)
+  "Scroll the confirmation down one page."
+  (declare (ignore event))
+  (scroll-application-page application 1)
   t)
 
 (define-key-binding (:global :s :control t)
@@ -2226,14 +2550,14 @@
     (application event)
   "Quit the application."
   (declare (ignore event))
-  (quit-application application)
+  (request-application-quit application)
   t)
 
 (define-key-binding (:focus :escape)
     (application event)
   "Quit the application."
   (declare (ignore event))
-  (quit-application application)
+  (request-application-quit application)
   t)
 
 (define-key-binding (:focus :j)
@@ -3165,11 +3489,14 @@
                     "workspace.sexp")))
     (handler-bind ((error (lambda (condition)
                             (report-application-io-error application "Save" condition))))
-      (let ((saved (save-workspace-to-file
-                    (application-workspace application) target
-                    :registry (application-registry application)
-                    :journal (ensure-application-operation-journal application))))
+      (reconcile-active-editor-for-save application)
+      (multiple-value-bind (saved payload)
+          (save-workspace-to-file (application-workspace application) target
+                                  :registry (application-registry application)
+                                  :journal (ensure-application-operation-journal application))
         (setf (application-save-path application) target)
+        (setf (application-save-baseline application) (workspace-payload-fingerprint payload)
+              (application-saved-workspace-p application) t)
         (set-application-notification application :save
                                       (format nil "Saved ~A" (namestring target)))
         saved))))

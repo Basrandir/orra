@@ -13,6 +13,10 @@ wheel, arrows, or Page Up/Down to scroll, and `F1` or `Esc` to return to your wo
 Use `Ctrl+S` to save without leaving edit mode. Save/error messages appear at the
 bottom of the window; `Ctrl+G` dismisses them.
 
+The header and window title show new/saved/unsaved state. Quitting, loading, or
+recovering with unsaved work asks you to save (`S` or `Ctrl+S`), discard (`D`),
+or cancel (`Esc`, `Ctrl+G`, or Enter). Failed saves keep the prompt open.
+
 Optional font override:
 
 ```bash

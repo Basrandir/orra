@@ -152,10 +152,11 @@
 
 (defun key-binding-help-lines (application context)
   "Describe effective bindings, excluding shadowed global or Shift variants."
-  (let ((finder (if (eq context :help) #'find-context-key-binding #'find-key-binding)))
+  (let* ((modalp (member context '(:help :confirm)))
+         (finder (if modalp #'find-context-key-binding #'find-key-binding)))
     (loop for binding in (list-key-bindings application)
           when (or (eq (key-binding-context binding) context)
-                   (and (not (eq context :help))
+                   (and (not modalp)
                         (eq (key-binding-context binding) :global)))
           nconc (let* ((shifts (if (eq (key-binding-shift binding) :any)
                                    '(nil t)

@@ -686,12 +686,22 @@
 
 (defun save-workspace-to-file (workspace path &key registry (mode :save)
 						journal)
-  (write-workspace-payload-to-file
-   (workspace-file-payload workspace
-                           :registry registry
-                           :mode mode
-                           :journal journal)
-   path))
+  ;; Freeze mutable payload data before I/O so callers can retain the written snapshot.
+  (let* ((payload (workspace-file-payload workspace :registry registry
+                                          :mode mode :journal journal))
+         (payload (with-standard-io-syntax
+                    (let ((*read-eval* nil))
+                      (read-from-string (write-to-string payload))))))
+    (values (write-workspace-payload-to-file payload path) payload)))
+
+(defun workspace-payload-fingerprint (payload &optional editor-draft)
+  (with-standard-io-syntax
+    (write-to-string
+     (list :workspace-id (getf payload :workspace-id)
+           :objects (sort (copy-list (getf payload :objects)) #'string<
+                          :key (lambda (record) (getf record :id)))
+           :operation-journal (getf payload :operation-journal)
+           :editor-draft editor-draft))))
 
 (defun clone-workspace-to-file (workspace path &key registry journal)
   (save-workspace-to-file workspace path

@@ -17,10 +17,14 @@
    #:application-last-checkpoint-at
    #:application-last-checkpoint-path
    #:application-notification
+   #:application-pending-action
+   #:application-quit-requested-p
    #:application-operation-journal
    #:application-registry
    #:application-root-cell
    #:application-save-path
+   #:application-save-state
+   #:application-unsaved-changes-p
    #:application-viewport-y
    #:application-workspace
    #:add-text-buffer-style-span
@@ -72,6 +76,8 @@
    #:clear-text-buffer-selection
    #:clear-application-event-log
    #:clear-application-dirty
+   #:cancel-action
+   #:discard-changes
    #:dismiss-notification
    #:clear-event-log
    #:clear-text-buffer-style-spans
@@ -365,6 +371,10 @@
    #:project-task-priority
    #:project-task-status
    #:quit-application
+   #:request-application-quit
+   #:request-load-workspace
+   #:request-recover-workspace
+   #:resolve-pending-action
    #:quote-block
    #:quote-block-attribution
    #:quote-block-text
@@ -414,6 +424,7 @@
    #:run-backend
    #:save-runtime-image
    #:save-workspace
+   #:save-and-continue
    #:save-workspace-to-file
    #:toggle-keyboard-help
    #:select-next-code-form
@@ -530,6 +541,9 @@
    #:undo-buffer-edit
    #:wrap-code-form
    #:workspace
+   #:unsaved-workspace-changes
+   #:unsaved-changes-action
+   #:unsaved-changes-application
    #:workspace-attachment
    #:workspace-attachment-actor-id
    #:workspace-attachment-byte-size
