@@ -624,16 +624,33 @@
       (t payload))))
 
 (defun write-workspace-payload-to-file (payload path)
-  (with-open-file (stream path
-                          :direction :output
-                          :if-exists :supersede
-                          :if-does-not-exist :create)
-    (with-standard-io-syntax
-      (print payload stream)))
+  (let* ((requested (uiop:ensure-pathname path :want-file t
+                                          :ensure-absolute t
+                                          :defaults *default-pathname-defaults*))
+         (existing (probe-file requested))
+         (target (uiop:ensure-pathname (or existing requested) :want-file t))
+         (directory (truename (uiop:pathname-directory-pathname target)))
+         #+(and sbcl unix)
+         (permissions (if existing
+                          (logand #o777 (sb-posix:stat-mode (sb-posix:stat target)))
+                          #o600)))
+    ;; Stage beside the destination so incomplete writes never replace it.
+    (uiop:with-temporary-file (:stream stream :pathname temporary
+				       :directory directory :prefix ".orra-save-"
+				       :direction :output :external-format :utf-8)
+      #+(and sbcl unix) (sb-posix:chmod temporary #o600)
+      (with-standard-io-syntax
+        (print payload stream))
+      (finish-output stream)
+      :close-stream
+      #+(and sbcl unix) (sb-posix:chmod temporary permissions)
+      ;; SBCL's rename replaces files without UIOP's delete-first Windows fallback.
+      (rename-file temporary (make-pathname :type (or (pathname-type target) :unspecific)
+                                            :defaults target))))
   path)
 
 (defun read-workspace-payload-from-file (path)
-  (with-open-file (stream path :direction :input)
+  (with-open-file (stream path :direction :input :external-format :utf-8)
     (with-standard-io-syntax
       (read stream))))
 

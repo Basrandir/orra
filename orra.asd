@@ -4,7 +4,8 @@
     :license "Apache-2.0"
     :version "0.1.0"
     :serial t
-    :depends-on ("sdl2" "sdl2-ttf" "trivial-garbage")
+    :depends-on ("sdl2" "sdl2-ttf" "trivial-garbage"
+			#+(and sbcl unix) "sb-posix")
     :components ((:file "src/package")
                  (:file "src/util")
                  (:file "src/model")

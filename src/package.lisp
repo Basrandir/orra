@@ -16,6 +16,7 @@
    #:application-keymap
    #:application-last-checkpoint-at
    #:application-last-checkpoint-path
+   #:application-notification
    #:application-operation-journal
    #:application-registry
    #:application-root-cell
@@ -71,6 +72,7 @@
    #:clear-text-buffer-selection
    #:clear-application-event-log
    #:clear-application-dirty
+   #:dismiss-notification
    #:clear-event-log
    #:clear-text-buffer-style-spans
    #:checkpoint-workspace

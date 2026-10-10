@@ -75,6 +75,9 @@
    (help-viewport-y
     :accessor application-help-viewport-y
     :initform 0)
+   (notification
+    :accessor application-notification
+    :initform nil)
    (save-path
     :initarg :save-path
     :accessor application-save-path
@@ -90,6 +93,9 @@
    (last-checkpoint-at
     :initarg :last-checkpoint-at
     :accessor application-last-checkpoint-at
+    :initform nil)
+   (last-checkpoint-attempt-at
+    :accessor application-last-checkpoint-attempt-at
     :initform nil)
    (last-checkpoint-path
     :initarg :last-checkpoint-path
@@ -175,7 +181,9 @@
   application)
 
 (defun render-application-if-needed (application)
-  (maybe-checkpoint-workspace application)
+  (handler-case (maybe-checkpoint-workspace application)
+    (error (condition)
+      (report-application-io-error application "Checkpoint" condition)))
   (when (application-dirty-p application)
     (render-application application)))
 
@@ -194,6 +202,45 @@
       (mark-application-dirty application))
     entry))
 
+(defun set-application-notification (application kind message &key details)
+  (setf (application-notification application)
+        (list :kind kind :message message :details details))
+  (record-application-event application kind message :details details)
+  (mark-application-dirty application)
+  (when (and (editing-active-p application)
+             (not (application-help-visible-p application)))
+    (ensure-active-caret-visible application))
+  application)
+
+(defun dismiss-application-notification (application)
+  (setf (application-notification application) nil)
+  (mark-application-dirty application)
+  application)
+
+(defun report-application-io-error (application action condition)
+  (set-application-notification
+   application :error (format nil "~A failed: ~A" action condition)
+   :details (list :action action :condition (princ-to-string condition))))
+
+(defun application-notification-lines (application)
+  (let ((notification (application-notification application)))
+    (when notification
+      (let* ((width (max 1 (- (backend-layout-width (application-backend application)) 2)))
+             (text (format nil "~A (Ctrl+G dismiss): ~A"
+                           (if (eq (getf notification :kind) :error) "ERROR" "INFO")
+                           (getf notification :message)))
+             (lines (split-lines (wrap-keyboard-help-text text width)))
+             (limit (min 3 (max 1 (floor (backend-layout-height
+                                          (application-backend application)) 3)))))
+        (subseq lines 0 (min limit (length lines)))))))
+
+(defun draw-application-notification (application)
+  (let* ((backend (application-backend application))
+         (lines (application-notification-lines application))
+         (first-row (- (backend-layout-height backend) (length lines))))
+    (loop for line in lines for row from first-row
+          do (backend-draw-text backend 1 row line))))
+
 (defun clear-application-event-log (application)
   (setf (application-event-log application) nil)
   (mark-application-dirty application)
@@ -211,8 +258,10 @@
   application)
 
 (defun checkpoint-interval-due-p (application now)
-  (let ((interval (application-checkpoint-interval application))
-        (last-checkpoint-at (application-last-checkpoint-at application)))
+  (let* ((interval (application-checkpoint-interval application))
+         (times (remove nil (list (application-last-checkpoint-attempt-at application)
+                                  (application-last-checkpoint-at application))))
+         (last-checkpoint-at (when times (apply #'max times))))
     (and (numberp interval)
          (plusp interval)
          (or (null last-checkpoint-at)
@@ -229,6 +278,7 @@
      (uiop:ensure-directory-pathname directory))))
 
 (defun write-application-checkpoint (application path timestamp)
+  (setf (application-last-checkpoint-attempt-at application) timestamp)
   (ensure-directories-exist path)
   (checkpoint-workspace-to-file (application-workspace application)
                                 path
@@ -239,6 +289,9 @@
                                  application))
   (setf (application-last-checkpoint-at application) timestamp)
   (setf (application-last-checkpoint-path application) path)
+  (when (equal "Checkpoint" (getf (getf (application-notification application) :details)
+                                  :action))
+    (dismiss-application-notification application))
   (record-application-event application
                             :checkpoint
                             (format nil "checkpoint written to ~A"
@@ -249,6 +302,7 @@
   (when (and (application-checkpoint-directory application)
              (or force
                  (checkpoint-interval-due-p application now)))
+    (setf (application-last-checkpoint-attempt-at application) now)
     (write-application-checkpoint application
                                   (checkpoint-path-for-time application now)
                                   now)))
@@ -542,7 +596,8 @@
                 (code-block-status-controls model)))))
 
 (defun application-viewport-height (application)
-  (backend-layout-height (application-backend application)))
+  (max 1 (- (backend-layout-height (application-backend application))
+            (length (application-notification-lines application)))))
 
 (defun application-content-height (application)
   (if (application-root-cell application)
@@ -1311,6 +1366,7 @@
     (draw-application-scrollbar application
                                 :content-height (bounds-height (cell-bounds root))
                                 :viewport-y viewport-y))
+  (draw-application-notification application)
   (backend-present (application-backend application))
   (clear-application-dirty application)
   application)
@@ -1823,11 +1879,32 @@
   (invoke-command application 'toggle-keyboard-help)
   t)
 
+(define-key-binding (:global :s :control t)
+    (application event)
+  "Save the workspace without leaving the active editor."
+  (declare (ignore event))
+  (save-workspace-from-keyboard application)
+  t)
+
+(define-key-binding (:global :g :control t)
+    (application event)
+  "Dismiss the current notification."
+  (declare (ignore event))
+  (invoke-command application 'dismiss-notification)
+  t)
+
 (define-key-binding (:help :f1)
     (application event)
   "Close help and return to the notebook."
   (declare (ignore event))
   (close-application-keyboard-help application)
+  t)
+
+(define-key-binding (:help :g :control t)
+    (application event)
+  "Dismiss the current notification without closing help."
+  (declare (ignore event))
+  (invoke-command application 'dismiss-notification)
   t)
 
 (define-key-binding (:help :escape)
@@ -2232,7 +2309,7 @@
     (application event)
   "Save the current workspace."
   (declare (ignore event))
-  (invoke-command application 'save-workspace)
+  (save-workspace-from-keyboard application)
   t)
 
 (define-key-binding (:focus :r)
@@ -2252,6 +2329,10 @@
 (define-command toggle-keyboard-help (application)
   "Show or close the read-only keyboard help view."
   (toggle-application-keyboard-help application))
+
+(define-command dismiss-notification (application)
+  "Dismiss transient save or error feedback."
+  (dismiss-application-notification application))
 
 (define-command render (application)
   "Rebuild and render the current cell tree."
@@ -3073,18 +3154,25 @@
      (lambda (block)
        (replace-selected-code-block-form-source block replacement-source)))))
 
+(defun save-workspace-from-keyboard (application)
+  (handler-case (invoke-command application 'save-workspace)
+    (error () nil)))
+
 (define-command save-workspace (application &optional path)
   "Persist the current workspace to disk."
   (let ((target (or path
                     (application-save-path application)
                     "workspace.sexp")))
-    (setf (application-save-path application) target)
-    (save-workspace-to-file (application-workspace application)
-                            target
-                            :registry (application-registry application)
-                            :journal
-                            (ensure-application-operation-journal
-                             application))))
+    (handler-bind ((error (lambda (condition)
+                            (report-application-io-error application "Save" condition))))
+      (let ((saved (save-workspace-to-file
+                    (application-workspace application) target
+                    :registry (application-registry application)
+                    :journal (ensure-application-operation-journal application))))
+        (setf (application-save-path application) target)
+        (set-application-notification application :save
+                                      (format nil "Saved ~A" (namestring target)))
+        saved))))
 
 (define-command clone-workspace (application path)
   "Persist a loadable copy of the current workspace without changing the save path."
