@@ -52,6 +52,7 @@
 (defun open-command-palette (application)
   (unless (or (application-pending-action application)
               (application-quit-requested-p application)
+              (application-object-navigator application)
               (application-command-palette application))
     (setf (application-command-palette application) (make-instance 'command-palette))
     (mark-application-dirty application))
@@ -307,39 +308,42 @@
       (close-command-palette application))
   t)
 
-;; These are ordinary live key bindings, not backend-specific input handlers.
-(dolist (spec (list (list :backspace nil nil #'delete-buffer-backward "Delete backward.")
-                    (list :delete nil nil #'delete-buffer-forward "Delete forward.")
-                    (list :left nil :any (lambda (buffer event)
-                                           (move-buffer-cursor-left buffer :extend-selection (key-event-shiftp event)))
-                          "Move left; Shift extends selection.")
-                    (list :right nil :any (lambda (buffer event)
-                                            (move-buffer-cursor-right buffer :extend-selection (key-event-shiftp event)))
-                          "Move right; Shift extends selection.")
-                    (list :home nil :any (lambda (buffer event)
-                                           (move-buffer-cursor-home buffer :extend-selection (key-event-shiftp event)))
-                          "Move to line start; Shift extends selection.")
-                    (list :end nil :any (lambda (buffer event)
-                                          (move-buffer-cursor-end buffer :extend-selection (key-event-shiftp event)))
-                          "Move to line end; Shift extends selection.")
-                    (list :a t nil (lambda (buffer event)
-                                     (declare (ignore event))
-                                     (move-buffer-cursor-to buffer 0)
-                                     (move-buffer-cursor-to buffer (length (text-buffer-content buffer)) :extend-selection t))
-                          "Select all palette input.")
-                    (list :z t nil #'undo-buffer-edit "Undo palette input.")
-                    (list :y t nil #'redo-buffer-edit "Redo palette input.")))
-  (destructuring-bind (key control shift function documentation) spec
-    (let ((function function) (eventp (member key '(:left :right :home :end :a))))
-      (register-key-binding
-       (make-instance 'key-binding :context :palette :key key :control control :shift shift
-                      :documentation documentation
-                      :function (lambda (application event)
-                                  (edit-command-palette application
-                                                        (lambda (buffer)
-                                                          (if eventp (funcall function buffer event)
-                                                              (funcall function buffer))))
-                                  t))))))
+;; Transient inputs share ordinary live bindings, not backend-specific handlers.
+(defun register-transient-input-bindings (context edit-function label)
+  (dolist (spec (list (list :backspace nil nil #'delete-buffer-backward "Delete backward.")
+                      (list :delete nil nil #'delete-buffer-forward "Delete forward.")
+                      (list :left nil :any (lambda (buffer event)
+                                             (move-buffer-cursor-left buffer :extend-selection (key-event-shiftp event)))
+                            "Move left; Shift extends selection.")
+                      (list :right nil :any (lambda (buffer event)
+                                              (move-buffer-cursor-right buffer :extend-selection (key-event-shiftp event)))
+                            "Move right; Shift extends selection.")
+                      (list :home nil :any (lambda (buffer event)
+                                             (move-buffer-cursor-home buffer :extend-selection (key-event-shiftp event)))
+                            "Move to line start; Shift extends selection.")
+                      (list :end nil :any (lambda (buffer event)
+                                            (move-buffer-cursor-end buffer :extend-selection (key-event-shiftp event)))
+                            "Move to line end; Shift extends selection.")
+                      (list :a t nil (lambda (buffer event)
+                                       (declare (ignore event))
+                                       (move-buffer-cursor-to buffer 0)
+                                       (move-buffer-cursor-to buffer (length (text-buffer-content buffer)) :extend-selection t))
+                            (format nil "Select all ~A input." label))
+                      (list :z t nil #'undo-buffer-edit (format nil "Undo ~A input." label))
+                      (list :y t nil #'redo-buffer-edit (format nil "Redo ~A input." label))))
+    (destructuring-bind (key control shift function documentation) spec
+      (let ((function function) (eventp (member key '(:left :right :home :end :a))))
+        (register-key-binding
+         (make-instance 'key-binding :context context :key key :control control :shift shift
+                        :documentation documentation
+                        :function (lambda (application event)
+                                    (funcall edit-function application
+                                             (lambda (buffer)
+                                               (if eventp (funcall function buffer event)
+                                                   (funcall function buffer))))
+                                    t)))))))
+
+(register-transient-input-bindings :palette #'edit-command-palette "palette")
 
 (define-key-binding (:palette :pageup) (application event)
   "Scroll the palette up one page."

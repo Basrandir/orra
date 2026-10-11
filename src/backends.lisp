@@ -823,6 +823,7 @@
       ((sdl2:scancode= scancode :scancode-return) :return)
       ((sdl2:scancode= scancode :scancode-f1) :f1)
       ((sdl2:scancode= scancode :scancode-f2) :f2)
+      ((sdl2:scancode= scancode :scancode-f3) :f3)
       ((sdl2:scancode= scancode :scancode-tab) :tab)
       ((sdl2:scancode= scancode :scancode-f12) :f12)
       ((sdl2:scancode= scancode :scancode-leftbracket) :leftbracket)

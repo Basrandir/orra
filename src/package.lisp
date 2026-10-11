@@ -18,6 +18,7 @@
    #:application-last-checkpoint-path
    #:application-notification
    #:application-command-palette
+   #:application-object-navigator
    #:application-input-buffer
    #:application-pending-action
    #:application-quit-requested-p
@@ -432,6 +433,8 @@
    #:toggle-keyboard-help
    #:open-command-palette
    #:close-command-palette
+   #:open-object-navigator
+   #:close-object-navigator
    #:select-next-code-form
    #:select-parent-code-form
    #:select-previous-code-form

@@ -18,4 +18,5 @@
                  (:file "src/backends")
                  (:file "src/persistence")
                  (:file "src/runtime")
-                 (:file "src/command-palette")))
+                 (:file "src/command-palette")
+                 (:file "src/object-navigator")))

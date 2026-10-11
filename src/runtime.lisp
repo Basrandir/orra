@@ -84,6 +84,9 @@
    (command-palette
     :accessor application-command-palette
     :initform nil)
+   (object-navigator
+    :accessor application-object-navigator
+    :initform nil)
    (save-baseline
     :accessor application-save-baseline
     :initform nil)
@@ -339,6 +342,7 @@
   (when (and (editing-active-p application)
              (not (application-help-visible-p application))
              (not (application-command-palette application))
+             (not (application-object-navigator application))
              (not (application-pending-action application)))
     (ensure-active-caret-visible application))
   application)
@@ -624,8 +628,8 @@
                   (make-text-cell
                    :text (format nil "~A  |  ~A" (application-save-state application)
                                  (if (editing-active-p application)
-                                     "Edit mode  |  F1 keyboard help  |  F2 commands  |  Esc stops editing"
-                                     "Focus mode  |  F1 keyboard help  |  F2 commands"))
+                                     "Edit mode  |  F1 keyboard help  |  F2 commands  |  F3 navigate  |  Esc stops editing"
+                                     "Focus mode  |  F1 keyboard help  |  F2 commands  |  F3 navigate"))
                    :role :metadata))
     (append-child root
                   (build-workspace-cell-tree
@@ -786,6 +790,8 @@
             (new (max 0 (min (+ old rows) (application-confirmation-max-viewport-y application)))))
        (setf (application-confirmation-viewport-y application) new)
        (unless (= old new) (mark-application-dirty application))))
+    ((application-object-navigator application)
+     (scroll-object-navigator application rows))
     ((application-command-palette application)
      (scroll-command-palette application rows))
     ((application-help-visible-p application)
@@ -968,6 +974,7 @@
 
 (defun application-key-context (application)
   (cond ((application-pending-action application) :confirm)
+        ((application-object-navigator application) :navigate)
         ((application-command-palette application) :palette)
         ((application-help-visible-p application) :help)
         ((editing-active-p application) :edit)
@@ -976,6 +983,7 @@
 (defun application-input-buffer (application)
   (unless (application-quit-requested-p application)
     (case (application-key-context application)
+      (:navigate (navigator-query-buffer (application-object-navigator application)))
       (:palette (palette-input-buffer (application-command-palette application)))
       (:edit (application-active-text-buffer application)))))
 
@@ -983,7 +991,7 @@
   (when (application-quit-requested-p application)
     (return-from dispatch-application-key nil))
   (let* ((context (application-key-context application))
-         (binding (funcall (if (member context '(:help :confirm :palette))
+         (binding (funcall (if (member context '(:help :confirm :palette :navigate))
                                #'find-context-key-binding #'find-key-binding)
                            application context
                            (key-event-key event)
@@ -1017,6 +1025,14 @@
 (defun handle-unbound-application-key (application event)
   (let ((text (key-event-text event)))
     (when (and text (plusp (length text))
+               (application-object-navigator application)
+               (not (application-pending-action application))
+               (not (key-event-controlp event))
+               (not (key-event-altp event))
+               (not (key-event-metap event)))
+      (edit-object-navigator application (lambda (buffer) (insert-buffer-text buffer text)))
+      (return-from handle-unbound-application-key t))
+    (when (and text (plusp (length text))
                (application-command-palette application)
                (not (application-pending-action application))
                (not (key-event-controlp event))
@@ -1026,6 +1042,7 @@
       (return-from handle-unbound-application-key t))
     (when (and (not (application-help-visible-p application))
                (not (application-command-palette application))
+               (not (application-object-navigator application))
                (not (application-pending-action application))
                text (plusp (length text))
                (not (key-event-controlp event))
@@ -1080,6 +1097,7 @@
 (defun focus-model-at-pixel (application pixel-x pixel-y)
   (when (or (application-help-visible-p application)
             (application-command-palette application)
+            (application-object-navigator application)
             (application-pending-action application)
             (application-quit-requested-p application))
     (return-from focus-model-at-pixel application))
@@ -1298,7 +1316,7 @@
             (sync-active-buffer-structure-selection application))))))
   application)
 
-(defun reconcile-active-editor-for-save (application)
+(defun reconcile-active-editor (application &key (action "continuing"))
   ;; A common ancestor distinguishes direct Lisp edits from stale editor text.
   (when (editing-active-p application)
     (let* ((model (active-editor-model application))
@@ -1311,7 +1329,7 @@
          (sync-active-buffer-to-model application))
         ((and synced (string= buffer-content synced))
          (sync-active-buffer-after-slot-update application model (editable-model-text-slot model)))
-        (t (error "The model and editor have different edits. Resolve them before saving.")))))
+        (t (error "The model and editor have different edits. Resolve them before ~A." action)))))
   application)
 
 (defun begin-editing-model (application model)
@@ -1572,12 +1590,16 @@
     (refresh-application-keyboard-help application))
   (when (application-command-palette application)
     (refresh-command-palette application))
+  (when (application-object-navigator application)
+    (refresh-object-navigator application))
   (when (application-pending-action application)
     (refresh-application-confirmation application))
   (backend-update-save-state (application-backend application) (application-save-state application))
   (let* ((*application* application)
          (root (cond ((application-pending-action application)
                       (application-confirmation-root-cell application))
+                     ((application-object-navigator application)
+                      (navigator-root-cell (application-object-navigator application)))
                      ((application-command-palette application)
                       (palette-root-cell (application-command-palette application)))
                      ((application-help-visible-p application)
@@ -1585,6 +1607,8 @@
                      (t (application-root-cell application))))
          (viewport-y (cond ((application-pending-action application)
                             (application-confirmation-viewport-y application))
+                           ((application-object-navigator application)
+                            (navigator-viewport-y (application-object-navigator application)))
                            ((application-command-palette application)
                             (palette-viewport-y (application-command-palette application)))
                            ((application-help-visible-p application)
@@ -1994,6 +2018,7 @@
               (application-help-viewport-y application) 0
               (application-notification application) nil
               (application-command-palette application) nil
+              (application-object-navigator application) nil
               (application-last-checkpoint-at application) nil
               (application-last-checkpoint-attempt-at application) nil
               (application-last-checkpoint-path application) nil)
@@ -3325,26 +3350,25 @@
                           :source-snapshot (code-block-source target)))))
 
 (defun application-notebook-for-node (application node)
-  (let ((workspace (application-workspace application))
-        (seen (make-hash-table :test #'eq))
-        (notebook nil))
-    (loop for current = node then (parent-of current)
-          while (and current (not (gethash current seen)))
-          do (setf (gethash current seen) t)
-          (when (eq current workspace)
-            (return notebook))
-          (when (typep current 'notebook)
-            (setf notebook current))
-          (unless (member current (children-of (parent-of current)))
-            (return nil)))))
+  (block found
+    (map-workspace-content
+     (lambda (object notebook ancestors)
+       (declare (ignore ancestors))
+       (when (eq node object) (return-from found notebook)))
+     (application-workspace application))
+    nil))
 
 (defun focus-linked-object (application target)
   (let ((notebook (application-notebook-for-node application target)))
     (unless (or notebook
-                (eq target (application-workspace application))
-                (cell-for-model-id (application-root-cell application) (object-id target)))
+                (eq target (application-workspace application)))
       (return-from focus-linked-object (values nil :detached-target)))
+    (let ((registered (find-object (application-registry application) (object-id target))))
+      (when (and registered (not (eq registered target)))
+        (return-from focus-linked-object (values nil :replaced-target))))
+    (reconcile-active-editor application :action "navigating")
     (stop-editing application)
+    (register-object (application-registry application) target)
     (when notebook
       (setf (workspace-current-notebook (application-workspace application)) notebook))
     (setf (application-focused-model-id application) (object-id target))
@@ -3525,7 +3549,7 @@
                     "workspace.sexp")))
     (handler-bind ((error (lambda (condition)
                             (report-application-io-error application "Save" condition))))
-      (reconcile-active-editor-for-save application)
+      (reconcile-active-editor application :action "saving")
       (multiple-value-bind (saved payload)
           (save-workspace-to-file (application-workspace application) target
                                   :registry (application-registry application)

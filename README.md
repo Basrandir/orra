@@ -21,6 +21,9 @@ Press `F2` to search and run live commands. Up/Down selects; Enter chooses/runs.
 Argument input is literal Lisp data: for `append-paragraph`, enter `"Hello"`.
 Use Tab to return to search or Esc/F2 to cancel without changing your editor.
 
+Press `F3` to search notebooks and objects by title, text, or type. Up/Down selects;
+Enter jumps without evaluating code. Esc/F3 cancels and preserves your editor.
+
 Optional font override:
 
 ```bash

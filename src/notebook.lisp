@@ -810,6 +810,22 @@
   (or (workspace-current-notebook workspace)
       (first (workspace-notebooks workspace))))
 
+(defun map-workspace-content (function workspace)
+  "Visit contained objects, including result slots, without following references."
+  (let ((seen (make-hash-table :test #'eq)))
+    (labels ((visit (object notebook ancestors)
+               (when (and (typep object 'model-object) (not (gethash object seen)))
+                 (setf (gethash object seen) t)
+                 (let ((notebook (if (typep object 'notebook) object notebook)))
+                   (funcall function object notebook (reverse ancestors))
+                   (dolist (child (children-of object))
+                     (visit child notebook (cons object ancestors)))
+                   (typecase object
+                     (code-block (visit (code-block-result object) notebook (cons object ancestors)))
+                     (repl-entry (visit (repl-entry-result object) notebook (cons object ancestors))))))))
+      (visit workspace nil nil)))
+  workspace)
+
 (defun make-scratch-workspace (registry)
   (let* ((workspace (make-workspace
                      :title "Orra Scratch"
