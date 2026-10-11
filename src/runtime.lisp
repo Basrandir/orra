@@ -81,6 +81,9 @@
    (notification
     :accessor application-notification
     :initform nil)
+   (command-palette
+    :accessor application-command-palette
+    :initform nil)
    (save-baseline
     :accessor application-save-baseline
     :initform nil)
@@ -180,22 +183,28 @@
   (mark-application-dirty application)
   application)
 
-(defun request-destructive-action (application action function)
+(defun request-destructive-action (application action function &key on-success)
   (when (application-pending-action application)
     (return-from request-destructive-action nil))
-  (handler-case
-      (handler-bind
-          ((unsaved-workspace-changes
-            (lambda (condition)
-              (setf (application-pending-action application)
-                    (list :action action :function function)
-                    (application-confirmation-viewport-y application) 0)
-              (mark-application-dirty application)
-              (invoke-restart (find-restart 'cancel-action condition)))))
-        (funcall function))
-    (error (condition)
-      (report-application-io-error application action condition)
-      nil)))
+  (let ((cancelled-p nil))
+    (handler-case
+        (handler-bind
+            ((unsaved-workspace-changes
+              (lambda (condition)
+                (setf (application-pending-action application)
+                      (list :action action
+                            :function (lambda ()
+                                        (multiple-value-prog1 (funcall function)
+                                          (when on-success (funcall on-success)))))
+                      (application-confirmation-viewport-y application) 0)
+                (setf cancelled-p t)
+                (mark-application-dirty application)
+                (invoke-restart (find-restart 'cancel-action condition)))))
+          (multiple-value-prog1 (funcall function)
+            (when (and on-success (not cancelled-p)) (funcall on-success))))
+      (error (condition)
+        (report-application-io-error application action condition)
+        nil))))
 
 (defun resolve-pending-action (application choice)
   (unless (member choice '(:save :discard :cancel))
@@ -329,6 +338,7 @@
   (mark-application-dirty application)
   (when (and (editing-active-p application)
              (not (application-help-visible-p application))
+             (not (application-command-palette application))
              (not (application-pending-action application)))
     (ensure-active-caret-visible application))
   application)
@@ -614,8 +624,8 @@
                   (make-text-cell
                    :text (format nil "~A  |  ~A" (application-save-state application)
                                  (if (editing-active-p application)
-                                     "Edit mode  |  F1 keyboard help  |  Esc stops editing"
-                                     "Focus mode  |  F1 keyboard help"))
+                                     "Edit mode  |  F1 keyboard help  |  F2 commands  |  Esc stops editing"
+                                     "Focus mode  |  F1 keyboard help  |  F2 commands"))
                    :role :metadata))
     (append-child root
                   (build-workspace-cell-tree
@@ -776,6 +786,8 @@
             (new (max 0 (min (+ old rows) (application-confirmation-max-viewport-y application)))))
        (setf (application-confirmation-viewport-y application) new)
        (unless (= old new) (mark-application-dirty application))))
+    ((application-command-palette application)
+     (scroll-command-palette application rows))
     ((application-help-visible-p application)
      (let* ((old-viewport-y (application-help-viewport-y application))
             (new-viewport-y (max 0 (min (+ old-viewport-y rows)
@@ -956,15 +968,22 @@
 
 (defun application-key-context (application)
   (cond ((application-pending-action application) :confirm)
+        ((application-command-palette application) :palette)
         ((application-help-visible-p application) :help)
         ((editing-active-p application) :edit)
         (t :focus)))
+
+(defun application-input-buffer (application)
+  (unless (application-quit-requested-p application)
+    (case (application-key-context application)
+      (:palette (palette-input-buffer (application-command-palette application)))
+      (:edit (application-active-text-buffer application)))))
 
 (defun dispatch-application-key (application event)
   (when (application-quit-requested-p application)
     (return-from dispatch-application-key nil))
   (let* ((context (application-key-context application))
-         (binding (funcall (if (member context '(:help :confirm))
+         (binding (funcall (if (member context '(:help :confirm :palette))
                                #'find-context-key-binding #'find-key-binding)
                            application context
                            (key-event-key event)
@@ -997,7 +1016,16 @@
 
 (defun handle-unbound-application-key (application event)
   (let ((text (key-event-text event)))
+    (when (and text (plusp (length text))
+               (application-command-palette application)
+               (not (application-pending-action application))
+               (not (key-event-controlp event))
+               (not (key-event-altp event))
+               (not (key-event-metap event)))
+      (edit-command-palette application (lambda (buffer) (insert-buffer-text buffer text)))
+      (return-from handle-unbound-application-key t))
     (when (and (not (application-help-visible-p application))
+               (not (application-command-palette application))
                (not (application-pending-action application))
                text (plusp (length text))
                (not (key-event-controlp event))
@@ -1051,6 +1079,7 @@
 
 (defun focus-model-at-pixel (application pixel-x pixel-y)
   (when (or (application-help-visible-p application)
+            (application-command-palette application)
             (application-pending-action application)
             (application-quit-requested-p application))
     (return-from focus-model-at-pixel application))
@@ -1541,17 +1570,23 @@
   (clamp-application-viewport application)
   (when (application-help-visible-p application)
     (refresh-application-keyboard-help application))
+  (when (application-command-palette application)
+    (refresh-command-palette application))
   (when (application-pending-action application)
     (refresh-application-confirmation application))
   (backend-update-save-state (application-backend application) (application-save-state application))
   (let* ((*application* application)
          (root (cond ((application-pending-action application)
                       (application-confirmation-root-cell application))
+                     ((application-command-palette application)
+                      (palette-root-cell (application-command-palette application)))
                      ((application-help-visible-p application)
                       (application-help-root-cell application))
                      (t (application-root-cell application))))
          (viewport-y (cond ((application-pending-action application)
                             (application-confirmation-viewport-y application))
+                           ((application-command-palette application)
+                            (palette-viewport-y (application-command-palette application)))
                            ((application-help-visible-p application)
                             (application-help-viewport-y application))
                            (t (application-viewport-y application)))))
@@ -1958,6 +1993,7 @@
               (application-help-root-cell application) nil
               (application-help-viewport-y application) 0
               (application-notification application) nil
+              (application-command-palette application) nil
               (application-last-checkpoint-at application) nil
               (application-last-checkpoint-attempt-at application) nil
               (application-last-checkpoint-path application) nil)

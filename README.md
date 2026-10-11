@@ -17,6 +17,10 @@ The header and window title show new/saved/unsaved state. Quitting, loading, or
 recovering with unsaved work asks you to save (`S` or `Ctrl+S`), discard (`D`),
 or cancel (`Esc`, `Ctrl+G`, or Enter). Failed saves keep the prompt open.
 
+Press `F2` to search and run live commands. Up/Down selects; Enter chooses/runs.
+Argument input is literal Lisp data: for `append-paragraph`, enter `"Hello"`.
+Use Tab to return to search or Esc/F2 to cancel without changing your editor.
+
 Optional font override:
 
 ```bash

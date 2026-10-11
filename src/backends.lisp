@@ -577,6 +577,7 @@
 
 (defun cell-caret-cursor (cell)
   (cond
+    ((cell-editor-buffer cell) (text-buffer-cursor (cell-editor-buffer cell)))
     ((active-editor-cell-p cell)
      (text-buffer-cursor (application-active-text-buffer *application*)))
     ((focused-editable-cell-p cell)
@@ -587,9 +588,10 @@
 
 (defun displayed-cell-text (cell)
   (let ((text (cell-text cell)))
-    (if (active-editor-cell-p cell)
-        (text-buffer-content (application-active-text-buffer *application*))
-        text)))
+    (cond ((cell-editor-buffer cell) (text-buffer-content (cell-editor-buffer cell)))
+          ((active-editor-cell-p cell)
+           (text-buffer-content (application-active-text-buffer *application*)))
+          (t text))))
 
 (defun cell-visible-text-width (cell)
   (max 1 (- (bounds-width (cell-bounds cell)) 2)))
@@ -710,15 +712,17 @@
             (backend-draw-caret backend
                                 (+ (bounds-x bounds) 1)
                                 (- row viewport-y)
-                                (active-editor-cell-p cell)
+                                (or (not (null (cell-editor-buffer cell))) (active-editor-cell-p cell))
                                 :text-prefix text-prefix)))))))
 
 (defun draw-cell-selection (backend cell viewport-y viewport-height)
-  (when (active-editor-cell-p cell)
-    (let ((content (displayed-cell-text cell)))
+  (let* ((buffer (or (cell-editor-buffer cell)
+                     (and (active-editor-cell-p cell)
+                          (application-active-text-buffer *application*))))
+         (content (and buffer (displayed-cell-text cell))))
+    (when buffer
       (multiple-value-bind (selection-start selection-end)
-          (text-buffer-selection-range
-           (application-active-text-buffer *application*))
+          (text-buffer-selection-range buffer)
         (when selection-start
           (loop for (line line-start) in (split-lines-with-starts content)
                 for line-index from 0
@@ -818,10 +822,13 @@
       ((sdl2:scancode= scancode :scancode-down) :down)
       ((sdl2:scancode= scancode :scancode-return) :return)
       ((sdl2:scancode= scancode :scancode-f1) :f1)
+      ((sdl2:scancode= scancode :scancode-f2) :f2)
+      ((sdl2:scancode= scancode :scancode-tab) :tab)
       ((sdl2:scancode= scancode :scancode-f12) :f12)
       ((sdl2:scancode= scancode :scancode-leftbracket) :leftbracket)
       ((sdl2:scancode= scancode :scancode-rightbracket) :rightbracket)
       ((sdl2:scancode= scancode :scancode-q) :q)
+      ((sdl2:scancode= scancode :scancode-a) :a)
       ((sdl2:scancode= scancode :scancode-j) :j)
       ((sdl2:scancode= scancode :scancode-k) :k)
       ((sdl2:scancode= scancode :scancode-i) :i)
@@ -854,9 +861,7 @@
                      :metap metap))))
 
 (defun sync-sdl2-text-input-state (backend application)
-  (let ((editingp (and (editing-active-p application)
-                       (not (application-help-visible-p application))
-                       (not (application-pending-action application)))))
+  (let ((editingp (not (null (application-input-buffer application)))))
     (cond
       ((and editingp (not (backend-text-input-active-p backend)))
        (sdl2:start-text-input)

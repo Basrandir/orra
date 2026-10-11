@@ -17,4 +17,5 @@
                  (:file "src/cells")
                  (:file "src/backends")
                  (:file "src/persistence")
-                 (:file "src/runtime")))
+                 (:file "src/runtime")
+                 (:file "src/command-palette")))

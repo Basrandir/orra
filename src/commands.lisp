@@ -7,6 +7,10 @@
    (documentation
     :initarg :documentation
     :reader command-documentation)
+   (lambda-list
+    :initarg :lambda-list
+    :reader command-lambda-list
+    :initform :unknown)
    (function
     :initarg :function
     :reader command-function)))
@@ -82,6 +86,7 @@
          (make-instance 'command
                         :name ',name
                         :documentation ,documentation
+                        :lambda-list ',lambda-list
                         :function (lambda ,lambda-list ,@body))))
 
 (defmacro define-key-binding ((context key &key control (shift nil) alt meta)
@@ -152,7 +157,7 @@
 
 (defun key-binding-help-lines (application context)
   "Describe effective bindings, excluding shadowed global or Shift variants."
-  (let* ((modalp (member context '(:help :confirm)))
+  (let* ((modalp (member context '(:help :confirm :palette)))
          (finder (if modalp #'find-context-key-binding #'find-key-binding)))
     (loop for binding in (list-key-bindings application)
           when (or (eq (key-binding-context binding) context)

@@ -50,6 +50,10 @@
    (style-spans
     :initarg :style-spans
     :accessor cell-style-spans
+    :initform nil)
+   (editor-buffer
+    :initarg :editor-buffer
+    :reader cell-editor-buffer
     :initform nil)))
 
 (defun make-container-cell (&key registry model (label "") (orientation :vertical))
@@ -62,7 +66,7 @@
                   :label label
                   :orientation orientation)))
 
-(defun make-text-cell (&key registry model (text "") (role :content) style-spans)
+(defun make-text-cell (&key registry model (text "") (role :content) style-spans editor-buffer)
   (%register-if-present
    registry
    (make-instance 'text-cell
@@ -72,6 +76,7 @@
                   :label text
                   :text text
                   :role role
+                  :editor-buffer editor-buffer
                   :style-spans style-spans)))
 
 (defmethod append-child ((parent cell) (child cell))

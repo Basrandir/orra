@@ -17,6 +17,8 @@
    #:application-last-checkpoint-at
    #:application-last-checkpoint-path
    #:application-notification
+   #:application-command-palette
+   #:application-input-buffer
    #:application-pending-action
    #:application-quit-requested-p
    #:application-operation-journal
@@ -123,6 +125,7 @@
    #:collaborator-presence-updated-at
    #:command
    #:command-documentation
+   #:command-lambda-list
    #:command-function
    #:command-name
    #:common-lisp-source-map
@@ -427,6 +430,8 @@
    #:save-and-continue
    #:save-workspace-to-file
    #:toggle-keyboard-help
+   #:open-command-palette
+   #:close-command-palette
    #:select-next-code-form
    #:select-parent-code-form
    #:select-previous-code-form
