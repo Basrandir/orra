@@ -1985,9 +1985,9 @@
     application))
 
 (defun start-application (application)
-  (let ((*application* application))
-    (run-backend (application-backend application)
-                 application))
+  (call-with-application-context
+   application
+   (lambda () (run-backend (application-backend application) application)))
   application)
 
 (defun load-workspace-into-application (application path &key

@@ -10263,6 +10263,64 @@
       (orra::handle-sdl2-keydown application (event :key :keysym))
       (is (null (application-object-navigator application)) "F3 while navigating should cancel."))))
 
+(deftest application-context-is-nested-and-unwind-safe ()
+  (let* ((outer (make-application :backend (make-null-backend :stream (make-broadcast-stream))))
+         (inner (make-application :backend (make-null-backend :stream (make-broadcast-stream))))
+         (*application* outer))
+    (is (equal (list inner :second)
+               (multiple-value-list
+                (orra::call-with-application-context
+                 inner (lambda () (values *application* :second)))))
+        "Application context must preserve multiple values and select the explicit owner.")
+    (is (eq outer *application*) "Normal return must restore the caller's context.")
+    (handler-case
+        (orra::call-with-application-context
+         inner
+         (lambda ()
+           (orra::call-with-application-context
+            outer (lambda () (is (eq outer *application*) "Nested context must select its owner.")))
+           (is (eq inner *application*) "Nested return must restore the inner context.")
+           (error "Context unwind probe")))
+      (error (condition)
+        (is (string= "Context unwind probe" (princ-to-string condition))
+            "Context setup must not mask callback conditions.")))
+    (is (eq outer *application*) "A callback error must restore the caller's context.")))
+
+#+sbcl
+(deftest application-context-supports-live-commands-on-worker-thread ()
+  (let* ((owner (make-application :backend (make-null-backend :stream (make-broadcast-stream))))
+         (caller (make-application :backend (make-null-backend :stream (make-broadcast-stream))))
+         (*application* caller)
+         (thread
+          (sb-thread:make-thread
+           (lambda ()
+             (let ((*application* nil))
+               (handler-case
+                   (let ((observed
+                          (orra::call-with-application-context
+                           owner
+                           (lambda ()
+                             (loop for version from 1 to 2
+                                   for source = (format nil
+							"(progn (setf (gethash :callback-probe (orra:application-commands orra:*application*)) (make-instance 'orra:command :name :callback-probe :lambda-list '(application) :function (lambda (application) (list (eq application orra:*application*) ~D)))) :installed)"
+							version)
+                                   for block = (invoke-command owner 'append-code-block source)
+                                   do (evaluate-code-block owner block)
+                                   (is (eq :ok (result-block-status (code-block-result block)))
+                                       "Worker evaluation must install a live command through *application*.")
+                                   collect (invoke-command owner :callback-probe))))))
+                     (list :ok observed *application*))
+                 (error (condition) (list :error (princ-to-string condition))))))
+           :name "Orra application context regression")))
+    (let ((observed (sb-thread:join-thread thread)))
+      (is (eq :ok (first observed)) (format nil "Worker callback failed: ~S" observed))
+      (is (equal '((t 1) (t 2)) (second observed))
+          "Live command replacement must use the owning application without restarting.")
+      (is (null (third observed)) "Worker context must not leak outside the callback."))
+    (is (eq caller *application*) "Worker execution must not replace the caller's context.")
+    (is (null (gethash :callback-probe (application-commands caller)))
+        "Worker registration must not affect another application's live commands.")))
+
 (defun run-all-tests ()
   (let ((passed 0)
         (failed 0))
