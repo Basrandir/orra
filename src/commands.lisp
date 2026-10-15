@@ -157,7 +157,7 @@
 
 (defun key-binding-help-lines (application context)
   "Describe effective bindings, excluding shadowed global or Shift variants."
-  (let* ((modalp (member context '(:help :confirm :palette :navigate :outline)))
+  (let* ((modalp (member context '(:help :confirm :palette :navigate :outline :inspect)))
          (finder (if modalp #'find-context-key-binding #'find-key-binding)))
     (loop for binding in (list-key-bindings application)
           when (or (eq (key-binding-context binding) context)

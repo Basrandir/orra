@@ -1,8 +1,5 @@
 (in-package :orra)
 
-(defparameter *outline-sidebar-width* 26)
-(defparameter *outline-min-document-width* 72)
-
 (defclass notebook-outline ()
   ((visible-p :accessor outline-visible-p :initform t)
    (active-p :accessor outline-keyboard-active-p :initform nil)
@@ -21,22 +18,11 @@
        (outline-keyboard-active-p (application-outline application))))
 
 (defun outline-input-blocked-p (application)
-  (or (application-help-visible-p application)
-      (application-command-palette application)
-      (application-object-navigator application)
-      (application-pending-action application)
-      (application-quit-requested-p application)))
+  (or (auxiliary-overlay-active-p application) (inspector-active-p application)))
 
 (defun outline-sidebar-p (application)
-  (and (or (null (application-outline application))
-           (outline-visible-p (application-outline application)))
-       (>= (backend-layout-width (application-backend application))
-           (+ *outline-sidebar-width* 1 *outline-min-document-width*))))
-
-(defun layout-application-document (application)
-  (let ((x (if (outline-sidebar-p application) (1+ *outline-sidebar-width*) 0)))
-    (perform-layout (application-root-cell application) :x x
-                    :width (max 1 (- (backend-layout-width (application-backend application)) x)))))
+  (let ((layout (application-view-layout application)))
+    (and (view-layout-outline layout) (not (eq :outline (view-layout-foreground layout))))))
 
 (defun outline-entries (application &key include-collapsed)
   "Derive navigation rows from live objects, never from document cells."
@@ -97,8 +83,8 @@
          (all (outline-entries application :include-collapsed t))
          (branches (make-hash-table :test #'equal))
          (selected (selected-outline-entry application entries))
-         (width (if (outline-sidebar-p application) *outline-sidebar-width*
-                    (max 1 (backend-layout-width (application-backend application)))))
+         (width (bounds-width (or (view-layout-outline (application-view-layout application))
+                                  (make-bounds :width (backend-layout-width (application-backend application))))))
          (root (make-container-cell :label "Outline" :inset 0 :top-inset 0 :spacing 0))
          (selected-cell nil))
     (dolist (entry all)
@@ -225,11 +211,10 @@
   application)
 
 (defun outline-point-p (application x y)
-  (and (not (outline-input-blocked-p application))
-       (or (outline-sidebar-p application) (outline-active-p application))
-       (<= 0 x) (< x (if (outline-sidebar-p application) *outline-sidebar-width*
-                         (backend-layout-width (application-backend application))))
-       (<= 0 y) (< y (application-viewport-height application))))
+  (let ((layout (application-view-layout application)))
+    (and (not (auxiliary-overlay-active-p application))
+         (not (eq :inspector (view-layout-foreground layout)))
+         (view-bounds-contain-point-p (view-layout-outline layout) x y))))
 
 (defun handle-outline-click (application x y)
   (let* ((root (refresh-application-outline application))
@@ -248,36 +233,12 @@
             (accept-outline-selection application)))))
   application)
 
-(defun scroll-application-at-pixel (application rows pixel-x pixel-y)
-  (multiple-value-bind (x y)
-      (backend-grid-point (application-backend application) pixel-x pixel-y)
-    (if (or (outline-point-p application x y)
-            (and (outline-active-p application) (not (outline-sidebar-p application))
-                 (not (outline-input-blocked-p application))))
-        (scroll-application-outline application rows)
-        ;; Pointer ownership takes priority over the keyboard-focused pane.
-        (let* ((outline (application-outline application))
-               (active (and outline (outline-keyboard-active-p outline))))
-          (unwind-protect
-               (progn
-                 (when outline (setf (outline-keyboard-active-p outline) nil))
-                 (scroll-application application rows))
-            (when outline (setf (outline-keyboard-active-p outline) active))))))
-  application)
-
 (defun draw-application-outline (application)
   (let* ((root (refresh-application-outline application))
          (outline (ensure-application-outline application))
-         (backend (application-backend application))
-         (width (if (outline-sidebar-p application) *outline-sidebar-width* (backend-layout-width backend)))
-         (height (application-viewport-height application)))
-    (backend-call-with-clip
-     backend (make-bounds :width (max 1 width) :height height)
-     (lambda ()
-       (backend-draw-cell backend (make-container-cell :decoration :inspector) 0 0 width height nil)
-       (draw-cell-tree backend root :viewport-y (outline-viewport-y outline) :viewport-height height)
-       (draw-application-scrollbar application :content-height (bounds-height (cell-bounds root))
-                                   :viewport-y (outline-viewport-y outline) :x (1- width))))))
+         (bounds (view-layout-outline (application-view-layout application))))
+    (when bounds
+      (draw-application-view-pane application root bounds (outline-viewport-y outline) :surface :inspector))))
 
 (define-command toggle-outline (application)
   "Focus the notebook outline, or hide it when already focused."

@@ -79,8 +79,8 @@
     :initarg :inspector-visible-p
     :accessor application-inspector-visible-p
     :initform nil)
-   (inspector-return-viewport-y
-    :accessor application-inspector-return-viewport-y
+   (inspector
+    :accessor application-inspector
     :initform nil)
    (help-viewport-y
     :accessor application-help-viewport-y
@@ -353,6 +353,8 @@
              (not (application-help-visible-p application))
              (not (application-command-palette application))
              (not (application-object-navigator application))
+             (not (outline-active-p application))
+             (not (inspector-active-p application))
              (not (application-pending-action application)))
     (ensure-active-caret-visible application))
   application)
@@ -538,15 +540,6 @@
                                        (text-buffer-content buffer)))))))))
     lines))
 
-(defun build-inspector-cell (application)
-  (let ((inspector (make-container-cell :label "Inspector" :decoration :inspector :inset 1 :spacing 0))
-        (model (focused-model application)))
-    (loop for line in (inspector-lines-for-model application model)
-          for index from 0
-          do (append-child inspector
-                           (make-text-cell :text line :role (if (zerop index) :heading :metadata))))
-    inspector))
-
 (defun event-log-line (entry)
   (format nil "~A: ~A~@[ | ~A~]"
           (getf entry :kind)
@@ -671,45 +664,12 @@
                    (build-workspace-cell-tree
                     (application-workspace application)
                     nil (application-registry application))))
-    (when (application-inspector-visible-p application)
-      (append-child root (build-inspector-cell application)))
     (when (application-debug-visible-p application)
       (append-child root (build-debug-cell application)))
     (append-child root
                   (make-text-cell
                    :text (application-status-line application)))
     root))
-
-(defun toggle-application-inspector (application)
-  (when (or (application-help-visible-p application)
-            (application-command-palette application)
-            (application-object-navigator application)
-            (application-pending-action application)
-            (outline-active-p application)
-            (application-quit-requested-p application))
-    (return-from toggle-application-inspector nil))
-  (let ((showp (not (application-inspector-visible-p application))))
-    (when showp
-      (setf (application-inspector-return-viewport-y application) (application-viewport-y application)))
-    (setf (application-inspector-visible-p application) showp)
-    (rebuild-root-cell application)
-    (layout-application-document application)
-    (if showp
-        (let* ((inspector (find "Inspector" (children-of (application-root-cell application))
-                                :key #'cell-label :test #'string=))
-               (bounds (cell-bounds inspector)))
-          (ensure-row-range-visible application (bounds-y bounds)
-                                    (+ (bounds-y bounds)
-                                       (min (bounds-height bounds)
-                                            (max 1 (- (application-viewport-height application) 2))))))
-        (progn
-          (setf (application-viewport-y application)
-                (or (application-inspector-return-viewport-y application) 0)
-                (application-inspector-return-viewport-y application) nil)
-          (clamp-application-viewport application)
-          (ensure-active-caret-visible application)))
-    (mark-application-dirty application)
-    application))
 
 (defun wrap-keyboard-help-text (text width)
   (let ((width (max 1 width)))
@@ -731,6 +691,7 @@
 
 (defun build-keyboard-help-cell (application)
   (let* ((context (cond ((outline-active-p application) :outline)
+                        ((inspector-active-p application) :inspect)
                         ((editing-active-p application) :edit) (t :focus)))
          (root (make-container-cell :label "Keyboard help"))
          (width (max 1 (- (backend-layout-width (application-backend application)) 6)))
@@ -742,6 +703,7 @@
                  "[Shift+] means Shift is optional. Meta is Command or Windows/Super."
                  (case context
                    (:outline "Outline mode: arrows select or fold branches; Enter navigates; Esc returns to your editor.")
+                   (:inspect "Inspector mode: arrows or Page Up/Down scroll; Esc returns without changing your editor.")
                    (:edit "Edit mode: text changes the active buffer. Esc returns to focus mode.")
                    (t "Focus mode: letter shortcuts are active. Some commands apply only to code or links."))
                  "Current mode shortcuts")
@@ -851,6 +813,14 @@
                   (application-max-viewport-y application))))
   application)
 
+(defun scroll-application-document (application rows)
+  (let ((old-viewport-y (application-viewport-y application)))
+    (incf (application-viewport-y application) rows)
+    (clamp-application-viewport application)
+    (unless (= old-viewport-y (application-viewport-y application))
+      (mark-application-dirty application)))
+  application)
+
 (defun scroll-application (application rows)
   (cond
     ((application-pending-action application)
@@ -873,12 +843,22 @@
          (mark-application-dirty application))))
     ((outline-active-p application)
      (scroll-application-outline application rows))
-    (t
-     (let ((old-viewport-y (application-viewport-y application)))
-       (incf (application-viewport-y application) rows)
-       (clamp-application-viewport application)
-       (unless (= old-viewport-y (application-viewport-y application))
-         (mark-application-dirty application)))))
+    ((inspector-active-p application)
+     (scroll-application-inspector application rows))
+    (t (scroll-application-document application rows)))
+  application)
+
+(defun scroll-application-at-pixel (application rows pixel-x pixel-y)
+  (multiple-value-bind (x y)
+      (backend-grid-point (application-backend application) pixel-x pixel-y)
+    (let ((foreground (view-layout-foreground (application-view-layout application))))
+      (cond
+        ((auxiliary-overlay-active-p application) (scroll-application application rows))
+        ((or (eq foreground :inspector) (inspector-point-p application x y))
+         (scroll-application-inspector application rows))
+        ((or (eq foreground :outline) (outline-point-p application x y))
+         (scroll-application-outline application rows))
+        (t (scroll-application-document application rows)))))
   application)
 
 (defun scroll-application-page (application direction)
@@ -1050,6 +1030,7 @@
         ((application-command-palette application) :palette)
         ((application-help-visible-p application) :help)
         ((outline-active-p application) :outline)
+        ((inspector-active-p application) :inspect)
         ((editing-active-p application) :edit)
         (t :focus)))
 
@@ -1064,7 +1045,7 @@
   (when (application-quit-requested-p application)
     (return-from dispatch-application-key nil))
   (let* ((context (application-key-context application))
-         (binding (funcall (if (member context '(:help :confirm :palette :navigate :outline))
+         (binding (funcall (if (member context '(:help :confirm :palette :navigate :outline :inspect))
                                #'find-context-key-binding #'find-key-binding)
                            application context
                            (key-event-key event)
@@ -1118,6 +1099,7 @@
                (not (application-object-navigator application))
                (not (application-pending-action application))
                (not (outline-active-p application))
+               (not (inspector-active-p application))
                text (plusp (length text))
                (not (key-event-controlp event))
                (not (key-event-altp event))
@@ -1180,11 +1162,18 @@
     (unless (and (< grid-x (backend-layout-width (application-backend application)))
                  (< grid-y (application-viewport-height application)))
       (return-from focus-model-at-pixel application))
+    (when (inspector-point-p application grid-x grid-y)
+      (when (outline-active-p application) (close-application-outline application))
+      (focus-application-inspector application)
+      (return-from focus-model-at-pixel application))
     (when (outline-point-p application grid-x grid-y)
+      (when (inspector-active-p application) (return-from-application-inspector application))
       (handle-outline-click application grid-x grid-y)
       (return-from focus-model-at-pixel application))
     (when (outline-active-p application)
       (close-application-outline application))
+    (when (inspector-active-p application)
+      (return-from-application-inspector application))
     (let* ((logical-y (+ grid-y (application-viewport-y application)))
            (old-focused-id (application-focused-model-id application))
            (cell (and (application-root-cell application)
@@ -1694,26 +1683,20 @@
                            ((application-help-visible-p application)
                             (application-help-viewport-y application))
                            (t (application-viewport-y application)))))
-    (if (and (eq root (application-root-cell application))
-             (outline-active-p application)
-             (not (outline-sidebar-p application)))
-        (draw-application-outline application)
-        (progn
-          (backend-call-with-clip
-           (application-backend application)
-           (make-bounds :x (bounds-x (cell-bounds root))
-                        :width (max 1 (1- (bounds-width (cell-bounds root))))
-                        :height (application-viewport-height application))
-           (lambda ()
-             (draw-cell-tree (application-backend application) root
-                             :viewport-y viewport-y
-                             :viewport-height (application-viewport-height application))))
-          (draw-application-scrollbar application
-                                      :content-height (bounds-height (cell-bounds root))
-                                      :viewport-y viewport-y)
-          (when (and (eq root (application-root-cell application))
-                     (outline-sidebar-p application))
-            (draw-application-outline application)))))
+    (if (eq root (application-root-cell application))
+        (let ((layout (application-view-layout application)))
+          (case (view-layout-foreground layout)
+            (:outline (draw-application-outline application))
+            (:inspector (draw-application-inspector application))
+            (t
+             (draw-application-view-pane application root (view-layout-document layout) viewport-y)
+             (when (view-layout-outline layout) (draw-application-outline application))
+             (when (view-layout-inspector layout) (draw-application-inspector application)))))
+        (draw-application-view-pane
+         application root
+         (make-bounds :width (backend-layout-width (application-backend application))
+                      :height (application-viewport-height application))
+         viewport-y)))
   (draw-application-notification application)
   (backend-present (application-backend application))
   (clear-application-dirty application)
@@ -2112,7 +2095,7 @@
               (application-help-root-cell application) nil
               (application-help-viewport-y application) 0
               (application-inspector-visible-p application) nil
-              (application-inspector-return-viewport-y application) nil
+              (application-inspector application) nil
               (application-notification application) nil
               (application-command-palette application) nil
               (application-object-navigator application) nil
@@ -3483,6 +3466,8 @@
     (setf (application-focused-model-id application) (object-id target))
     (when (outline-active-p application)
       (close-application-outline application))
+    (when (inspector-active-p application)
+      (return-from-application-inspector application))
     (rebuild-root-cell application)
     (layout-application-document application)
     (let ((cell (cell-for-model-id (application-root-cell application) (object-id target))))

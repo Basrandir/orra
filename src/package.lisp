@@ -14,6 +14,7 @@
    #:application-event-log-limit
    #:application-help-visible-p
    #:application-inspector-visible-p
+   #:application-inspector
    #:application-keymap
    #:application-last-checkpoint-at
    #:application-last-checkpoint-path
@@ -33,6 +34,7 @@
    #:application-viewport-y
    #:application-workspace
    #:toggle-outline
+   #:focus-inspector
    #:add-text-buffer-style-span
    #:acknowledge-journal-operation
    #:archive-workspace

@@ -25,7 +25,10 @@ Press `F3` to search notebooks and objects by title, text, or type. Up/Down sele
 Enter jumps without evaluating code. Esc/F3 cancels and preserves your editor.
 
 Press `F4` to show or hide details for the focused object without ending editing.
-The default notebook view keeps this auxiliary inspector hidden until requested.
+The inspector opens in the right margin when space permits, or full-width on
+small windows. `Shift+F4` or a click gives it keyboard focus; arrows/Page Up/Down
+scroll its details. `Esc` returns to your editor, hiding full-width inspection.
+It stays hidden until requested and never adds content to document scrolling.
 
 The notebook/section outline appears beside the document when space permits.
 `F5` focuses or opens it; Up/Down selects, Left/Right folds branches, and Enter
