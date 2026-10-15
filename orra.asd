@@ -19,4 +19,5 @@
                  (:file "src/persistence")
                  (:file "src/runtime")
                  (:file "src/command-palette")
-                 (:file "src/object-navigator")))
+                 (:file "src/object-navigator")
+                 (:file "src/outline")))

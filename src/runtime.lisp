@@ -94,6 +94,9 @@
    (object-navigator
     :accessor application-object-navigator
     :initform nil)
+   (outline
+    :accessor application-outline
+    :initform nil)
    (save-baseline
     :accessor application-save-baseline
     :initform nil)
@@ -682,6 +685,7 @@
             (application-command-palette application)
             (application-object-navigator application)
             (application-pending-action application)
+            (outline-active-p application)
             (application-quit-requested-p application))
     (return-from toggle-application-inspector nil))
   (let ((showp (not (application-inspector-visible-p application))))
@@ -689,8 +693,7 @@
       (setf (application-inspector-return-viewport-y application) (application-viewport-y application)))
     (setf (application-inspector-visible-p application) showp)
     (rebuild-root-cell application)
-    (perform-layout (application-root-cell application)
-                    :width (backend-layout-width (application-backend application)))
+    (layout-application-document application)
     (if showp
         (let* ((inspector (find "Inspector" (children-of (application-root-cell application))
                                 :key #'cell-label :test #'string=))
@@ -727,18 +730,20 @@
                           (nreverse lines))))))
 
 (defun build-keyboard-help-cell (application)
-  (let* ((context (if (editing-active-p application) :edit :focus))
+  (let* ((context (cond ((outline-active-p application) :outline)
+                        ((editing-active-p application) :edit) (t :focus)))
          (root (make-container-cell :label "Keyboard help"))
          (width (max 1 (- (backend-layout-width (application-backend application)) 6)))
          (lines
           (append
-           (list (format nil "Keyboard help - ~A mode" (if (eq context :edit) "Edit" "Focus")))
+           (list (format nil "Keyboard help - ~A mode" (string-capitalize (string context))))
            (key-binding-help-lines application :help)
            (list "Help is read-only. Closing it restores your editor and notebook position."
                  "[Shift+] means Shift is optional. Meta is Command or Windows/Super."
-                 (if (eq context :edit)
-                     "Edit mode: text changes the active buffer. Esc returns to focus mode."
-                     "Focus mode: letter shortcuts are active. Some commands apply only to code or links.")
+                 (case context
+                   (:outline "Outline mode: arrows select or fold branches; Enter navigates; Esc returns to your editor.")
+                   (:edit "Edit mode: text changes the active buffer. Esc returns to focus mode.")
+                   (t "Focus mode: letter shortcuts are active. Some commands apply only to code or links."))
                  "Current mode shortcuts")
            (key-binding-help-lines application context))))
     (dolist (line lines root)
@@ -866,6 +871,8 @@
        (setf (application-help-viewport-y application) new-viewport-y)
        (unless (= old-viewport-y new-viewport-y)
          (mark-application-dirty application))))
+    ((outline-active-p application)
+     (scroll-application-outline application rows))
     (t
      (let ((old-viewport-y (application-viewport-y application)))
        (incf (application-viewport-y application) rows)
@@ -942,7 +949,8 @@
 
 (defun draw-application-scrollbar
     (application &key (content-height (application-content-height application))
-                   (viewport-y (application-viewport-y application)))
+                   (viewport-y (application-viewport-y application))
+                   (x (1- (backend-layout-width (application-backend application)))))
   (let* ((backend (application-backend application))
          (viewport-height (application-viewport-height application))
          (max-scroll (max 0 (- content-height viewport-height))))
@@ -957,8 +965,7 @@
                                  max-scroll)
                           0)))
         (backend-draw-scrollbar backend
-                                (max 0
-                                     (1- (backend-layout-width backend)))
+                                (max 0 x)
                                 0
                                 track-height
                                 thumb-y
@@ -1042,6 +1049,7 @@
         ((application-object-navigator application) :navigate)
         ((application-command-palette application) :palette)
         ((application-help-visible-p application) :help)
+        ((outline-active-p application) :outline)
         ((editing-active-p application) :edit)
         (t :focus)))
 
@@ -1056,7 +1064,7 @@
   (when (application-quit-requested-p application)
     (return-from dispatch-application-key nil))
   (let* ((context (application-key-context application))
-         (binding (funcall (if (member context '(:help :confirm :palette :navigate))
+         (binding (funcall (if (member context '(:help :confirm :palette :navigate :outline))
                                #'find-context-key-binding #'find-key-binding)
                            application context
                            (key-event-key event)
@@ -1109,6 +1117,7 @@
                (not (application-command-palette application))
                (not (application-object-navigator application))
                (not (application-pending-action application))
+               (not (outline-active-p application))
                text (plusp (length text))
                (not (key-event-controlp event))
                (not (key-event-altp event))
@@ -1168,6 +1177,14 @@
     (return-from focus-model-at-pixel application))
   (multiple-value-bind (grid-x grid-y)
       (backend-grid-point (application-backend application) pixel-x pixel-y)
+    (unless (and (< grid-x (backend-layout-width (application-backend application)))
+                 (< grid-y (application-viewport-height application)))
+      (return-from focus-model-at-pixel application))
+    (when (outline-point-p application grid-x grid-y)
+      (handle-outline-click application grid-x grid-y)
+      (return-from focus-model-at-pixel application))
+    (when (outline-active-p application)
+      (close-application-outline application))
     (let* ((logical-y (+ grid-y (application-viewport-y application)))
            (old-focused-id (application-focused-model-id application))
            (cell (and (application-root-cell application)
@@ -1647,9 +1664,7 @@
   (rebuild-root-cell application)
   (ensure-valid-focus application)
   (rebuild-root-cell application)
-  (perform-layout (application-root-cell application)
-                  :width (backend-layout-width
-                          (application-backend application)))
+  (layout-application-document application)
   (clamp-application-viewport application)
   (when (application-help-visible-p application)
     (refresh-application-keyboard-help application))
@@ -1679,12 +1694,26 @@
                            ((application-help-visible-p application)
                             (application-help-viewport-y application))
                            (t (application-viewport-y application)))))
-    (draw-cell-tree (application-backend application) root
-                    :viewport-y viewport-y
-                    :viewport-height (application-viewport-height application))
-    (draw-application-scrollbar application
-                                :content-height (bounds-height (cell-bounds root))
-                                :viewport-y viewport-y))
+    (if (and (eq root (application-root-cell application))
+             (outline-active-p application)
+             (not (outline-sidebar-p application)))
+        (draw-application-outline application)
+        (progn
+          (backend-call-with-clip
+           (application-backend application)
+           (make-bounds :x (bounds-x (cell-bounds root))
+                        :width (max 1 (1- (bounds-width (cell-bounds root))))
+                        :height (application-viewport-height application))
+           (lambda ()
+             (draw-cell-tree (application-backend application) root
+                             :viewport-y viewport-y
+                             :viewport-height (application-viewport-height application))))
+          (draw-application-scrollbar application
+                                      :content-height (bounds-height (cell-bounds root))
+                                      :viewport-y viewport-y)
+          (when (and (eq root (application-root-cell application))
+                     (outline-sidebar-p application))
+            (draw-application-outline application)))))
   (draw-application-notification application)
   (backend-present (application-backend application))
   (clear-application-dirty application)
@@ -2087,6 +2116,7 @@
               (application-notification application) nil
               (application-command-palette application) nil
               (application-object-navigator application) nil
+              (application-outline application) nil
               (application-last-checkpoint-at application) nil
               (application-last-checkpoint-attempt-at application) nil
               (application-last-checkpoint-path application) nil)
@@ -3451,9 +3481,10 @@
     (when notebook
       (setf (workspace-current-notebook (application-workspace application)) notebook))
     (setf (application-focused-model-id application) (object-id target))
+    (when (outline-active-p application)
+      (close-application-outline application))
     (rebuild-root-cell application)
-    (perform-layout (application-root-cell application)
-                    :width (backend-layout-width (application-backend application)))
+    (layout-application-document application)
     (let ((cell (cell-for-model-id (application-root-cell application) (object-id target))))
       (when cell
         (let ((y (bounds-y (cell-bounds cell))))

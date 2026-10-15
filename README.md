@@ -27,6 +27,11 @@ Enter jumps without evaluating code. Esc/F3 cancels and preserves your editor.
 Press `F4` to show or hide details for the focused object without ending editing.
 The default notebook view keeps this auxiliary inspector hidden until requested.
 
+The notebook/section outline appears beside the document when space permits.
+`F5` focuses or opens it; Up/Down selects, Left/Right folds branches, and Enter
+navigates. `Esc` returns without changing your editor; `F5` again hides it.
+On small windows it opens full-width. The mouse wheel scrolls the pane under it.
+
 Optional font override:
 
 ```bash

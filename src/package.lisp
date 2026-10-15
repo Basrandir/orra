@@ -20,6 +20,7 @@
    #:application-notification
    #:application-command-palette
    #:application-object-navigator
+   #:application-outline
    #:application-input-buffer
    #:application-pending-action
    #:application-quit-requested-p
@@ -31,6 +32,7 @@
    #:application-unsaved-changes-p
    #:application-viewport-y
    #:application-workspace
+   #:toggle-outline
    #:add-text-buffer-style-span
    #:acknowledge-journal-operation
    #:archive-workspace
