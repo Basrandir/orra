@@ -2,6 +2,14 @@
 
 (defvar *application* nil)
 
+(defparameter *default-interface-palette*
+  '(:canvas (248 246 238 255) :ink (53 58 50 255) :muted (112 119 105 255)
+    :surface (240 238 228 255) :code (235 236 226 255) :result (232 239 226 255)
+    :error-surface (249 237 230 255) :error (151 49 37 255)
+    :focus-surface (255 253 247 255) :accent (160 79 54 255) :line (217 215 204 255)
+    :selection (206 221 233 255) :scroll-track (230 227 215 255) :scroll-thumb (151 161 138 255)
+    :string (67 112 68 255) :number (49 94 145 255) :quote (147 82 40 255)))
+
 (defun call-with-application-context (application function)
   (let ((*application* application))
     (funcall function)))
@@ -28,7 +36,11 @@
     :accessor backend-frame-operations)))
 
 (defclass sdl2-backend (backend)
-  ((title
+  ((palette
+    :initarg :palette
+    :accessor backend-palette
+    :initform (copy-tree *default-interface-palette*))
+   (title
     :initarg :title
     :accessor backend-title
     :initform "Orra")
@@ -100,6 +112,7 @@
                             (padding-y 18)
                             font-path
                             (font-size 16)
+                            (palette *default-interface-palette*)
                             single-frame-p)
   (make-instance 'sdl2-backend
                  :name :sdl2
@@ -112,12 +125,22 @@
                  :padding-y padding-y
                  :font-path font-path
                  :font-size font-size
+                 :palette (copy-tree palette)
                  :single-frame-p single-frame-p))
 
 (defgeneric backend-begin-frame (backend))
 (defgeneric backend-draw-text (backend x y text))
 (defgeneric backend-draw-styled-text (backend x y text style-spans))
 (defgeneric backend-draw-box (backend x y width height label focusedp))
+(defgeneric backend-draw-cell (backend cell x y width height focusedp)
+  (:method ((backend backend) cell x y width height focusedp)
+    (backend-draw-box backend x y width height (cell-label cell) focusedp)))
+(defgeneric backend-draw-cell-text (backend cell x y text style-spans)
+  (:method ((backend backend) cell x y text style-spans)
+    (declare (ignore cell))
+    (if style-spans
+        (backend-draw-styled-text backend x y text style-spans)
+        (backend-draw-text backend x y text))))
 (defgeneric backend-draw-selection
     (backend x y &key text-prefix selected-text trailing-cell-p))
 (defgeneric backend-draw-caret (backend x y activep &key text-prefix))
@@ -373,8 +396,17 @@
                    condition)
            nil))))))
 
+(defun interface-color (backend role)
+  (or (getf (backend-palette backend) role)
+      (let ((default (getf *default-interface-palette* role)))
+        (unless default (error "Unknown interface color role: ~S" role))
+        (setf (getf (backend-palette backend) role) (copy-list default)))))
+
+(defun set-interface-draw-color (backend role)
+  (apply #'sdl2:set-render-draw-color (backend-renderer backend) (interface-color backend role)))
+
 (defmethod backend-begin-frame ((backend sdl2-backend))
-  (sdl2:set-render-draw-color (backend-renderer backend) 28 30 36 255)
+  (set-interface-draw-color backend :canvas)
   (sdl2:render-clear (backend-renderer backend)))
 
 (defmethod backend-draw-box ((backend sdl2-backend) x y width height label focusedp)
@@ -385,13 +417,36 @@
         (pixel-height (logical-height->pixel backend height)))
     (sdl2:with-rects ((rect pixel-x pixel-y pixel-width pixel-height))
       (if focusedp
-          (sdl2:set-render-draw-color (backend-renderer backend) 72 120 202 255)
-          (sdl2:set-render-draw-color (backend-renderer backend) 48 53 63 255))
+          (set-interface-draw-color backend :focus-surface)
+          (set-interface-draw-color backend :surface))
       (sdl2:render-fill-rect (backend-renderer backend) rect)
       (if focusedp
-          (sdl2:set-render-draw-color (backend-renderer backend) 222 231 255 255)
-          (sdl2:set-render-draw-color (backend-renderer backend) 103 111 124 255))
+          (set-interface-draw-color backend :accent)
+          (set-interface-draw-color backend :line))
       (sdl2:render-draw-rect (backend-renderer backend) rect))))
+
+(defmethod backend-draw-cell ((backend sdl2-backend) cell x y width height focusedp)
+  (let* ((decoration (cell-decoration cell))
+         (focusedp (and focusedp
+                        (typep cell 'text-cell)
+                        (member (cell-role cell) '(:editable-content :heading :link))))
+         (surface (if focusedp :focus-surface
+                      (case decoration (:code :code) (:result :result)
+                            (:error-result :error-surface) (:inspector :surface)))))
+    (when surface
+      (let ((pixel-x (logical-x->pixel backend x))
+            (pixel-y (logical-y->pixel backend y))
+            (pixel-width (logical-width->pixel backend width))
+            (pixel-height (logical-height->pixel backend height)))
+        (sdl2:with-rects ((rect pixel-x pixel-y pixel-width pixel-height)
+                          (bar pixel-x pixel-y 2 pixel-height))
+          (set-interface-draw-color backend surface)
+          (sdl2:render-fill-rect (backend-renderer backend) rect)
+          (when (or focusedp (member decoration '(:result :error-result)))
+            (set-interface-draw-color backend (cond (focusedp :accent)
+                                                    ((eq decoration :error-result) :error)
+                                                    (t :string)))
+            (sdl2:render-fill-rect (backend-renderer backend) bar)))))))
 
 (defmethod backend-draw-caret ((backend sdl2-backend) x y activep
                                &key (text-prefix ""))
@@ -405,8 +460,8 @@
         (pixel-y (logical-y->pixel backend y))
         (pixel-height (backend-row-height backend)))
     (if activep
-        (sdl2:set-render-draw-color (backend-renderer backend) 245 194 102 255)
-        (sdl2:set-render-draw-color (backend-renderer backend) 222 231 255 255))
+        (set-interface-draw-color backend :accent)
+        (set-interface-draw-color backend :muted))
     (sdl2:with-rects ((rect pixel-x pixel-y 2 pixel-height))
       (sdl2:render-fill-rect (backend-renderer backend) rect))))
 
@@ -433,7 +488,7 @@
                             (backend-cell-width backend)
                             0)))
         (pixel-height (backend-row-height backend)))
-    (sdl2:set-render-draw-color (backend-renderer backend) 67 92 135 255)
+    (set-interface-draw-color backend :selection)
     (sdl2:with-rects ((rect pixel-x pixel-y pixel-width pixel-height))
       (sdl2:render-fill-rect (backend-renderer backend) rect))))
 
@@ -447,9 +502,9 @@
         (thumb-pixel-height (logical-height->pixel backend thumb-height)))
     (sdl2:with-rects ((track pixel-x pixel-y pixel-width pixel-height)
                       (thumb pixel-x thumb-pixel-y pixel-width thumb-pixel-height))
-      (sdl2:set-render-draw-color (backend-renderer backend) 41 45 54 255)
+      (set-interface-draw-color backend :scroll-track)
       (sdl2:render-fill-rect (backend-renderer backend) track)
-      (sdl2:set-render-draw-color (backend-renderer backend) 133 141 157 255)
+      (set-interface-draw-color backend :scroll-thumb)
       (sdl2:render-fill-rect (backend-renderer backend) thumb))))
 
 (defun release-ttf-surface (surface)
@@ -461,11 +516,18 @@
     (sdl2:free-surface surface)))
 
 (defmethod backend-draw-text ((backend sdl2-backend) x y text)
-  (draw-sdl2-text-at-pixel backend
-                           (logical-x->pixel backend x)
-                           (logical-y->pixel backend y)
-                           text
-                           239 241 245 255))
+  (draw-interface-text-at-pixel backend (logical-x->pixel backend x)
+                                (logical-y->pixel backend y) text :ink))
+
+(defun draw-interface-text-at-pixel (backend pixel-x pixel-y text role)
+  (apply #'draw-sdl2-text-at-pixel backend pixel-x pixel-y text (interface-color backend role)))
+
+(defmethod backend-draw-cell-text ((backend sdl2-backend) cell x y text style-spans)
+  (if style-spans
+      (backend-draw-styled-text backend x y text style-spans)
+      (draw-interface-text-at-pixel backend (logical-x->pixel backend x)
+                                    (logical-y->pixel backend y) text
+                                    (if (eq (cell-role cell) :metadata) :muted :ink))))
 
 (defun draw-sdl2-text-at-pixel (backend pixel-x pixel-y text red green blue alpha)
   (when (backend-font backend)
@@ -486,15 +548,14 @@
             (sdl2:destroy-texture texture)
             (release-ttf-surface surface))))))
 
-(defun style-span-color (kind)
-  (case kind
-    (:comment (values 133 141 157 255))
-    (:string (values 166 227 161 255))
-    (:keyword (values 245 194 102 255))
-    (:number (values 137 180 250 255))
-    (:paren (values 147 153 178 255))
-    (:quote (values 250 179 135 255))
-    (t (values 239 241 245 255))))
+(defun style-span-color (backend kind)
+  (values-list (interface-color backend (case kind
+                                          ((:comment :paren) :muted)
+                                          (:string :string)
+                                          (:keyword :accent)
+                                          (:number :number)
+                                          (:quote :quote)
+                                          (t :ink)))))
 
 (defmethod backend-draw-styled-text ((backend sdl2-backend) x y text style-spans)
   (if (and style-spans (backend-font backend))
@@ -510,16 +571,16 @@
                                (or (getf span :end) 0)))))
             (when (< cursor start)
               (incf pixel-x
-                    (or (draw-sdl2-text-at-pixel
+                    (or (draw-interface-text-at-pixel
                          backend
                          pixel-x
                          pixel-y
                          (subseq text cursor start)
-                         239 241 245 255)
+                         :ink)
                         0)))
             (when (< start end)
               (multiple-value-bind (red green blue alpha)
-                  (style-span-color (getf span :kind))
+                  (style-span-color backend (getf span :kind))
                 (incf pixel-x
                       (or (draw-sdl2-text-at-pixel
                            backend
@@ -530,11 +591,11 @@
                           0))))
             (setf cursor (max cursor end))))
         (when (< cursor (length text))
-          (draw-sdl2-text-at-pixel backend
-                                   pixel-x
-                                   pixel-y
-                                   (subseq text cursor)
-                                   239 241 245 255)))
+          (draw-interface-text-at-pixel backend
+					pixel-x
+					pixel-y
+					(subseq text cursor)
+					:ink)))
       (backend-draw-text backend x y text)))
 
 (defmethod backend-present ((backend sdl2-backend))
@@ -770,7 +831,6 @@
          (screen-y (- y viewport-y))
          (viewport-height (or viewport-height
                               most-positive-fixnum))
-         (label (slot-value cell 'label))
          (focusedp (and *application*
                         (cell-model cell)
                         (application-focused-model-id *application*)
@@ -778,7 +838,7 @@
                          (object-id (cell-model cell))
                          (application-focused-model-id *application*)))))
     (when (cell-intersects-viewport-p cell viewport-y viewport-height)
-      (backend-draw-box backend x screen-y width height label focusedp)
+      (backend-draw-cell backend cell x screen-y width height focusedp)
       (when (typep cell 'text-cell)
         (draw-cell-selection backend cell viewport-y viewport-height)
         (loop for (line style-spans) in (visible-lines-with-style-spans-for-cell cell)
@@ -788,16 +848,8 @@
                             (row-visible-p logical-row
                                            viewport-y
                                            viewport-height))
-                   (if style-spans
-                       (backend-draw-styled-text backend
-                                                 (+ x 1)
-                                                 (- logical-row viewport-y)
-                                                 line
-                                                 style-spans)
-                       (backend-draw-text backend
-                                          (+ x 1)
-                                          (- logical-row viewport-y)
-                                          line)))))
+                   (backend-draw-cell-text backend cell (+ x 1)
+                                           (- logical-row viewport-y) line style-spans))))
       (when (typep cell 'text-cell)
         (draw-cell-caret backend cell viewport-y viewport-height))
       (dolist (child (children-of cell))
@@ -828,6 +880,7 @@
       ((sdl2:scancode= scancode :scancode-f1) :f1)
       ((sdl2:scancode= scancode :scancode-f2) :f2)
       ((sdl2:scancode= scancode :scancode-f3) :f3)
+      ((sdl2:scancode= scancode :scancode-f4) :f4)
       ((sdl2:scancode= scancode :scancode-tab) :tab)
       ((sdl2:scancode= scancode :scancode-f12) :f12)
       ((sdl2:scancode= scancode :scancode-leftbracket) :leftbracket)

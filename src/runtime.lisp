@@ -75,6 +75,13 @@
    (help-root-cell
     :accessor application-help-root-cell
     :initform nil)
+   (inspector-visible-p
+    :initarg :inspector-visible-p
+    :accessor application-inspector-visible-p
+    :initform nil)
+   (inspector-return-viewport-y
+    :accessor application-inspector-return-viewport-y
+    :initform nil)
    (help-viewport-y
     :accessor application-help-viewport-y
     :initform 0)
@@ -529,11 +536,13 @@
     lines))
 
 (defun build-inspector-cell (application)
-  (let ((inspector (make-container-cell :label "Inspector"))
+  (let ((inspector (make-container-cell :label "Inspector" :decoration :inspector :inset 1 :spacing 0))
         (model (focused-model application)))
-    (dolist (line (inspector-lines-for-model application model) inspector)
-      (append-child inspector
-                    (make-text-cell :text line)))))
+    (loop for line in (inspector-lines-for-model application model)
+          for index from 0
+          do (append-child inspector
+                           (make-text-cell :text line :role (if (zerop index) :heading :metadata))))
+    inspector))
 
 (defun event-log-line (entry)
   (format nil "~A: ~A~@[ | ~A~]"
@@ -622,26 +631,82 @@
       (append-child debug
                     (make-text-cell :text line)))))
 
+(defun prepare-document-cell-tree (cell)
+  "Style the derived presentation without changing notebook objects or their data."
+  (when (typep cell 'container-cell)
+    (let ((model (cell-model cell)))
+      (setf (cell-inset cell) (if (typep model '(or workspace notebook section)) 0 1)
+            (cell-top-inset cell) (if (typep model '(or workspace notebook section)) 0 1)
+            (cell-spacing cell) 0
+            (cell-decoration cell) (typecase model
+                                     (code-block :code)
+                                     (result-block
+                                      (case (result-block-status model)
+                                        (:ok :result) (:error :error-result) (t :plain)))
+                                     (t :plain)))))
+  (when (and (typep cell 'text-cell) (eq :heading (cell-role cell)))
+    (typecase (cell-model cell)
+      (workspace
+       (setf (cell-text cell) (workspace-title (cell-model cell))
+             (cell-role cell) :metadata))
+      (notebook (setf (cell-text cell) (notebook-title (cell-model cell))))
+      (section (setf (cell-text cell) (section-title (cell-model cell))))))
+  (dolist (child (children-of cell)) (prepare-document-cell-tree child))
+  cell)
+
 (defun build-application-shell-cell (application)
-  (let ((root (make-container-cell :label "Orra")))
+  (let ((root (make-container-cell :label "Orra" :inset 1)))
     (append-child root
                   (make-text-cell
                    :text (format nil "~A  |  ~A" (application-save-state application)
                                  (if (editing-active-p application)
-                                     "Edit mode  |  F1 keyboard help  |  F2 commands  |  F3 navigate  |  Esc stops editing"
-                                     "Focus mode  |  F1 keyboard help  |  F2 commands  |  F3 navigate"))
+                                     "Edit mode  |  F1 help  |  F2 commands  |  F3 navigate  |  F4 inspector"
+                                     "Focus mode  |  F1 help  |  F2 commands  |  F3 navigate  |  F4 inspector"))
                    :role :metadata))
     (append-child root
-                  (build-workspace-cell-tree
-                   (application-workspace application)
-                   nil (application-registry application)))
-    (append-child root (build-inspector-cell application))
+                  (prepare-document-cell-tree
+                   (build-workspace-cell-tree
+                    (application-workspace application)
+                    nil (application-registry application))))
+    (when (application-inspector-visible-p application)
+      (append-child root (build-inspector-cell application)))
     (when (application-debug-visible-p application)
       (append-child root (build-debug-cell application)))
     (append-child root
                   (make-text-cell
                    :text (application-status-line application)))
     root))
+
+(defun toggle-application-inspector (application)
+  (when (or (application-help-visible-p application)
+            (application-command-palette application)
+            (application-object-navigator application)
+            (application-pending-action application)
+            (application-quit-requested-p application))
+    (return-from toggle-application-inspector nil))
+  (let ((showp (not (application-inspector-visible-p application))))
+    (when showp
+      (setf (application-inspector-return-viewport-y application) (application-viewport-y application)))
+    (setf (application-inspector-visible-p application) showp)
+    (rebuild-root-cell application)
+    (perform-layout (application-root-cell application)
+                    :width (backend-layout-width (application-backend application)))
+    (if showp
+        (let* ((inspector (find "Inspector" (children-of (application-root-cell application))
+                                :key #'cell-label :test #'string=))
+               (bounds (cell-bounds inspector)))
+          (ensure-row-range-visible application (bounds-y bounds)
+                                    (+ (bounds-y bounds)
+                                       (min (bounds-height bounds)
+                                            (max 1 (- (application-viewport-height application) 2))))))
+        (progn
+          (setf (application-viewport-y application)
+                (or (application-inspector-return-viewport-y application) 0)
+                (application-inspector-return-viewport-y application) nil)
+          (clamp-application-viewport application)
+          (ensure-active-caret-visible application)))
+    (mark-application-dirty application)
+    application))
 
 (defun wrap-keyboard-help-text (text width)
   (let ((width (max 1 width)))
@@ -1082,7 +1147,7 @@
   (when (and (editing-active-p application)
              (editable-text-cell-p cell))
     (let* ((bounds (cell-bounds cell))
-           (line (max 0 (- grid-y (bounds-y bounds))))
+           (line (max 0 (- grid-y (bounds-y bounds) 1)))
            (column (+ (cell-visible-column-offset cell line)
                       (max 0 (- grid-x (1+ (bounds-x bounds)))))))
       (move-buffer-cursor-to (application-active-text-buffer application)
@@ -1906,7 +1971,7 @@
 
 (defun make-application (&key backend workspace save-path checkpoint-directory
                            operation-journal actor-id session-id
-                           (checkpoint-interval 300))
+                           (checkpoint-interval 300) inspector-visible-p)
   (let* ((registry (make-object-registry))
          (workspace (or workspace (make-scratch-workspace registry)))
          (operation-journal
@@ -1923,6 +1988,7 @@
                                      :workspace workspace
                                      :operation-journal operation-journal
                                      :backend (or backend (make-null-backend))
+                                     :inspector-visible-p inspector-visible-p
                                      :save-path save-path
                                      :checkpoint-directory checkpoint-directory
                                      :checkpoint-interval checkpoint-interval)))
@@ -2016,6 +2082,8 @@
               (application-help-visible-p application) nil
               (application-help-root-cell application) nil
               (application-help-viewport-y application) 0
+              (application-inspector-visible-p application) nil
+              (application-inspector-return-viewport-y application) nil
               (application-notification application) nil
               (application-command-palette application) nil
               (application-object-navigator application) nil
@@ -2192,6 +2260,13 @@
   "Show keyboard help."
   (declare (ignore event))
   (invoke-command application 'toggle-keyboard-help)
+  t)
+
+(define-key-binding (:global :f4)
+    (application event)
+  "Show or hide the focused object's inspector."
+  (declare (ignore event))
+  (invoke-command application 'toggle-inspector)
   t)
 
 (define-key-binding (:confirm :s)
@@ -2714,6 +2789,10 @@
 (define-command toggle-keyboard-help (application)
   "Show or close the read-only keyboard help view."
   (toggle-application-keyboard-help application))
+
+(define-command toggle-inspector (application)
+  "Show or hide contextual object details without ending editing."
+  (toggle-application-inspector application))
 
 (define-command dismiss-notification (application)
   "Dismiss transient save or error feedback."

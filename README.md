@@ -24,6 +24,9 @@ Use Tab to return to search or Esc/F2 to cancel without changing your editor.
 Press `F3` to search notebooks and objects by title, text, or type. Up/Down selects;
 Enter jumps without evaluating code. Esc/F3 cancels and preserves your editor.
 
+Press `F4` to show or hide details for the focused object without ending editing.
+The default notebook view keeps this auxiliary inspector hidden until requested.
+
 Optional font override:
 
 ```bash

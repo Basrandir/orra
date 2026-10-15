@@ -13,6 +13,7 @@
    #:application-event-log
    #:application-event-log-limit
    #:application-help-visible-p
+   #:application-inspector-visible-p
    #:application-keymap
    #:application-last-checkpoint-at
    #:application-last-checkpoint-path
@@ -431,6 +432,7 @@
    #:save-and-continue
    #:save-workspace-to-file
    #:toggle-keyboard-help
+   #:toggle-inspector
    #:open-command-palette
    #:close-command-palette
    #:open-object-navigator

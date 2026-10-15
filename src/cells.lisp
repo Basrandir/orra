@@ -26,7 +26,11 @@
    (label
     :initarg :label
     :accessor cell-label
-    :initform "")))
+    :initform "")
+   (decoration
+    :initarg :decoration
+    :accessor cell-decoration
+    :initform :plain)))
 
 (defclass container-cell (cell)
   ((orientation
@@ -36,6 +40,14 @@
    (spacing
     :initarg :spacing
     :accessor cell-spacing
+    :initform 1)
+   (inset
+    :initarg :inset
+    :accessor cell-inset
+    :initform 2)
+   (top-inset
+    :initarg :top-inset
+    :accessor cell-top-inset
     :initform 1)))
 
 (defclass text-cell (cell)
@@ -56,7 +68,11 @@
     :reader cell-editor-buffer
     :initform nil)))
 
-(defun make-container-cell (&key registry model (label "") (orientation :vertical))
+(defun make-container-cell (&key registry model (label "") (orientation :vertical)
+                              (decoration :plain) (inset 2) (top-inset 1) (spacing 1))
+  (check-type inset (integer 0))
+  (check-type top-inset (integer 0))
+  (check-type spacing (integer 0))
   (%register-if-present
    registry
    (make-instance 'container-cell
@@ -64,7 +80,11 @@
                   :kind :container-cell
                   :model model
                   :label label
-                  :orientation orientation)))
+                  :orientation orientation
+                  :decoration decoration
+                  :inset inset
+                  :top-inset top-inset
+                  :spacing spacing)))
 
 (defun make-text-cell (&key registry model (text "") (role :content) style-spans editor-buffer)
   (%register-if-present
@@ -91,12 +111,13 @@
 (defgeneric preferred-height (cell))
 
 (defmethod preferred-height ((cell text-cell))
-  (max 1
-       (length (split-lines (cell-text cell)))))
+  ;; Text starts one row below the cell origin; its final row must be in bounds.
+  (1+ (max 1 (length (split-lines (cell-text cell))))))
 
 (defmethod preferred-height ((cell container-cell))
   (max 1
-       (+ (length (children-of cell))
+       (+ (cell-top-inset cell)
+          (* (cell-spacing cell) (max 0 (1- (length (children-of cell)))))
           (reduce #'+
                   (mapcar #'preferred-height (children-of cell))
                   :initial-value 0))))
@@ -836,11 +857,13 @@
 
 (defun perform-layout (cell &key (x 0) (y 0) (width 80))
   (setf (cell-bounds cell)
-        (make-bounds :x x :y y :width width :height (preferred-height cell)))
+        (make-bounds :x x :y y :width (max 1 width) :height (preferred-height cell)))
   (when (typep cell 'container-cell)
-    (let ((cursor-y (+ y 1)))
+    (let ((cursor-y (+ y (cell-top-inset cell))))
       (dolist (child (children-of cell))
-        (perform-layout child :x (+ x 2) :y cursor-y :width (- width 4))
+        (let ((inset (min (cell-inset cell) (floor (1- (max 1 width)) 2))))
+          (perform-layout child :x (+ x inset) :y cursor-y
+                          :width (max 1 (- width (* 2 inset)))))
         (incf cursor-y (+ (preferred-height child)
                           (cell-spacing cell))))))
   cell)
