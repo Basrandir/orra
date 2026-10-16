@@ -155,11 +155,23 @@
             (case shift (:any "[Shift+]") ((nil) "") (otherwise "Shift+"))
             name)))
 
-(defun key-binding-help-lines (application context)
-  "Describe effective bindings, excluding shadowed global or Shift variants."
+(defun key-binding-help-lines (application context &key priority-keys)
+  "Describe effective bindings, excluding shadowed global or Shift variants.
+Optionally lead with unmodified PRIORITY-KEYS without changing dispatch."
   (let* ((modalp (member context '(:help :confirm :palette :navigate :outline :inspect)))
-         (finder (if modalp #'find-context-key-binding #'find-key-binding)))
-    (loop for binding in (list-key-bindings application)
+         (finder (if modalp #'find-context-key-binding #'find-key-binding))
+         (bindings (list-key-bindings application)))
+    (when priority-keys
+      (setf bindings
+            (stable-sort bindings #'<
+                         :key (lambda (binding)
+                                (or (and (not (or (key-binding-control binding)
+                                                  (key-binding-alt binding)
+                                                  (key-binding-meta binding)))
+                                         (member (key-binding-shift binding) '(nil :any))
+                                         (position (key-binding-key binding) priority-keys))
+                                    (length priority-keys))))))
+    (loop for binding in bindings
           when (or (eq (key-binding-context binding) context)
                    (and (not modalp)
                         (eq (key-binding-context binding) :global)))

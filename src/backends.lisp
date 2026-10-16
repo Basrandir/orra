@@ -453,7 +453,7 @@
                         (member (cell-role cell) '(:editable-content :heading :link))))
          (surface (if focusedp :focus-surface
                       (case decoration (:code :code) (:result :result)
-                            (:error-result :error-surface) (:inspector :surface)
+                            (:error-result :error-surface) ((:inspector :confirmation) :surface)
                             (:outline-selected :focus-surface)))))
     (when surface
       (let ((pixel-x (logical-x->pixel backend x))
@@ -464,8 +464,8 @@
                           (bar pixel-x pixel-y 2 pixel-height))
           (set-interface-draw-color backend surface)
           (sdl2:render-fill-rect (backend-renderer backend) rect)
-          (when (or focusedp (member decoration '(:result :error-result :outline-selected)))
-            (set-interface-draw-color backend (cond ((or focusedp (eq decoration :outline-selected)) :accent)
+          (when (or focusedp (member decoration '(:result :error-result :outline-selected :confirmation)))
+            (set-interface-draw-color backend (cond ((or focusedp (member decoration '(:outline-selected :confirmation))) :accent)
                                                     ((eq decoration :error-result) :error)
                                                     (t :string)))
             (sdl2:render-fill-rect (backend-renderer backend) bar)))))))

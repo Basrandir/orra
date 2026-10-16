@@ -15,7 +15,8 @@ bottom of the window; `Ctrl+G` dismisses them.
 
 The header and window title show new/saved/unsaved state. Quitting, loading, or
 recovering with unsaved work asks you to save (`S` or `Ctrl+S`), discard (`D`),
-or cancel (`Esc`, `Ctrl+G`, or Enter). Failed saves keep the prompt open.
+or cancel (`Esc`, `Ctrl+G`, or Enter). A close shortcut pauses at this prompt
+until you choose; failed saves keep it open.
 
 Press `F2` to search and run live commands. Up/Down selects; Enter chooses/runs.
 Argument input is literal Lisp data: for `append-paragraph`, enter `"Hello"`.

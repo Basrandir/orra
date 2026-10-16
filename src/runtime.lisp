@@ -717,24 +717,32 @@
       (append-child root (make-text-cell :text (wrap-keyboard-help-text line width)
                                          :role :metadata :wrap-p t)))))
 
+(defparameter *confirmation-max-width* 72)
+
 (defun refresh-application-confirmation (application)
-  (let* ((root (make-container-cell :label "Unsaved changes"))
-         (width (max 1 (- (backend-layout-width (application-backend application)) 6)))
-         (lines
-          (append (list "Unsaved workspace changes"
-                        (format nil "Requested action: ~A"
-                                (getf (application-pending-action application) :action))
-                        "Your editor and notebook are unchanged until you choose."
-                        (format nil "Save destination: ~A"
-                                (or (application-save-path application) "workspace.sexp"))
-                        "A failed save keeps this prompt open. Enter cancels by default."
-                        "The mouse wheel scrolls this prompt.")
-                  (key-binding-help-lines application :confirm))))
-    (dolist (line lines)
-      (append-child root (make-text-cell :text (wrap-keyboard-help-text line width)
-                                         :role :metadata :wrap-p t)))
-    (perform-layout root :width (backend-layout-width (application-backend application))
-                    :backend (application-backend application))
+  (let* ((backend (application-backend application))
+         (available-width (backend-layout-width backend))
+         (width (max 1 (min *confirmation-max-width* (1- available-width))))
+         (root (make-container-cell :label "Unsaved changes" :decoration :confirmation :spacing 0)))
+    (append-child root (make-text-cell :text "Unsaved changes" :role :heading
+                                       :text-style :heading :wrap-p t))
+    (append-child root
+                  (make-text-cell
+                   :text (format nil "~A paused. Choose how to continue."
+                                 (getf (application-pending-action application) :action))
+                   :wrap-p t))
+    ;; Choices precede paths and secondary controls, even in a small window.
+    ;; Keep their labels sourced from effective live bindings, not a static legend.
+    (loop for line in (key-binding-help-lines application :confirm :priority-keys '(:s :d :escape))
+          for index from 0
+          do (append-child root (make-text-cell :text line :wrap-p t
+                                                :role (if (< index 3) :content :metadata))))
+    (dolist (line (list (format nil "Save destination: ~A"
+				(or (application-save-path application) "workspace.sexp"))
+			"Your work stays here until you choose. A failed save keeps this prompt open."
+			"Scroll for more details with the mouse wheel or page keys."))
+      (append-child root (make-text-cell :text line :role :metadata :wrap-p t)))
+    (perform-layout root :x (floor (- available-width width) 2) :width width :backend backend)
     (setf (application-confirmation-root-cell application) root
           (application-confirmation-viewport-y application)
           (max 0 (min (application-confirmation-viewport-y application)
@@ -2297,42 +2305,42 @@
 
 (define-key-binding (:confirm :s)
     (application event)
-  "Save unsaved changes and continue the requested action."
+  "Save changes and continue."
   (declare (ignore event))
   (resolve-pending-action application :save)
   t)
 
 (define-key-binding (:confirm :s :control t)
     (application event)
-  "Save unsaved changes and continue the requested action."
+  "Save changes and continue."
   (declare (ignore event))
   (resolve-pending-action application :save)
   t)
 
 (define-key-binding (:confirm :d)
     (application event)
-  "Discard unsaved changes and continue the requested action."
+  "Discard changes and continue."
   (declare (ignore event))
   (resolve-pending-action application :discard)
   t)
 
 (define-key-binding (:confirm :escape)
     (application event)
-  "Cancel the requested action and return to the notebook."
+  "Cancel and keep working."
   (declare (ignore event))
   (resolve-pending-action application :cancel)
   t)
 
 (define-key-binding (:confirm :return)
     (application event)
-  "Cancel the requested action and return to the notebook."
+  "Cancel and keep working."
   (declare (ignore event))
   (resolve-pending-action application :cancel)
   t)
 
 (define-key-binding (:confirm :g :control t)
     (application event)
-  "Cancel the requested action and return to the notebook."
+  "Cancel and keep working."
   (declare (ignore event))
   (resolve-pending-action application :cancel)
   t)
