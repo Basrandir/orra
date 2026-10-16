@@ -25,19 +25,16 @@
     (max 0 (- (if root (bounds-height (cell-bounds root)) 0)
               (application-viewport-height application)))))
 
-(defun build-inspector-cell (application width)
+(defun build-inspector-cell (application)
   (let ((root (make-container-cell :label "Inspector" :inset 1 :top-inset 0 :spacing 0)))
     (append-child root (make-text-cell :text "Inspector" :role :heading :wrap-p t))
     (append-child root
-                  (make-text-cell :text (wrap-keyboard-help-text
-                                         (if (inspector-active-p application)
-                                             "F4 close | Esc return | F1 help"
-                                             "F4 close | Shift+F4 focus")
-                                         (max 1 (- width 5)))
+                  (make-text-cell :text (if (inspector-active-p application)
+                                            "F4 close | Esc return | F1 help"
+                                            "F4 close | Shift+F4 focus")
                                   :role :metadata :wrap-p t))
     (dolist (line (rest (inspector-lines-for-model application (focused-model application))))
-      (append-child root (make-text-cell :text (wrap-keyboard-help-text line (max 1 (- width 5)))
-                                         :role :metadata :wrap-p t)))
+      (append-child root (make-text-cell :text line :role :metadata :wrap-p t)))
     root))
 
 (defun refresh-application-inspector (application)
@@ -48,7 +45,7 @@
       (unless (eq target (inspector-view-target view))
         (setf (inspector-view-target view) target
               (inspector-viewport-y view) 0))
-      (setf (inspector-root-cell view) (build-inspector-cell application (bounds-width bounds)))
+      (setf (inspector-root-cell view) (build-inspector-cell application))
       (perform-layout (inspector-root-cell view) :x (bounds-x bounds)
                       :width (max 1 (1- (bounds-width bounds))) :backend (application-backend application))
       (setf (inspector-viewport-y view)

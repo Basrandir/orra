@@ -676,30 +676,11 @@
                    :text (application-status-line application)))
     root))
 
-(defun wrap-keyboard-help-text (text width)
-  (let ((width (max 1 width)))
-    (format nil "~{~A~^~%~}"
-            (loop for line in (split-lines text)
-                  nconc (let ((start 0) (lines nil))
-                          (loop while (> (- (length line) start) width)
-                                do (let* ((limit (+ start width))
-                                          (space (position #\Space line :start start
-                                                           :end (1+ limit) :from-end t))
-                                          (end (if (and space (> space start)) space limit)))
-                                     (push (subseq line start end) lines)
-                                     (setf start end)
-                                     (loop while (and (< start (length line))
-                                                      (char= #\Space (char line start)))
-                                           do (incf start))))
-                          (push (subseq line start) lines)
-                          (nreverse lines))))))
-
 (defun build-keyboard-help-cell (application)
   (let* ((context (cond ((outline-active-p application) :outline)
                         ((inspector-active-p application) :inspect)
                         ((editing-active-p application) :edit) (t :focus)))
          (root (make-container-cell :label "Keyboard help"))
-         (width (max 1 (- (backend-layout-width (application-backend application)) 6)))
          (lines
           (append
            (list (format nil "Keyboard help - ~A mode" (string-capitalize (string context))))
@@ -714,8 +695,7 @@
                  "Current mode shortcuts")
            (key-binding-help-lines application context))))
     (dolist (line lines root)
-      (append-child root (make-text-cell :text (wrap-keyboard-help-text line width)
-                                         :role :metadata :wrap-p t)))))
+      (append-child root (make-text-cell :text line :role :metadata :wrap-p t)))))
 
 (defparameter *confirmation-max-width* 72)
 
