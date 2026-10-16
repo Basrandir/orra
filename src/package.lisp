@@ -80,6 +80,7 @@
    #:cell-children
    #:cell-model
    #:cell-style-spans
+   #:cell-text-style
    #:children-of
    #:clear-text-buffer-selection
    #:clear-application-event-log
@@ -283,6 +284,7 @@
    #:make-source-browser-block
    #:make-stack-frame-browser-block
    #:make-sdl2-backend
+   #:normalize-interface-typography
    #:make-table-block
    #:make-local-sync-transport
    #:make-sync-message

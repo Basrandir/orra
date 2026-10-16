@@ -59,6 +59,16 @@
     :initarg :role
     :accessor cell-role
     :initform :content)
+   (text-style
+    :initarg :text-style
+    :accessor cell-text-style
+    :initform nil)
+   (line-step
+    :accessor cell-line-step
+    :initform 1)
+   (wrap-p :initarg :wrap-p :accessor cell-wrap-p :initform nil)
+   (wrap-source :accessor cell-wrap-source :initform nil)
+   (wrapped-text :accessor cell-wrapped-text :initform nil)
    (style-spans
     :initarg :style-spans
     :accessor cell-style-spans
@@ -86,7 +96,9 @@
                   :top-inset top-inset
                   :spacing spacing)))
 
-(defun make-text-cell (&key registry model (text "") (role :content) style-spans editor-buffer)
+(defun make-text-cell (&key registry model (text "") (role :content) text-style wrap-p style-spans editor-buffer)
+  (when (and wrap-p (or editor-buffer (eq role :editable-content)))
+    (error "Editable cells retain source-line layout; soft wrapping is not supported yet."))
   (%register-if-present
    registry
    (make-instance 'text-cell
@@ -96,6 +108,8 @@
                   :label text
                   :text text
                   :role role
+                  :text-style text-style
+                  :wrap-p wrap-p
                   :editor-buffer editor-buffer
                   :style-spans style-spans)))
 
@@ -112,7 +126,7 @@
 
 (defmethod preferred-height ((cell text-cell))
   ;; Text starts one row below the cell origin; its final row must be in bounds.
-  (1+ (max 1 (length (split-lines (cell-text cell))))))
+  (1+ (* (cell-line-step cell) (max 1 (length (split-lines (cell-text cell)))))))
 
 (defmethod preferred-height ((cell container-cell))
   (max 1
@@ -855,7 +869,8 @@
               "-")
           (or (project-code-reference-form-path reference) "whole block")))
 
-(defun perform-layout (cell &key (x 0) (y 0) (width 80))
+(defun perform-layout (cell &key (x 0) (y 0) (width 80) backend)
+  (when backend (prepare-cell-text-metrics backend cell width))
   (setf (cell-bounds cell)
         (make-bounds :x x :y y :width (max 1 width) :height (preferred-height cell)))
   (when (typep cell 'container-cell)

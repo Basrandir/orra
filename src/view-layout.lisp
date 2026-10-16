@@ -51,7 +51,8 @@
 (defun layout-application-document (application)
   (let ((bounds (view-layout-document (application-view-layout application))))
     (perform-layout (application-root-cell application)
-                    :x (bounds-x bounds) :width (bounds-width bounds))))
+                    :x (bounds-x bounds) :width (bounds-width bounds)
+                    :backend (application-backend application))))
 
 (defun draw-application-view-pane (application root bounds viewport-y &key surface)
   (let ((backend (application-backend application)))

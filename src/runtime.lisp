@@ -376,16 +376,21 @@
              (text (format nil "~A (Ctrl+G dismiss): ~A"
                            (if (eq (getf notification :kind) :error) "ERROR" "INFO")
                            (getf notification :message)))
-             (lines (split-lines (wrap-keyboard-help-text text width)))
-             (limit (min 3 (max 1 (floor (backend-layout-height
-                                          (application-backend application)) 3)))))
+             (backend (application-backend application))
+             (cell (make-text-cell :text text :text-style :interface))
+             (lines (progn
+                      (setf (bounds-width (cell-bounds cell)) (+ width 2))
+                      (split-lines (wrap-measured-cell-text backend cell text))))
+             (limit (min 3 (max 1 (floor (backend-layout-height backend)
+                                         (* 3 (backend-cell-line-step backend nil)))))))
         (subseq lines 0 (min limit (length lines)))))))
 
 (defun draw-application-notification (application)
   (let* ((backend (application-backend application))
          (lines (application-notification-lines application))
-         (first-row (- (backend-layout-height backend) (length lines))))
-    (loop for line in lines for row from first-row
+         (step (backend-cell-line-step backend nil))
+         (first-row (- (backend-layout-height backend) (* step (length lines)))))
+    (loop for line in lines for row from first-row by step
           do (backend-draw-text backend 1 row line))))
 
 (defun clear-application-event-log (application)
@@ -710,7 +715,7 @@
            (key-binding-help-lines application context))))
     (dolist (line lines root)
       (append-child root (make-text-cell :text (wrap-keyboard-help-text line width)
-                                         :role :metadata)))))
+                                         :role :metadata :wrap-p t)))))
 
 (defun refresh-application-confirmation (application)
   (let* ((root (make-container-cell :label "Unsaved changes"))
@@ -727,8 +732,9 @@
                   (key-binding-help-lines application :confirm))))
     (dolist (line lines)
       (append-child root (make-text-cell :text (wrap-keyboard-help-text line width)
-                                         :role :metadata)))
-    (perform-layout root :width (backend-layout-width (application-backend application)))
+                                         :role :metadata :wrap-p t)))
+    (perform-layout root :width (backend-layout-width (application-backend application))
+                    :backend (application-backend application))
     (setf (application-confirmation-root-cell application) root
           (application-confirmation-viewport-y application)
           (max 0 (min (application-confirmation-viewport-y application)
@@ -750,7 +756,8 @@
 (defun refresh-application-keyboard-help (application)
   (setf (application-help-root-cell application) (build-keyboard-help-cell application))
   (perform-layout (application-help-root-cell application)
-                  :width (backend-layout-width (application-backend application)))
+                  :width (backend-layout-width (application-backend application))
+                  :backend (application-backend application))
   (setf (application-help-viewport-y application)
         (max 0 (min (application-help-viewport-y application)
                     (application-help-max-viewport-y application))))
@@ -794,7 +801,8 @@
 
 (defun application-viewport-height (application)
   (max 1 (- (backend-layout-height (application-backend application))
-            (length (application-notification-lines application)))))
+            (* (backend-cell-line-step (application-backend application) nil)
+               (length (application-notification-lines application))))))
 
 (defun application-content-height (application)
   (if (application-root-cell application)
@@ -923,8 +931,8 @@
             (buffer-cursor-line-column
              (application-active-text-buffer application))
           (declare (ignore column))
-          (let ((row (+ (bounds-y (cell-bounds cell)) 1 line)))
-            (ensure-row-range-visible application row (1+ row)))))))
+          (let ((row (+ (bounds-y (cell-bounds cell)) 1 (* line (cell-line-step cell)))))
+            (ensure-row-range-visible application row (+ row (cell-line-step cell))))))))
   application)
 
 (defun draw-application-scrollbar
@@ -1134,13 +1142,18 @@
        (cell-model cell)
        (editable-model-p (cell-model cell))))
 
-(defun place-active-buffer-cursor-from-cell-point (application cell grid-x grid-y)
+(defun place-active-buffer-cursor-from-cell-point (application cell grid-x grid-y &key pixel-x)
   (when (and (editing-active-p application)
              (editable-text-cell-p cell))
-    (let* ((bounds (cell-bounds cell))
-           (line (max 0 (- grid-y (bounds-y bounds) 1)))
-           (column (+ (cell-visible-column-offset cell line)
-                      (max 0 (- grid-x (1+ (bounds-x bounds)))))))
+    (let* ((*application* application)
+           (bounds (cell-bounds cell))
+           (lines (split-lines (text-buffer-content (application-active-text-buffer application))))
+           (line (min (1- (length lines))
+                      (max 0 (floor (- grid-y (bounds-y bounds) 1) (cell-line-step cell)))))
+           (column (if pixel-x
+                       (cell-text-column-at-pixel (application-backend application) cell (nth line lines) line pixel-x)
+                       (+ (cell-visible-column-offset cell line)
+                          (max 0 (- grid-x (1+ (bounds-x bounds))))))))
       (move-buffer-cursor-to (application-active-text-buffer application)
                              (buffer-index-for-line-column
                               (application-active-text-buffer application)
@@ -1168,7 +1181,7 @@
       (return-from focus-model-at-pixel application))
     (when (outline-point-p application grid-x grid-y)
       (when (inspector-active-p application) (return-from-application-inspector application))
-      (handle-outline-click application grid-x grid-y)
+      (handle-outline-click application grid-x grid-y :pixel-x pixel-x)
       (return-from focus-model-at-pixel application))
     (when (outline-active-p application)
       (close-application-outline application))
@@ -1199,7 +1212,7 @@
             application
             cell
             grid-x
-            logical-y)
+            logical-y :pixel-x pixel-x)
            (ensure-active-caret-visible application))
           ((focusable-model-object-p model)
            (setf (application-focused-model-id application)
@@ -3083,8 +3096,7 @@
              browser :selected-link-key
              (link-browser-entry-key (nth (mod (+ index steps) (length entries)) entries))))
           (rebuild-root-cell application)
-          (perform-layout (application-root-cell application)
-                          :width (backend-layout-width (application-backend application)))
+          (layout-application-document application)
           (let* ((cell (cell-for-model-id (application-root-cell application) browser-id))
                  (key (object-property browser :selected-link-key :inherit nil))
                  (row (and key cell
@@ -3528,9 +3540,7 @@
              (set-code-block-selected-form-path
               target (project-code-reference-form-path reference)))
            (rebuild-root-cell application)
-           (perform-layout (application-root-cell application)
-                           :width (backend-layout-width
-                                   (application-backend application)))
+           (layout-application-document application)
            (ensure-active-caret-visible application)
            (mark-application-dirty application)
            (values target :resolved)))))))

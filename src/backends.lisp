@@ -79,6 +79,16 @@
    (font
     :accessor backend-font
     :initform nil)
+   (typography
+    :initarg :typography
+    :accessor backend-typography
+    :initform nil)
+   (role-fonts
+    :accessor backend-role-fonts
+    :initform (make-hash-table :test #'eq))
+   (owned-fonts
+    :accessor backend-owned-fonts
+    :initform nil)
    (window
     :accessor backend-window
     :initform nil)
@@ -92,6 +102,10 @@
     :initarg :single-frame-p
     :accessor backend-single-frame-p
     :initform nil)))
+
+(defmethod initialize-instance :after ((backend sdl2-backend) &key)
+  (setf (backend-typography backend)
+        (normalize-interface-typography (backend-typography backend) (backend-font-size backend))))
 
 (defun make-null-backend (&key (stream *standard-output*)
                             (layout-width 96)
@@ -113,6 +127,7 @@
                             font-path
                             (font-size 16)
                             (palette *default-interface-palette*)
+                            typography
                             single-frame-p)
   (make-instance 'sdl2-backend
                  :name :sdl2
@@ -126,6 +141,7 @@
                  :font-path font-path
                  :font-size font-size
                  :palette (copy-tree palette)
+                 :typography typography
                  :single-frame-p single-frame-p))
 
 (defgeneric backend-begin-frame (backend))
@@ -285,10 +301,10 @@
     (when (and configured-font (plusp (length configured-font)))
       configured-font)))
 
-(defun fontconfig-font-path ()
+(defun fontconfig-font-path (&optional (family "monospace"))
   (ignore-errors
     (let* ((output (uiop:run-program
-                    '("fc-match" "-f" "%{file}\\n" "monospace")
+                    (list "fc-match" "-f" "%{file}\\n" family)
                     :output :string
                     :ignore-error-status t))
            (path (string-trim '(#\Space #\Tab #\Newline #\Return)
@@ -401,25 +417,6 @@
                (floor (- pixel-y (backend-padding-y backend))
                       (backend-row-height backend)))))
 
-(defun open-sdl2-font (backend)
-  (let ((font-path (resolve-font-path backend)))
-    (cond
-      ((null font-path)
-       (format *error-output*
-               "~&Orra: no font available. Set ORRA_FONT or ensure fc-match is installed and configured.~%")
-       nil)
-      (t
-       (handler-case
-           (let ((font (sdl2-ttf:open-font font-path (backend-font-size backend))))
-             (setf (backend-font-path backend) font-path)
-             font)
-         (error (condition)
-           (format *error-output*
-                   "~&Orra: failed to open font ~A: ~A~%"
-                   font-path
-                   condition)
-           nil))))))
-
 (defun interface-color (backend role)
   (or (getf (backend-palette backend) role)
       (let ((default (getf *default-interface-palette* role)))
@@ -476,14 +473,9 @@
 (defmethod backend-draw-caret ((backend sdl2-backend) x y activep
                                &key (text-prefix ""))
   (let ((pixel-x (+ (logical-x->pixel backend x)
-                    (if (and (backend-font backend)
-                             (plusp (length text-prefix)))
-                        (nth-value 0
-                                   (sdl2-ttf:size-text (backend-font backend)
-                                                       text-prefix))
-                        0)))
+                    (backend-measure-cell-text backend *rendering-text-cell* text-prefix)))
         (pixel-y (logical-y->pixel backend y))
-        (pixel-height (backend-row-height backend)))
+        (pixel-height (sdl2-cell-text-height backend)))
     (if activep
         (set-interface-draw-color backend :accent)
         (set-interface-draw-color backend :muted))
@@ -494,25 +486,16 @@
                                    &key (text-prefix "") (selected-text "")
                                      trailing-cell-p)
   (let ((pixel-x (+ (logical-x->pixel backend x)
-                    (if (and (backend-font backend)
-                             (plusp (length text-prefix)))
-                        (nth-value 0
-                                   (sdl2-ttf:size-text (backend-font backend)
-                                                       text-prefix))
-                        0)))
+                    (backend-measure-cell-text backend *rendering-text-cell* text-prefix)))
         (pixel-y (logical-y->pixel backend y))
-        (pixel-width (+ (if (and (backend-font backend)
-                                 (plusp (length selected-text)))
-                            (nth-value 0
-                                       (sdl2-ttf:size-text
-                                        (backend-font backend)
-                                        selected-text))
-                            0)
+        (pixel-width (+ (- (backend-measure-cell-text backend *rendering-text-cell*
+                                                      (concatenate 'string text-prefix selected-text))
+                           (backend-measure-cell-text backend *rendering-text-cell* text-prefix))
                         (if (or trailing-cell-p
                                 (zerop (length selected-text)))
                             (backend-cell-width backend)
                             0)))
-        (pixel-height (backend-row-height backend)))
+        (pixel-height (sdl2-cell-text-height backend)))
     (set-interface-draw-color backend :selection)
     (sdl2:with-rects ((rect pixel-x pixel-y pixel-width pixel-height))
       (sdl2:render-fill-rect (backend-renderer backend) rect))))
@@ -555,23 +538,12 @@
                                     (if (eq (cell-role cell) :metadata) :muted :ink))))
 
 (defun draw-sdl2-text-at-pixel (backend pixel-x pixel-y text red green blue alpha)
-  (when (backend-font backend)
-    (if (zerop (length text))
-        0
-        (let* ((renderer (backend-renderer backend))
-               (surface (sdl2-ttf:render-text-blended
-                         (backend-font backend)
-                         text
-                         red green blue alpha))
-               (texture (sdl2:create-texture-from-surface renderer surface))
-               (width (sdl2:surface-width surface))
-               (height (sdl2:surface-height surface)))
-          (unwind-protect
-               (sdl2:with-rects ((rect pixel-x pixel-y width height))
-                 (sdl2:render-copy renderer texture :dest-rect rect)
-                 width)
-            (sdl2:destroy-texture texture)
-            (release-ttf-surface surface))))))
+  (call-with-sdl2-text-texture
+   backend text red green blue alpha
+   (lambda (texture width height)
+     (sdl2:with-rects ((rect pixel-x pixel-y width height))
+       (sdl2:render-copy (backend-renderer backend) texture :dest-rect rect))
+     width)))
 
 (defun style-span-color (backend kind)
   (values-list (interface-color backend (case kind
@@ -583,45 +555,7 @@
                                           (t :ink)))))
 
 (defmethod backend-draw-styled-text ((backend sdl2-backend) x y text style-spans)
-  (if (and style-spans (backend-font backend))
-      (let ((pixel-x (logical-x->pixel backend x))
-            (pixel-y (logical-y->pixel backend y))
-            (cursor 0))
-        (dolist (span style-spans)
-          (let ((start (max 0
-                            (min (length text)
-                                 (or (getf span :start) 0))))
-                (end (max 0
-                          (min (length text)
-                               (or (getf span :end) 0)))))
-            (when (< cursor start)
-              (incf pixel-x
-                    (or (draw-interface-text-at-pixel
-                         backend
-                         pixel-x
-                         pixel-y
-                         (subseq text cursor start)
-                         :ink)
-                        0)))
-            (when (< start end)
-              (multiple-value-bind (red green blue alpha)
-                  (style-span-color backend (getf span :kind))
-                (incf pixel-x
-                      (or (draw-sdl2-text-at-pixel
-                           backend
-                           pixel-x
-                           pixel-y
-                           (subseq text start end)
-                           red green blue alpha)
-                          0))))
-            (setf cursor (max cursor end))))
-        (when (< cursor (length text))
-          (draw-interface-text-at-pixel backend
-					pixel-x
-					pixel-y
-					(subseq text cursor)
-					:ink)))
-      (backend-draw-text backend x y text)))
+  (draw-sdl2-styled-line backend x y text style-spans))
 
 (defmethod backend-present ((backend sdl2-backend))
   (sdl2:render-present (backend-renderer backend)))
@@ -686,27 +620,29 @@
 (defun cell-visible-text-width (cell)
   (max 1 (- (bounds-width (cell-bounds cell)) 2)))
 
-(defun cell-visible-column-offset (cell line-index)
+(defun cell-measurement-backend ()
+  (or *text-measurement-backend* (and *application* (application-backend *application*))))
+
+(defun cell-visible-column-offset (cell line-index &optional (backend (cell-measurement-backend)))
   (let ((cursor (cell-caret-cursor cell)))
     (if cursor
         (multiple-value-bind (cursor-line cursor-column)
             (string-line-column (displayed-cell-text cell) cursor)
           (if (= line-index cursor-line)
-              (max 0
-                   (- cursor-column
-                      (1- (cell-visible-text-width cell))))
+              (let ((line (nth line-index (split-lines (displayed-cell-text cell))))
+                    (limit (max 0 (- (backend-cell-text-width-limit backend cell)
+                                     (backend-cell-caret-width backend cell))))
+                    (low 0) (high cursor-column))
+                (loop while (< low high)
+                      for middle = (floor (+ low high) 2)
+                      do (if (<= (backend-measure-cell-text backend cell (subseq line middle cursor-column)) limit)
+                             (setf high middle) (setf low (1+ middle))))
+                low)
               0))
         0)))
 
 (defun visible-line-text-for-cell (cell line line-index)
-  (let ((start (min (length line)
-                    (cell-visible-column-offset cell line-index)))
-        (width (cell-visible-text-width cell)))
-    (if (zerop start)
-        (trim-text-for-cell line width)
-        (subseq line start
-                (min (length line)
-                     (+ start width))))))
+  (nth-value 0 (visible-line-source-window cell line line-index)))
 
 (defun split-lines-with-starts (string)
   (let ((string (string string))
@@ -721,22 +657,30 @@
     (push (list (subseq string start) start) lines)
     (nreverse lines)))
 
-(defun visible-line-source-window (cell line line-index)
+(defun visible-line-source-window (cell line line-index &optional (backend (cell-measurement-backend)))
   (let* ((start (min (length line)
-                     (cell-visible-column-offset cell line-index)))
-         (width (cell-visible-text-width cell)))
-    (if (zerop start)
-        (let ((source-end (if (<= (length line) width)
-                              (length line)
-                              (max 0 (- width 3)))))
-          (values (trim-text-for-cell line width)
-                  0
-                  source-end))
-        (let ((source-end (min (length line)
-                               (+ start width))))
-          (values (subseq line start source-end)
-                  start
-                  source-end)))))
+                     (cell-visible-column-offset cell line-index backend)))
+         (limit (backend-cell-text-width-limit backend cell))
+         (end (fitting-text-end backend cell line start limit))
+         (cursor (cell-caret-cursor cell))
+         (caret-line-p (and cursor (= line-index (nth-value 0 (string-line-column (displayed-cell-text cell) cursor))))))
+    (if (and (zerop start) (< end (length line)) (not caret-line-p))
+        (let* ((dots (subseq "..." 0 (fitting-text-end backend cell "..." 0 limit)))
+               (source-end (fitting-text-end backend cell line 0
+                                             (- limit (backend-measure-cell-text backend cell dots)))))
+          (values (concatenate 'string (subseq line 0 source-end) dots) 0 source-end))
+        (values (subseq line start end) start end))))
+
+(defun cell-text-column-at-pixel (backend cell line line-index pixel-x)
+  (multiple-value-bind (display start end) (visible-line-source-window cell line line-index backend)
+    (declare (ignore display))
+    (let* ((relative-x (max 0 (backend-cell-relative-text-x backend cell pixel-x)))
+           (left (fitting-text-end backend cell line start relative-x end))
+           (left-width (backend-measure-cell-text backend cell (subseq line start left))))
+      (if (and (< left end)
+               (> (- relative-x left-width)
+                  (- (backend-measure-cell-text backend cell (subseq line start (1+ left))) relative-x)))
+          (1+ left) left))))
 
 (defun visible-style-spans-for-range (style-spans start end)
   (loop for span in style-spans
@@ -772,8 +716,8 @@
 (defun visible-lines-for-cell (cell)
   (mapcar #'first (visible-lines-with-style-spans-for-cell cell)))
 
-(defun row-visible-p (row viewport-y viewport-height)
-  (and (<= viewport-y row)
+(defun row-visible-p (row viewport-y viewport-height &optional (height 1))
+  (and (< viewport-y (+ row height))
        (< row (+ viewport-y viewport-height))))
 
 (defun cell-intersects-viewport-p (cell viewport-y viewport-height)
@@ -788,7 +732,7 @@
       (multiple-value-bind (line column)
           (string-line-column (displayed-cell-text cell) cursor)
         (let* ((bounds (cell-bounds cell))
-               (row (+ (bounds-y bounds) 1 line))
+               (row (+ (bounds-y bounds) 1 (* line (cell-line-step cell))))
                (offset (cell-visible-column-offset cell line))
                (text-line (nth line
                                (split-lines (displayed-cell-text cell))))
@@ -798,7 +742,7 @@
                (text-prefix (subseq text-line
                                     offset
                                     (+ offset visible-column))))
-          (when (row-visible-p row viewport-y viewport-height)
+          (when (row-visible-p row viewport-y viewport-height (cell-line-step cell))
             (backend-draw-caret backend
                                 (+ (bounds-x bounds) 1)
                                 (- row viewport-y)
@@ -816,7 +760,7 @@
         (when selection-start
           (loop for (line line-start) in (split-lines-with-starts content)
                 for line-index from 0
-                for row = (+ (bounds-y (cell-bounds cell)) 1 line-index)
+                for row = (+ (bounds-y (cell-bounds cell)) 1 (* line-index (cell-line-step cell)))
                 do (multiple-value-bind (visible-text source-start source-end)
                        (visible-line-source-window cell line line-index)
                      (declare (ignore visible-text))
@@ -834,7 +778,7 @@
                                       newline-selected-p)
                                   (row-visible-p row
                                                  viewport-y
-                                                 viewport-height))
+                                                 viewport-height (cell-line-step cell)))
                          (backend-draw-selection
                           backend
                           (1+ (bounds-x (cell-bounds cell)))
@@ -848,7 +792,9 @@
                           :trailing-cell-p newline-selected-p))))))))))
 
 (defun draw-cell-tree (backend cell &key (viewport-y 0) viewport-height)
-  (let* ((bounds (cell-bounds cell))
+  (let* ((*text-measurement-backend* backend)
+         (*rendering-text-cell* (and (typep cell 'text-cell) cell))
+         (bounds (cell-bounds cell))
          (x (bounds-x bounds))
          (y (bounds-y bounds))
          (width (bounds-width bounds))
@@ -868,11 +814,11 @@
         (draw-cell-selection backend cell viewport-y viewport-height)
         (loop for (line style-spans) in (visible-lines-with-style-spans-for-cell cell)
               for row from 0
-              for logical-row = (+ y 1 row)
+              for logical-row = (+ y 1 (* row (cell-line-step cell)))
               do (when (and (plusp (length line))
                             (row-visible-p logical-row
                                            viewport-y
-                                           viewport-height))
+                                           viewport-height (cell-line-step cell)))
                    (backend-draw-cell-text backend cell (+ x 1)
                                            (- logical-row viewport-y) line style-spans))))
       (when (typep cell 'text-cell)
@@ -970,7 +916,7 @@
               (sdl2:with-renderer (renderer window)
                 (setf (backend-window backend) window)
                 (setf (backend-renderer backend) renderer)
-                (setf (backend-font backend) (open-sdl2-font backend))
+                (open-sdl2-role-fonts backend)
                 (render-application-if-needed application)
                 (sdl2:with-event-loop (:method :poll)
                   (:keydown (:keysym keysym)
@@ -997,9 +943,7 @@
                          (sdl2:delay 16))
                   (:quit ()
                          (handle-application-close-request application)))))
-         (when (backend-font backend)
-           (sdl2-ttf:close-font (backend-font backend))
-           (setf (backend-font backend) nil))
+         (close-sdl2-role-fonts backend)
          (when (backend-text-input-active-p backend)
            (sdl2:stop-text-input)
            (setf (backend-text-input-active-p backend) nil))

@@ -41,6 +41,13 @@ Optional font override:
 ORRA_FONT=/path/to/font.ttf guix shell -m manifest.scm -- ./bin/orra
 ```
 
+Without an override, `fc-match` selects serif prose/headings, monospace code,
+and sans-serif UI text. `ORRA_FONT` still sets all faces; `ORRA_FONT_BODY`,
+`ORRA_FONT_HEADING`, `ORRA_FONT_CODE`, `ORRA_FONT_UI`, and `ORRA_FONT_METADATA`
+override individual roles. Font changes apply when the window starts. Lisp
+startup configuration also accepts `make-sdl2-backend :typography`, e.g.
+`'(:body (:family "serif" :size 20))`; no font paths are built into Orra.
+
 Test:
 
 ```bash

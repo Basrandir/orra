@@ -27,17 +27,17 @@
 
 (defun build-inspector-cell (application width)
   (let ((root (make-container-cell :label "Inspector" :inset 1 :top-inset 0 :spacing 0)))
-    (append-child root (make-text-cell :text "Inspector" :role :heading))
+    (append-child root (make-text-cell :text "Inspector" :role :heading :wrap-p t))
     (append-child root
                   (make-text-cell :text (wrap-keyboard-help-text
                                          (if (inspector-active-p application)
                                              "F4 close | Esc return | F1 help"
                                              "F4 close | Shift+F4 focus")
                                          (max 1 (- width 5)))
-                                  :role :metadata))
+                                  :role :metadata :wrap-p t))
     (dolist (line (rest (inspector-lines-for-model application (focused-model application))))
       (append-child root (make-text-cell :text (wrap-keyboard-help-text line (max 1 (- width 5)))
-                                         :role :metadata)))
+                                         :role :metadata :wrap-p t)))
     root))
 
 (defun refresh-application-inspector (application)
@@ -50,7 +50,7 @@
               (inspector-viewport-y view) 0))
       (setf (inspector-root-cell view) (build-inspector-cell application (bounds-width bounds)))
       (perform-layout (inspector-root-cell view) :x (bounds-x bounds)
-                      :width (max 1 (1- (bounds-width bounds))))
+                      :width (max 1 (1- (bounds-width bounds))) :backend (application-backend application))
       (setf (inspector-viewport-y view)
             (max 0 (min (inspector-viewport-y view) (inspector-max-viewport-y application)))))
     (inspector-root-cell view)))

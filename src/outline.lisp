@@ -113,7 +113,7 @@
         (append-child root cell)))
     (unless entries
       (append-child root (make-text-cell :text "No notebooks" :role :metadata)))
-    (perform-layout root :width (max 1 (1- width)))
+    (perform-layout root :width (max 1 (1- width)) :backend (application-backend application))
     (setf (outline-root-cell outline) root)
     (when (and selected-cell
                (or reveal-selection
@@ -123,8 +123,8 @@
              (height (application-viewport-height application)))
         (when (< row (outline-viewport-y outline))
           (setf (outline-viewport-y outline) row))
-        (when (>= row (+ (outline-viewport-y outline) height))
-          (setf (outline-viewport-y outline) (1+ (- row height))))))
+        (when (> (+ row (cell-line-step selected-cell)) (+ (outline-viewport-y outline) height))
+          (setf (outline-viewport-y outline) (+ (cell-line-step selected-cell) (- row height))))))
     (setf (outline-viewport-y outline)
           (max 0 (min (outline-viewport-y outline) (outline-max-viewport-y application))))
     root))
@@ -216,7 +216,7 @@
          (not (eq :inspector (view-layout-foreground layout)))
          (view-bounds-contain-point-p (view-layout-outline layout) x y))))
 
-(defun handle-outline-click (application x y)
+(defun handle-outline-click (application x y &key pixel-x)
   (let* ((root (refresh-application-outline application))
          (outline (ensure-application-outline application))
          (cell (find-cell-at-point root x (+ y (outline-viewport-y outline))))
@@ -226,7 +226,13 @@
             (outline-selected-id outline) id
             (outline-selected-object outline) nil)
       (let ((entry (selected-outline-entry application)))
-        (if (and (< x (+ 4 (* 2 (object-property cell :outline-depth :inherit nil))))
+        (if (and (if pixel-x
+                     (< (backend-cell-relative-text-x (application-backend application) cell pixel-x)
+                        (backend-measure-cell-text (application-backend application) cell
+                                                   (subseq (cell-text cell) 0
+                                                           (min (length (cell-text cell))
+                                                                (+ 4 (* 2 (object-property cell :outline-depth :inherit nil)))))))
+                     (< x (+ 4 (* 2 (object-property cell :outline-depth :inherit nil)))))
                  (outline-branch-p entry (outline-entries application :include-collapsed t)))
             (let ((collapsed (gethash id (outline-collapsed-ids outline))))
               (change-outline-expansion application (if collapsed 1 -1)))
