@@ -827,26 +827,21 @@
   workspace)
 
 (defun make-scratch-workspace (registry)
+  "Create an untitled page with one empty editable paragraph."
   (let* ((workspace (make-workspace
-                     :title "Orra Scratch"
+                     :title ""
                      :registry registry))
          (notebook (make-notebook
-                    :title "Structural Notebook"
+                    :title ""
                     :registry registry))
          (section (make-section
-                   :title "Boot"
+                   :title ""
                    :registry registry))
          (paragraph (make-paragraph
-                     :text "This image is live. Commands and objects are data."
-                     :registry registry))
-         (code (make-code-block
-                :source "(list :hello :orra)"
-                :registry registry)))
-    (set-object-property code :show-structure t)
+                     :registry registry)))
     (append-child workspace notebook)
     (append-child notebook section)
     (append-child section paragraph)
-    (append-child section code)
     workspace))
 
 (defun ensure-default-section (workspace registry)

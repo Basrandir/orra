@@ -890,10 +890,11 @@
                   :registry registry
                   :model node
                   :label (format nil "Notebook: ~A" (notebook-title node)))))
-       (append-heading-cell cell
-                            registry
-                            node
-                            (format nil "Notebook: ~A" (notebook-title node)))
+       (unless (string= "" (normalize-display-string (notebook-title node)))
+         (append-heading-cell cell
+                              registry
+                              node
+                              (format nil "Notebook: ~A" (notebook-title node))))
        (dolist (child (children-of node) cell)
          (append-child cell (build-node-cell child registry model-registry)))))
     (section
@@ -901,10 +902,11 @@
                   :registry registry
                   :model node
                   :label (format nil "Section: ~A" (section-title node)))))
-       (append-heading-cell cell
-                            registry
-                            node
-                            (format nil "Section: ~A" (section-title node)))
+       (unless (string= "" (normalize-display-string (section-title node)))
+         (append-heading-cell cell
+                              registry
+                              node
+                              (format nil "Section: ~A" (section-title node))))
        (dolist (child (children-of node) cell)
          (append-child cell (build-node-cell child registry model-registry)))))
     (paragraph
@@ -1355,13 +1357,14 @@
                :registry registry
                :model workspace
                :label (format nil "Workspace: ~A" (workspace-title workspace)))))
-    (append-child root
-                  (make-text-cell
-                   :registry registry
-                   :model workspace
-                   :text (format nil "Workspace: ~A  |  Live image workspace"
-                                 (workspace-title workspace))
-                   :role :heading))
+    (unless (string= "" (normalize-display-string (workspace-title workspace)))
+      (append-child root
+                    (make-text-cell
+                     :registry registry
+                     :model workspace
+                     :text (format nil "Workspace: ~A  |  Live image workspace"
+                                   (workspace-title workspace))
+                     :role :heading)))
     (when (root-notebook workspace)
       (append-child root
                     (build-node-cell (root-notebook workspace) registry model-registry)))

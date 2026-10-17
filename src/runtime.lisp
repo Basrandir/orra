@@ -2074,6 +2074,8 @@
                checkpoint-directory
                (latest-workspace-checkpoint checkpoint-directory))
       (recover-workspace-from-checkpoint application))
+    (when (eq :new (application-save-state application))
+      (begin-editing-focused-model application))
     application))
 
 (defun start-application (application)
