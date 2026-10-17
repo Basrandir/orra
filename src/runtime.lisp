@@ -1037,6 +1037,19 @@
       (:palette (palette-input-buffer (application-command-palette application)))
       (:edit (application-active-text-buffer application)))))
 
+(defun transient-input-reflow-reveal-p (root buffer viewport-y old-size new-size)
+  "Preserve a visible input caret across reflow without undoing manual scroll."
+  (when (and root old-size (not (equal old-size new-size)))
+    (let ((cell (find-if (lambda (cell)
+                           (and (typep cell 'text-cell) (eq buffer (cell-editor-buffer cell))))
+                         (children-of root))))
+      (when cell
+        (let* ((step (cell-line-step cell))
+               (row (+ (bounds-y (cell-bounds cell)) 1
+                       (* step (nth-value 0 (buffer-cursor-line-column buffer))))))
+          (and (<= viewport-y row)
+               (<= (+ row step) (+ viewport-y (second old-size)))))))))
+
 (defun dispatch-application-key (application event)
   (when (application-quit-requested-p application)
     (return-from dispatch-application-key nil))

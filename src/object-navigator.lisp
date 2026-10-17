@@ -5,6 +5,7 @@
    (selected-object :accessor navigator-selected-object :initform nil)
    (root-cell :accessor navigator-root-cell :initform nil)
    (viewport-y :accessor navigator-viewport-y :initform 0)
+   (layout-size :accessor navigator-layout-size :initform nil)
    (reveal :accessor navigator-reveal :initform :input)))
 
 (defgeneric navigation-object-title (object)
@@ -149,6 +150,12 @@
          (old-selection (navigator-selected-object navigator))
          (selected (selected-navigator-entry application entries))
          (root (make-container-cell :label "Workspace navigator"))
+         (layout-size (list (backend-layout-width (application-backend application))
+                            (application-viewport-height application)))
+         (reflow-reveal (and (null (navigator-reveal navigator))
+                             (transient-input-reflow-reveal-p
+                              (navigator-root-cell navigator) (navigator-query-buffer navigator)
+                              (navigator-viewport-y navigator) (navigator-layout-size navigator) layout-size)))
          (input (make-text-cell :text (text-buffer-content (navigator-query-buffer navigator))
 				:editor-buffer (navigator-query-buffer navigator) :role :navigator-input))
          (selection-cell nil))
@@ -179,12 +186,18 @@
                                           (text-buffer-content (navigator-query-buffer navigator))
                                           (text-buffer-cursor (navigator-query-buffer navigator))))) 0))))
            (height (application-viewport-height application)))
-      (when (and row (navigator-reveal navigator))
+      (when (and row
+                 (or (navigator-reveal navigator)
+                     (and reflow-reveal
+                          (or (< row (navigator-viewport-y navigator))
+                              (> (+ row (cell-line-step target))
+                                 (+ (navigator-viewport-y navigator) height))))))
         (setf (navigator-viewport-y navigator) (max 0 (min (navigator-viewport-y navigator) (1- row))))
         (when (> (+ row (cell-line-step target)) (+ (navigator-viewport-y navigator) height))
           (setf (navigator-viewport-y navigator) (+ (cell-line-step target) (- row height)))))
       (setf (navigator-viewport-y navigator)
             (max 0 (min (navigator-viewport-y navigator) (navigator-max-viewport-y application)))
+            (navigator-layout-size navigator) layout-size
             (navigator-reveal navigator) nil))
     application))
 

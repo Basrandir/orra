@@ -8,6 +8,7 @@
    (argument-command :accessor palette-argument-command :initform nil)
    (root-cell :accessor palette-root-cell :initform nil)
    (viewport-y :accessor palette-viewport-y :initform 0)
+   (layout-size :accessor palette-layout-size :initform nil)
    (reveal :accessor palette-reveal :initform :input)))
 
 (defun command-display-name (command)
@@ -200,6 +201,12 @@
          (command (palette-argument-command palette))
          (selected (unless command (selected-palette-command application)))
          (root (make-container-cell :label "Command palette"))
+         (layout-size (list (backend-layout-width (application-backend application))
+                            (application-viewport-height application)))
+         (reflow-reveal (and (null (palette-reveal palette))
+                             (transient-input-reflow-reveal-p
+                              (palette-root-cell palette) (palette-input-buffer palette)
+                              (palette-viewport-y palette) (palette-layout-size palette) layout-size)))
          (input (make-text-cell :text (text-buffer-content (palette-input-buffer palette))
 				:editor-buffer (palette-input-buffer palette) :role :palette-input))
          (selection-cell nil))
@@ -237,13 +244,19 @@
                                                              (text-buffer-cursor (palette-input-buffer palette)))))
                          0))))
            (height (application-viewport-height application)))
-      (when (and row (palette-reveal palette))
+      (when (and row
+                 (or (palette-reveal palette)
+                     (and reflow-reveal
+                          (or (< row (palette-viewport-y palette))
+                              (> (+ row (cell-line-step target))
+                                 (+ (palette-viewport-y palette) height))))))
         (setf (palette-viewport-y palette)
               (max 0 (min (palette-viewport-y palette) (1- row))))
         (when (> (+ row (cell-line-step target)) (+ (palette-viewport-y palette) height))
           (setf (palette-viewport-y palette) (+ (cell-line-step target) (- row height)))))
       (setf (palette-viewport-y palette)
             (max 0 (min (palette-viewport-y palette) (palette-max-viewport-y application)))
+            (palette-layout-size palette) layout-size
             (palette-reveal palette) nil))
     application))
 
