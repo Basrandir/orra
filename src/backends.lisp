@@ -159,7 +159,8 @@
         (backend-draw-text backend x y text))))
 (defgeneric backend-draw-selection
     (backend x y &key text-prefix selected-text trailing-cell-p))
-(defgeneric backend-draw-caret (backend x y activep &key text-prefix))
+(defgeneric backend-draw-caret (backend x y activep &key text-prefix)
+  (:documentation "Draw a line for active text input, or an outlined box for focus."))
 (defgeneric backend-draw-scrollbar (backend x y height thumb-y thumb-height))
 (defgeneric backend-layout-width (backend))
 (defgeneric backend-layout-height (backend))
@@ -240,7 +241,8 @@
 
 (defmethod backend-draw-caret ((backend null-backend) x y activep
                                &key (text-prefix ""))
-  (push (list :caret (+ x (length text-prefix)) y activep)
+  (push (list :caret (+ x (length text-prefix)) y activep
+              (if activep :line :box))
         (backend-frame-operations backend)))
 
 (defmethod backend-draw-scrollbar
@@ -277,11 +279,11 @@
                  "~&SELECTION x=~D y=~D w=~D~%"
                  x y width)))
       (:caret
-       (destructuring-bind (kind x y activep) operation
+       (destructuring-bind (kind x y activep shape) operation
          (declare (ignore kind))
          (format (backend-stream backend)
-                 "~&CARET x=~D y=~D ~:[ ~;*~]~%"
-                 x y activep)))
+                 "~&CARET x=~D y=~D ~:[ ~;*~] ~A~%"
+                 x y activep shape)))
       (:scrollbar
        (destructuring-bind (kind x y height thumb-y thumb-height) operation
          (declare (ignore kind))
@@ -474,13 +476,17 @@
                                &key (text-prefix ""))
   (let ((pixel-x (+ (logical-x->pixel backend x)
                     (backend-measure-cell-text backend *rendering-text-cell* text-prefix)))
+        (pixel-width (if activep 2
+                         (backend-cell-caret-width backend *rendering-text-cell*)))
         (pixel-y (logical-y->pixel backend y))
         (pixel-height (sdl2-cell-text-height backend)))
     (if activep
         (set-interface-draw-color backend :accent)
         (set-interface-draw-color backend :muted))
-    (sdl2:with-rects ((rect pixel-x pixel-y 2 pixel-height))
-      (sdl2:render-fill-rect (backend-renderer backend) rect))))
+    (sdl2:with-rects ((rect pixel-x pixel-y pixel-width pixel-height))
+      (if activep
+          (sdl2:render-fill-rect (backend-renderer backend) rect)
+          (sdl2:render-draw-rect (backend-renderer backend) rect)))))
 
 (defmethod backend-draw-selection ((backend sdl2-backend) x y
                                    &key (text-prefix "") (selected-text "")
@@ -610,12 +616,24 @@
        (prospective-editor-cursor-for-model *application* model content)))
     (t nil)))
 
+(defun cell-caret-editing-p (cell)
+  (or (not (null (cell-editor-buffer cell))) (active-editor-cell-p cell)))
+
 (defun displayed-cell-text (cell)
   (let ((text (cell-text cell)))
     (cond ((cell-editor-buffer cell) (text-buffer-content (cell-editor-buffer cell)))
           ((active-editor-cell-p cell)
            (text-buffer-content (application-active-text-buffer *application*)))
           (t text))))
+
+(defun cell-caret-character (cell)
+  "Use a space-sized box at the end of a line, including empty lines."
+  (let* ((cursor (and cell (cell-caret-cursor cell)))
+         (text (and cursor (displayed-cell-text cell))))
+    (if (and cursor (< cursor (length text))
+             (char/= (char text cursor) #\Newline))
+        (subseq text cursor (1+ cursor))
+        " ")))
 
 (defun cell-visible-text-width (cell)
   (max 1 (- (bounds-width (cell-bounds cell)) 2)))
@@ -746,7 +764,7 @@
             (backend-draw-caret backend
                                 (+ (bounds-x bounds) 1)
                                 (- row viewport-y)
-                                (or (not (null (cell-editor-buffer cell))) (active-editor-cell-p cell))
+                                (cell-caret-editing-p cell)
                                 :text-prefix text-prefix)))))))
 
 (defun draw-cell-selection (backend cell viewport-y viewport-height)

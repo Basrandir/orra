@@ -67,7 +67,9 @@
   (* (max 1 (- (bounds-width (cell-bounds cell)) 2)) (backend-cell-width backend)))
 
 (defmethod backend-cell-caret-width ((backend sdl2-backend) cell)
-  (declare (ignore cell)) 2)
+  (if (and cell (cell-caret-editing-p cell))
+      2
+      (max 3 (backend-measure-cell-text backend cell (cell-caret-character cell)))))
 
 (defmethod backend-cell-line-step ((backend sdl2-backend) cell)
   (max 1 (ceiling (sdl2-cell-text-height backend cell) (backend-row-height backend))))
