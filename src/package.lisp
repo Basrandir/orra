@@ -81,6 +81,7 @@
    #:cell-model
    #:cell-style-spans
    #:cell-text-style
+   #:cell-text-vertical-alignment
    #:children-of
    #:clear-text-buffer-selection
    #:clear-application-event-log

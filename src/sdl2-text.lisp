@@ -78,6 +78,17 @@
   (let ((font (current-text-font backend cell)))
     (if font (nth-value 1 (sdl2-ttf:size-utf8 font "Mg")) (backend-row-height backend))))
 
+(defun sdl2-cell-text-y (backend y &optional (cell *rendering-text-cell*))
+  (let ((pixel-y (logical-y->pixel backend y)))
+    (if (and cell (eq :center (cell-text-vertical-alignment cell)))
+        (let* ((line-count (max 1 (length (split-lines (cell-text cell)))))
+               (text-height (+ (* (1- line-count) (cell-line-step cell) (backend-row-height backend))
+                               (sdl2-cell-text-height backend cell)))
+               (height (logical-height->pixel backend (bounds-height (cell-bounds cell)))))
+          ;; Replace the document's top-row inset with balanced pixel padding.
+          (+ pixel-y (- (max 0 (floor (- height text-height) 2)) (backend-row-height backend))))
+        pixel-y)))
+
 (defmethod backend-cell-relative-text-x ((backend sdl2-backend) cell pixel-x)
   (- pixel-x (logical-x->pixel backend (1+ (bounds-x (cell-bounds cell))))))
 
@@ -112,7 +123,7 @@
 (defun draw-sdl2-styled-line (backend x y text style-spans)
   ;; Color full-line textures through span clips: splitting into independently
   ;; rendered tokens would change kerning and disagree with caret measurements.
-  (let ((pixel-x (logical-x->pixel backend x)) (pixel-y (logical-y->pixel backend y))
+  (let ((pixel-x (logical-x->pixel backend x)) (pixel-y (sdl2-cell-text-y backend y))
         (groups (make-hash-table :test #'eq)) (cursor 0))
     (dolist (span (stable-sort (copy-list style-spans) #'< :key (lambda (entry) (getf entry :start 0))))
       (let* ((start (max cursor (min (length text) (getf span :start 0))))

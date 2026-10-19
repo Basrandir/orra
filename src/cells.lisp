@@ -63,6 +63,10 @@
     :initarg :text-style
     :accessor cell-text-style
     :initform nil)
+   (vertical-alignment
+    :initarg :vertical-alignment
+    :accessor cell-text-vertical-alignment
+    :initform :start)
    (line-step
     :accessor cell-line-step
     :initform 1)
@@ -96,9 +100,13 @@
                   :top-inset top-inset
                   :spacing spacing)))
 
-(defun make-text-cell (&key registry model (text "") (role :content) text-style wrap-p style-spans editor-buffer)
+(defun make-text-cell (&key registry model (text "") (role :content) text-style wrap-p style-spans editor-buffer
+                         (vertical-alignment :start))
+  (check-type vertical-alignment (member :start :center))
   (when (and wrap-p (or editor-buffer (eq role :editable-content)))
     (error "Editable cells retain source-line layout; soft wrapping is not supported yet."))
+  (when (and (eq vertical-alignment :center) (or editor-buffer (eq role :editable-content)))
+    (error "Editable cells retain source-line alignment."))
   (%register-if-present
    registry
    (make-instance 'text-cell
@@ -109,6 +117,7 @@
                   :text text
                   :role role
                   :text-style text-style
+                  :vertical-alignment vertical-alignment
                   :wrap-p wrap-p
                   :editor-buffer editor-buffer
                   :style-spans style-spans)))

@@ -540,7 +540,7 @@
   (if style-spans
       (backend-draw-styled-text backend x y text style-spans)
       (draw-interface-text-at-pixel backend (logical-x->pixel backend x)
-                                    (logical-y->pixel backend y) text
+                                    (sdl2-cell-text-y backend y cell) text
                                     (if (eq (cell-role cell) :metadata) :muted :ink))))
 
 (defun draw-sdl2-text-at-pixel (backend pixel-x pixel-y text red green blue alpha)
@@ -834,9 +834,10 @@
               for row from 0
               for logical-row = (+ y 1 (* row (cell-line-step cell)))
               do (when (and (plusp (length line))
-                            (row-visible-p logical-row
-                                           viewport-y
-                                           viewport-height (cell-line-step cell)))
+                            (or (eq :center (cell-text-vertical-alignment cell))
+                                (row-visible-p logical-row
+                                               viewport-y
+                                               viewport-height (cell-line-step cell))))
                    (backend-draw-cell-text backend cell (+ x 1)
                                            (- logical-row viewport-y) line style-spans))))
       (when (typep cell 'text-cell)
